@@ -705,7 +705,7 @@ service restarts: ≤ 2 (incidental), pipeline never enters failed state
 
 | Concern              | Choice                          | Rationale                                  |
 |----------------------|---------------------------------|--------------------------------------------|
-| Language             | C++20                           | Mature toolchain; defer C++23/Cobalt       |
+| Language             | C++23 (no modules, no Cobalt)   | Forced by glaze 7.x; STL is fine to use    |
 | Build system         | CMake + presets                 | Standard                                   |
 | Async                | Boost.Asio                      | Battle-tested, no Cobalt risk              |
 | HTTP simple          | cpp-httplib                     | Header-only, simple, sufficient            |

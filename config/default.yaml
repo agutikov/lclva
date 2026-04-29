@@ -1,0 +1,21 @@
+# lclva default configuration
+#
+# This is the M0 minimal config. As milestones land, more sections appear:
+#   M1: llm, memory, dialogue
+#   M2: supervisor
+#   M3: tts, playback
+#   M4: audio, vad
+#   M5: stt, speculation
+#   M6: apm
+#   M7: barge_in
+#
+# See plans/project_design.md for the full schema.
+
+logging:
+  level: info        # trace | debug | info | warn | error | critical | off
+  sink: stderr       # stderr | journal | file
+  # file_path: /var/log/lclva.log    # required when sink=file
+
+control:
+  bind: "127.0.0.1"
+  port: 9876

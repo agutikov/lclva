@@ -48,7 +48,7 @@ When code lands, expect: `src/`, `include/`, `tests/`, `config/`, `CMakeLists.tx
 
 ## Tech Stack (Locked for MVP)
 
-- C++20 (not C++23 — see project_design.md §16 for why; revisit after M8)
+- C++23 standard library + language. The CLAUDE-lock was specifically against **Boost.Cobalt + C++23 modules**, not C++23 STL features. Glaze 7.x requires C++23 transitively, so it's already implicit. `std::expected`, `std::print`, deducing `this`, etc. are fair game. Do NOT enable C++23 modules; do NOT use Cobalt.
 - Boost.Asio for async, **not** Boost.Cobalt
 - cpp-httplib for simple HTTP, **libcurl** for SSE streaming
 - PortAudio + soxr

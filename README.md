@@ -39,7 +39,7 @@ See `plans/project_design.md` for the complete architecture.
 
 | Concern           | Choice                                       |
 |-------------------|----------------------------------------------|
-| Language          | C++20                                        |
+| Language          | C++23 (no modules, no Cobalt)                |
 | Async             | Boost.Asio                                   |
 | Audio backend     | PortAudio + soxr                             |
 | AEC/NS/AGC        | WebRTC Audio Processing Module               |

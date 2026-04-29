@@ -1,7 +1,14 @@
 # Core library — everything except main(). Tests link against this.
 add_library(lclva_core STATIC
     config/config.cpp
+    dialogue/fsm.cpp
+    dialogue/turn.cpp
+    event/bus.cpp
+    event/event.cpp
+    http/server.cpp
     log/log.cpp
+    metrics/registry.cpp
+    pipeline/fake_driver.cpp
 )
 
 target_include_directories(lclva_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -11,8 +18,11 @@ target_link_libraries(lclva_core
         glaze::glaze
         spdlog::spdlog
         fmt::fmt
+        prometheus-cpp::core
+        prometheus-cpp::pull
         Threads::Threads
     PRIVATE
+        lclva_httplib
         lclva_warnings
 )
 

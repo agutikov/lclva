@@ -1,11 +1,21 @@
 #include "config/config.hpp"
+#include "dialogue/fsm.hpp"
+#include "dialogue/turn.hpp"
+#include "event/bus.hpp"
+#include "http/server.hpp"
 #include "log/log.hpp"
+#include "metrics/registry.hpp"
+#include "pipeline/fake_driver.hpp"
+
+#include <fmt/format.h>
 
 #include <atomic>
+#include <chrono>
 #include <csignal>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <thread>
 #include <variant>
@@ -21,22 +31,24 @@ void handle_signal(int sig) {
 void install_signal_handlers() {
     std::signal(SIGINT, handle_signal);
     std::signal(SIGTERM, handle_signal);
-    std::signal(SIGHUP, handle_signal); // reserved for hot reload later
+    std::signal(SIGHUP, handle_signal);
 }
 
 struct CliArgs {
     std::filesystem::path config_path = "config/default.yaml";
     bool show_help = false;
+    bool no_fake_driver = false; // override config to disable
 };
 
 void print_help() {
     std::cout << "lclva — Long Conversation Local Voice Agent\n"
                  "\n"
-                 "Usage: lclva [--config PATH]\n"
+                 "Usage: lclva [--config PATH] [--no-fake-driver]\n"
                  "\n"
                  "Options:\n"
-                 "  --config PATH   YAML config file (default: config/default.yaml)\n"
-                 "  -h, --help      Show this help and exit\n";
+                 "  --config PATH        YAML config file (default: config/default.yaml)\n"
+                 "  --no-fake-driver     Disable the synthetic pipeline driver (M0)\n"
+                 "  -h, --help           Show this help and exit\n";
 }
 
 CliArgs parse_args(int argc, char** argv) {
@@ -45,13 +57,14 @@ CliArgs parse_args(int argc, char** argv) {
         std::string a = argv[i];
         if (a == "-h" || a == "--help") {
             args.show_help = true;
+        } else if (a == "--no-fake-driver") {
+            args.no_fake_driver = true;
         } else if (a == "--config" && i + 1 < argc) {
             args.config_path = argv[++i];
         } else if (a.starts_with("--config=")) {
             args.config_path = a.substr(std::string_view{"--config="}.size());
         } else {
             std::cerr << "lclva: unknown argument: " << a << "\n";
-            args.show_help = true;
             std::exit(EXIT_FAILURE);
         }
     }
@@ -67,6 +80,7 @@ int main(int argc, char** argv) {
         return EXIT_SUCCESS;
     }
 
+    // ----- 1. Load config -----
     auto load_result = lclva::config::load_from_file(args.config_path);
     if (auto* err = std::get_if<lclva::config::LoadError>(&load_result)) {
         std::cerr << err->message << "\n";
@@ -74,20 +88,82 @@ int main(int argc, char** argv) {
     }
     auto cfg = std::get<lclva::config::Config>(std::move(load_result));
 
+    if (args.no_fake_driver) {
+        cfg.pipeline.fake_driver_enabled = false;
+    }
+
+    // ----- 2. Initialize logging -----
     lclva::log::init(cfg.logging);
     lclva::log::info("main", "lclva starting");
-    lclva::log::info("main", std::string{"config loaded: "} + args.config_path.string());
+    lclva::log::info("main", fmt::format("config loaded: {}", args.config_path.string()));
 
     install_signal_handlers();
 
-    // M0 placeholder: orchestrator main loop. Real pipeline wires in M1+.
-    // For now, just block on signal so users can verify clean startup/shutdown.
+    // ----- 3. Build the runtime -----
+    lclva::event::EventBus bus;
+    auto registry = std::make_shared<lclva::metrics::Registry>();
+    auto metric_subs = registry->subscribe(bus); // keep-alive
+
+    lclva::dialogue::TurnFactory turns;
+    lclva::dialogue::Fsm fsm(bus, turns);
+    fsm.set_turn_outcome_observer([registry](const char* outcome) {
+        registry->on_turn_outcome(outcome);
+    });
+    fsm.start();
+
+    // FSM-state metric updater.
+    lclva::event::SubscribeOptions fsm_metric_opts;
+    fsm_metric_opts.name = "metrics.fsm_state";
+    fsm_metric_opts.queue_capacity = 256;
+    fsm_metric_opts.policy = lclva::event::OverflowPolicy::DropOldest;
+    auto fsm_metric_sub = bus.subscribe_all(fsm_metric_opts,
+        [registry, &fsm](const lclva::event::Event& /*e*/) {
+            const auto snap = fsm.snapshot();
+            registry->set_fsm_state(std::string(lclva::dialogue::to_string(snap.state)).c_str());
+        });
+    metric_subs.push_back(fsm_metric_sub);
+
+    // HTTP control plane (/metrics, /status, /health).
+    std::unique_ptr<lclva::http::ControlServer> control;
+    try {
+        control = std::make_unique<lclva::http::ControlServer>(cfg.control, registry, &fsm);
+    } catch (const std::exception& ex) {
+        lclva::log::error("main", fmt::format("control server failed to start: {}", ex.what()));
+        fsm.stop();
+        bus.shutdown();
+        return EXIT_FAILURE;
+    }
+
+    // Optional fake pipeline driver.
+    std::unique_ptr<lclva::pipeline::FakeDriver> fake_driver;
+    if (cfg.pipeline.fake_driver_enabled) {
+        lclva::pipeline::FakeDriverOptions opts;
+        opts.sentences_per_turn = cfg.pipeline.fake_sentences_per_turn;
+        opts.idle_between_turns = std::chrono::milliseconds{cfg.pipeline.fake_idle_between_turns_ms};
+        opts.barge_in_probability = cfg.pipeline.fake_barge_in_probability;
+        fake_driver = std::make_unique<lclva::pipeline::FakeDriver>(bus, opts);
+        fake_driver->start();
+        lclva::log::info("main", "fake pipeline driver enabled");
+    } else {
+        lclva::log::info("main", "fake pipeline driver disabled");
+    }
+
+    // ----- 4. Main loop -----
     while (g_signal_received.load() == 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
     int sig = g_signal_received.load();
-    lclva::log::info("main", std::string{"received signal "} + std::to_string(sig) + ", shutting down");
+    lclva::log::info("main", fmt::format("received signal {}, shutting down", sig));
+
+    // Orderly shutdown: stop producers first, then drain.
+    if (fake_driver) {
+        fake_driver->stop();
+    }
+    fsm.stop();
+    control.reset();
+    bus.shutdown();
+
     lclva::log::info("main", "lclva exited cleanly");
     return EXIT_SUCCESS;
 }

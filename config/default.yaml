@@ -19,3 +19,9 @@ logging:
 control:
   bind: "127.0.0.1"
   port: 9876
+
+pipeline:
+  fake_driver_enabled: true       # M0: drive FSM with synthetic events
+  fake_sentences_per_turn: 3
+  fake_idle_between_turns_ms: 1500
+  fake_barge_in_probability: 0.0  # 0..1; e.g. 0.2 for 20% chance of barge-in

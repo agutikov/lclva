@@ -1,6 +1,9 @@
 add_executable(lclva_tests
     test_main.cpp
+    test_bus.cpp
     test_config.cpp
+    test_fsm.cpp
+    test_queue.cpp
 )
 
 target_link_libraries(lclva_tests

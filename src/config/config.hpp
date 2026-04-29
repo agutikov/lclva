@@ -26,9 +26,23 @@ struct ControlConfig {
     uint16_t port = 9876;
 };
 
+struct PipelineConfig {
+    // Drive the FSM with synthetic events (no real audio/STT/LLM/TTS).
+    // The default in the YAML config is true at M0 since no real backends
+    // are wired yet.
+    bool fake_driver_enabled = true;
+    // Sentences per synthetic turn.
+    uint32_t fake_sentences_per_turn = 3;
+    // Idle between synthetic turns, in ms.
+    uint32_t fake_idle_between_turns_ms = 1500;
+    // Barge-in probability per turn (0.0 .. 1.0).
+    double fake_barge_in_probability = 0.0;
+};
+
 struct Config {
     LoggingConfig logging;
     ControlConfig control;
+    PipelineConfig pipeline;
 };
 
 struct LoadError {

@@ -67,6 +67,13 @@ std::optional<LoadError> validate(const Config& cfg) {
     if (cfg.control.port == 0) {
         return LoadError{"config: control.port: must be non-zero"};
     }
+    if (cfg.pipeline.fake_barge_in_probability < 0.0
+        || cfg.pipeline.fake_barge_in_probability > 1.0) {
+        return LoadError{"config: pipeline.fake_barge_in_probability: must be in [0, 1]"};
+    }
+    if (cfg.pipeline.fake_sentences_per_turn == 0) {
+        return LoadError{"config: pipeline.fake_sentences_per_turn: must be > 0"};
+    }
     return std::nullopt;
 }
 

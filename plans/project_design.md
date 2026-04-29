@@ -41,15 +41,88 @@ These are the load-bearing decisions. Everything else is consequence.
 
 ## 3. Pipeline
 
-```
-Mic → Resample → APM (AEC/NS/AGC) → VAD → Utterance Buffer → STT
-   → Dialogue FSM ↔ Memory ↔ LLM
-   → SentenceSplitter → TTS → Playback Queue → Resample → Speaker
-                                              ↑
-                                           Loopback (AEC reference)
+> Diagrams in this document use Graphviz/DOT. Rendered by Obsidian, VSCode (with Graphviz extension), mkdocs-material with the `pymdownx.superfences` Graphviz custom_fence, or `dot -Tpng`. GitHub will display the source.
+
+### 3.1 Data flow
+
+```dot
+digraph Pipeline {
+  rankdir=TD; bgcolor="transparent"; pad=0.3;
+  node [style="filled,rounded", shape=box, fontname="Helvetica", fontsize=11, penwidth=1.2, color="#1E293B"];
+  edge [fontname="Helvetica", fontsize=9, color="#475569"];
+
+  Mic       [label="🎤 Mic\n48 kHz",        fillcolor="#2563EB", fontcolor=white];
+  Rs1       [label="Resample\n→16 kHz",     fillcolor="#3B82F6", fontcolor=white];
+  APM       [label="APM\nAEC / NS / AGC",   fillcolor="#3B82F6", fontcolor=white];
+  VAD       [label="VAD\nSilero",           fillcolor="#3B82F6", fontcolor=white];
+  Utt       [label="Utterance\nBuffer",     fillcolor="#3B82F6", fontcolor=white];
+  STT       [label="STT\nwhisper.cpp\nstreaming",      fillcolor="#10B981", fontcolor=white];
+  Dia       [label="Dialogue\nFSM",         fillcolor="#7C3AED", fontcolor=white];
+  Mem       [label="Memory\nSQLite",        fillcolor="#8B5CF6", fontcolor=white, shape=cylinder];
+  LLM       [label="LLM\nllama.cpp\nQwen2.5-7B",       fillcolor="#7C3AED", fontcolor=white];
+  Spl       [label="Sentence\nSplitter",    fillcolor="#F59E0B", fontcolor=white];
+  TTS       [label="TTS\nPiper\nper-language",         fillcolor="#F59E0B", fontcolor=white];
+  PBQ       [label="Playback\nQueue",       fillcolor="#EA580C", fontcolor=white];
+  Rs2       [label="Resample\n→48 kHz",     fillcolor="#EA580C", fontcolor=white];
+  Spk       [label="🔊 Speaker",            fillcolor="#EA580C", fontcolor=white];
+
+  Mic -> Rs1 -> APM -> VAD -> Utt -> STT -> Dia;
+  Dia -> LLM -> Spl -> TTS -> PBQ -> Rs2 -> Spk;
+  Dia -> Mem [dir=both, color="#8B5CF6"];
+  Mem -> LLM [style=dashed, color="#8B5CF6", label="prompt\ncontext"];
+
+  Rs2 -> APM [label="loopback\n(AEC ref)", style=dashed, color="#DC2626", fontcolor="#DC2626", penwidth=1.6, constraint=false];
+}
 ```
 
 The loopback path from final speaker output back into APM as the reference signal is the single most overlooked component in voice agent designs. It must be present before barge-in can work in speaker (non-headphone) mode.
+
+### 3.2 Service topology
+
+```dot
+digraph Topology {
+  rankdir=LR; bgcolor="transparent"; pad=0.3; compound=true;
+  node [style="filled,rounded", fontname="Helvetica", fontsize=11, penwidth=1.2, color="#1E293B"];
+  edge [fontname="Helvetica", fontsize=9, color="#475569"];
+
+  subgraph cluster_orch {
+    label="lclva.service (orchestrator)"; style="rounded,filled";
+    color="#1E3A8A"; fontcolor="#1E3A8A"; fillcolor="#EFF6FF"; fontsize=12;
+    AudioIO    [shape=box,      fillcolor="#3B82F6", fontcolor=white, label="Audio I/O"];
+    APMVAD     [shape=box,      fillcolor="#3B82F6", fontcolor=white, label="APM + VAD"];
+    Dialogue   [shape=box,      fillcolor="#7C3AED", fontcolor=white, label="Dialogue FSM"];
+    Memory     [shape=cylinder, fillcolor="#8B5CF6", fontcolor=white, label="SQLite\n(WAL)"];
+    Supervisor [shape=box,      fillcolor="#0891B2", fontcolor=white, label="Supervisor\n(sd-bus)"];
+    Control    [shape=box,      fillcolor="#64748B", fontcolor=white, label="HTTP control\n/metrics /status\n/mute /reload"];
+  }
+
+  Llama   [shape=box3d, fillcolor="#7C3AED", fontcolor=white, label="lclva-llama.service\nllama.cpp\nQwen2.5-7B Q4_K_M"];
+  Whisper [shape=box3d, fillcolor="#10B981", fontcolor=white, label="lclva-whisper.service\nwhisper.cpp\nstreaming, multilingual"];
+  Piper   [shape=box3d, fillcolor="#F59E0B", fontcolor=white, label="lclva-piper.service\nPiper\nper-language voices"];
+
+  Mic     [shape=invtriangle, fillcolor="#2563EB", fontcolor=white, label="🎤"];
+  Spk     [shape=triangle,    fillcolor="#EA580C", fontcolor=white, label="🔊"];
+  OTel    [shape=note,        fillcolor="#FBBF24", fontcolor="#1E293B", label="OTel collector\n(opt-in)"];
+
+  Mic -> AudioIO;
+  AudioIO -> Spk;
+  AudioIO -> APMVAD -> Dialogue;
+  Dialogue -> Memory [dir=both, color="#8B5CF6"];
+
+  Dialogue -> Whisper [label="HTTP", color="#10B981"];
+  Whisper  -> Dialogue [label="partials\n+ finals", color="#10B981", style=dashed];
+  Dialogue -> Llama   [label="SSE",  color="#7C3AED"];
+  Llama    -> Dialogue [label="tokens", color="#7C3AED", style=dashed];
+  Dialogue -> Piper   [label="HTTP", color="#F59E0B"];
+  Piper    -> AudioIO  [label="audio chunks", color="#F59E0B", style=dashed];
+
+  Supervisor -> Llama   [label="sd-bus", style=dotted, color="#0891B2"];
+  Supervisor -> Whisper [label="sd-bus", style=dotted, color="#0891B2"];
+  Supervisor -> Piper   [label="sd-bus", style=dotted, color="#0891B2"];
+
+  Control -> OTel [label="OTLP", style=dashed, color="#F59E0B", constraint=false];
+}
+```
 
 ---
 
@@ -216,20 +289,38 @@ This was missing from both the original doc and the review.
 
 With streaming partial STT, the FSM allows `Transcribing` and `Thinking` to **overlap**: the LLM may speculatively start on a stable partial while STT is still finalizing.
 
-```
-Idle
-  └─→ Listening (VAD armed)
-        └─→ UserSpeaking (SpeechStarted; partials begin streaming)
-              └─→ Transcribing (SpeechEnded; awaiting final)
-                    │       (may have entered SpeculativeThinking earlier)
-                    └─→ Thinking (FinalTranscript reconciled with speculation)
-                          └─→ Speaking (first sentence ready → TTS → Playback)
-                                ├─→ Completed (LLM done + queue drained)
-                                └─→ Interrupted (UserInterrupted during Speaking)
-                                      └─→ UserSpeaking (cancellation propagated)
+```dot
+digraph FSM {
+  rankdir=TB; bgcolor="transparent"; pad=0.3;
+  node [style="filled,rounded", shape=box, fontname="Helvetica", fontsize=11, penwidth=1.2, color="#1E293B"];
+  edge [fontname="Helvetica", fontsize=9, color="#475569"];
 
-Concurrent sub-state from UserSpeaking onward:
-  SpeculativeThinking (LLM started against stable partial; subject to revision)
+  Idle         [fillcolor="#64748B", fontcolor=white];
+  Listening    [fillcolor="#2563EB", fontcolor=white, label="Listening\nVAD armed"];
+  UserSpeaking [fillcolor="#10B981", fontcolor=white, label="UserSpeaking\npartials streaming"];
+  Transcribing [fillcolor="#10B981", fontcolor=white, label="Transcribing\nawaiting final"];
+  Thinking     [fillcolor="#7C3AED", fontcolor=white, label="Thinking\nfinal reconciled"];
+  Speaking     [fillcolor="#F59E0B", fontcolor=white, label="Speaking\nTTS → Playback"];
+  Completed    [fillcolor="#16A34A", fontcolor=white];
+  Interrupted  [fillcolor="#DC2626", fontcolor=white, label="Interrupted\n(barge-in)"];
+
+  Speculative  [fillcolor="#8B5CF6", fontcolor=white, style="filled,rounded,dashed",
+                label="SpeculativeThinking\n(concurrent;\nLLM on stable partial)"];
+
+  Idle -> Listening [label="start"];
+  Listening -> UserSpeaking [label="SpeechStarted"];
+  UserSpeaking -> Transcribing [label="SpeechEnded"];
+  Transcribing -> Thinking [label="FinalTranscript"];
+  Thinking -> Speaking [label="first sentence"];
+  Speaking -> Completed [label="LLM done +\nqueue drained", color="#16A34A"];
+  Speaking -> Interrupted [label="UserInterrupted", color="#DC2626", fontcolor="#DC2626"];
+  Interrupted -> UserSpeaking [label="cancel propagated", color="#DC2626", fontcolor="#DC2626"];
+  Completed -> Listening [label="next turn"];
+
+  UserSpeaking -> Speculative [label="stable prefix\n+ short hangover", style=dashed, color="#8B5CF6", fontcolor="#8B5CF6"];
+  Speculative -> Thinking [label="match → keep", style=dashed, color="#16A34A", fontcolor="#16A34A"];
+  Speculative -> Thinking [label="mismatch → cancel\n+ restart", style=dashed, color="#DC2626", fontcolor="#DC2626"];
+}
 ```
 
 ### Speculation policy
@@ -255,12 +346,26 @@ Speculation savings: ~300–500 ms off perceived latency in the common case wher
 - Interrupted after at least one complete spoken sentence → `Interrupted` (store completed-and-played text only, drop pending).
 
 **Cancellation propagation on UserInterrupted:**
-1. Bump active turn ID. All in-flight work tagged with old turn ID becomes stale.
-2. Cancel LLM stream (HTTP request abort).
-3. Cancel pending TTS requests (HTTP cancel or wait + discard).
-4. Drain playback queue; emit `PlaybackInterrupted`.
-5. Update assistant turn outcome state.
-6. Transition FSM to `UserSpeaking`.
+
+```dot
+digraph Cancel {
+  rankdir=TB; bgcolor="transparent"; pad=0.3;
+  node [style="filled,rounded", shape=box, fontname="Helvetica", fontsize=11, penwidth=1.2, color="#1E293B"];
+  edge [fontname="Helvetica", fontsize=9, color="#DC2626", penwidth=1.4];
+
+  Trig [fillcolor="#DC2626", fontcolor=white, shape=oval,
+        label="UserInterrupted\nVAD on AEC-cleaned audio\nduring Speaking"];
+
+  S1 [fillcolor="#EF4444", fontcolor=white, label="① Bump active turn ID\n(invalidate cancellation token)"];
+  S2 [fillcolor="#EF4444", fontcolor=white, label="② Cancel LLM stream\nlibcurl abort"];
+  S3 [fillcolor="#EF4444", fontcolor=white, label="③ Mark TTS requests stale\n(wait + drop on receipt)"];
+  S4 [fillcolor="#EF4444", fontcolor=white, label="④ Drain playback queue\n(reject by turn-ID)"];
+  S5 [fillcolor="#8B5CF6", fontcolor=white, label="⑤ Persist outcome\nDiscarded if <1 sentence,\nelse Interrupted"];
+  S6 [fillcolor="#10B981", fontcolor=white, label="⑥ FSM → UserSpeaking\n(resume listening)"];
+
+  Trig -> S1 -> S2 -> S3 -> S4 -> S5 -> S6;
+}
+```
 
 **Cancellation on speculation mismatch** uses the same machinery: turn ID bump, cancel LLM, no TTS yet (speculation must mismatch *before* first sentence reaches TTS, otherwise the user hears the wrong answer). Therefore: speculation can only emit a sentence to TTS **after** `FinalTranscript` confirms it.
 
@@ -268,23 +373,39 @@ Speculation savings: ~300–500 ms off perceived latency in the common case wher
 
 ## 7. Threading & Executor Model
 
-```
-Audio capture callback thread (OS realtime)
-  ↓ SPSC ring (frames)
-Audio processing thread (APM + VAD + utterance assembly)
-  ↓ event bus
-STT I/O thread (HTTP to whisper.cpp)
-  ↓ event bus
-Dialogue thread (FSM, prompt assembly, sentence splitting)
-  ↓ event bus
-LLM I/O thread (SSE stream from llama.cpp)
-  ↓ event bus
-TTS I/O thread (HTTP to Piper)
-  ↓ bounded queue
-Playback thread (audio output callback)
-Memory thread (SQLite writes, summarization)
-Supervisor thread (health probes, restarts)
-Metrics/logging thread (lossy)
+```dot
+digraph Threads {
+  rankdir=TB; bgcolor="transparent"; pad=0.3;
+  node [style="filled,rounded", shape=box, fontname="Helvetica", fontsize=11, penwidth=1.2, color="#1E293B"];
+  edge [fontname="Helvetica", fontsize=9, color="#475569"];
+
+  // Mainline path
+  AudioCB    [fillcolor="#DC2626", fontcolor=white, penwidth=2.0, label="Audio capture callback\n(OS realtime thread)\nNO blocking / alloc / I/O"];
+  AudioProc  [fillcolor="#3B82F6", fontcolor=white, label="Audio processing\nAPM + VAD +\nutterance assembly"];
+  STT_IO     [fillcolor="#10B981", fontcolor=white, label="STT I/O\nHTTP → whisper.cpp\n(streaming partials)"];
+  Dialogue   [fillcolor="#7C3AED", fontcolor=white, label="Dialogue\nFSM + PromptBuilder +\nSentenceSplitter"];
+  LLM_IO     [fillcolor="#7C3AED", fontcolor=white, label="LLM I/O\nSSE → llama.cpp"];
+  TTS_IO     [fillcolor="#F59E0B", fontcolor=white, label="TTS I/O\nHTTP → Piper"];
+  Playback   [fillcolor="#EA580C", fontcolor=white, label="Playback\n(audio output cb)"];
+
+  // Side threads
+  Memory     [fillcolor="#8B5CF6", fontcolor=white, label="Memory\nSQLite writes +\nasync summarization"];
+  Supervisor [fillcolor="#0891B2", fontcolor=white, label="Supervisor\nsd-bus +\nhealth probes"];
+  Metrics    [fillcolor="#64748B", fontcolor=white, label="Metrics / Logging\n(lossy queue)"];
+
+  AudioCB   -> AudioProc [label="SPSC ring\n(frames)", penwidth=2.0, color="#DC2626", fontcolor="#DC2626"];
+  AudioProc -> STT_IO    [label="event bus"];
+  STT_IO    -> Dialogue  [label="partials / finals", color="#10B981"];
+  Dialogue  -> LLM_IO    [label="prompt", color="#7C3AED"];
+  LLM_IO    -> Dialogue  [label="tokens (SSE)", color="#7C3AED", style=dashed];
+  Dialogue  -> TTS_IO    [label="sentences", color="#F59E0B"];
+  TTS_IO    -> Playback  [label="audio chunks\n(bounded queue)", color="#F59E0B"];
+
+  Dialogue  -> Memory [label="writes (queue)", style=dashed, color="#8B5CF6"];
+  Memory    -> Dialogue [label="cached summary", style=dashed, color="#8B5CF6"];
+
+  { rank=sink; Supervisor; Metrics; }
+}
 ```
 
 Rules:
@@ -294,7 +415,7 @@ Rules:
 - Memory thread is single-threaded (SQLite writer).
 - Cancellation tokens propagate top-down via turn ID.
 
-Concurrency primitive choice: **C++20 + asio (no Cobalt for MVP).** Cobalt + C++23 modules is a build-system risk we don't need to take. Revisit after Milestone 5.
+Concurrency primitive choice: **C++20 + Boost.Asio (no Cobalt for MVP).** Cobalt + C++23 modules is a build-system risk we don't need to take. Revisit after Milestone 8.
 
 ---
 
@@ -606,6 +727,31 @@ service restarts: ≤ 2 (incidental), pipeline never enters failed state
 ## 17. Milestones (Adjusted Order)
 
 The original order had AEC after barge-in, which is wrong. Without AEC the assistant's own voice triggers VAD and you spend a week debugging phantom interruptions.
+
+```dot
+digraph Milestones {
+  rankdir=LR; bgcolor="transparent"; pad=0.3;
+  node [style="filled,rounded", shape=box, fontname="Helvetica", fontsize=10, penwidth=1.2, color="#1E293B"];
+  edge [color="#475569", penwidth=1.4];
+
+  M0 [fillcolor="#64748B", fontcolor=white, label="M0\nSkeleton\n1w"];
+  M1 [fillcolor="#7C3AED", fontcolor=white, label="M1\nLLM + Memory\n1-2w"];
+  M2 [fillcolor="#0891B2", fontcolor=white, label="M2\nSupervision\n1w"];
+  M3 [fillcolor="#F59E0B", fontcolor=white, label="M3\nTTS + Playback\n1-2w"];
+  M4 [fillcolor="#3B82F6", fontcolor=white, label="M4\nAudio + VAD\n1-2w"];
+  M5 [fillcolor="#10B981", fontcolor=white, label="M5\nStreaming STT\n+ Speculation\n2-3w"];
+  M6 [fillcolor="#2563EB", fontcolor=white, label="M6\nAEC / NS / AGC\n1-2w"];
+  M7 [fillcolor="#DC2626", fontcolor=white, label="M7\nBarge-In\n1w"];
+  M8 [fillcolor="#16A34A", fontcolor=white, label="M8\nHardening\n2w"];
+
+  M0 -> M1 -> M2 -> M3 -> M4 -> M5 -> M6 -> M7 -> M8;
+
+  // Highlight critical reorderings
+  M2 -> M3 [label="supervision\nbefore TTS", fontcolor="#0891B2", color="#0891B2", style=dashed, constraint=false];
+  M6 -> M7 [label="AEC before\nbarge-in", fontcolor="#DC2626", color="#DC2626", style=dashed, constraint=false];
+}
+```
+
 
 ### M0: Skeleton Runtime (1 week)
 - C++ app starts, loads YAML config with validation.

@@ -753,19 +753,21 @@ digraph Milestones {
 ```
 
 
-### M0: Skeleton Runtime (1 week)
+Each milestone has a detailed plan in `plans/milestones/`. The summary below is the at-a-glance version.
+
+### M0: Skeleton Runtime (1 week) ✅ — see [milestones/m0_skeleton.md](milestones/m0_skeleton.md)
 - C++ app starts, loads YAML config with validation.
 - Event bus + bounded queues.
 - Logging + metrics endpoints.
 - Fake nodes wired into pipeline; FSM runs end-to-end on synthetic events.
 
-### M1: LLM + Memory (1–2 weeks)
+### M1: LLM + Memory (1–2 weeks) — see [milestones/m1_llm_memory.md](milestones/m1_llm_memory.md)
 - llama.cpp integration with SSE streaming.
 - PromptBuilder + SentenceSplitter (text-only, console I/O).
 - SQLite schema + writes + crash recovery sweep.
 - Async summarization stub.
 
-### M2: Service Supervision (1 week)
+### M2: Service Supervision (1 week) — see [milestones/m2_supervision.md](milestones/m2_supervision.md)
 - Per-service supervisor with state machine.
 - Health probes for llama.cpp.
 - Keep-alive policy.
@@ -773,20 +775,20 @@ digraph Milestones {
 
 (Done early because LLM crashes during long-context dev are inevitable; retrofitting supervision is painful.)
 
-### M3: TTS + Playback (1–2 weeks)
+### M3: TTS + Playback (1–2 weeks) — see [milestones/m3_tts_playback.md](milestones/m3_tts_playback.md)
 - Piper integration with **per-language voice pack and lazy load**.
 - Playback queue with sequence-number cancellation.
 - LLM → SentenceSplitter → TTS → Playback bridge (language flows through).
 - End-to-end text-input → spoken-output.
 
-### M4: Audio Capture + VAD (1–2 weeks)
+### M4: Audio Capture + VAD (1–2 weeks) — see [milestones/m4_audio_vad.md](milestones/m4_audio_vad.md)
 - PortAudio capture with SPSC ring.
 - MonotonicAudioClock.
 - Resampler.
 - Silero VAD on cleaned audio.
 - Utterance buffer with reference-counted slices.
 
-### M5: STT — Streaming Partials (2–3 weeks)
+### M5: STT — Streaming Partials (2–3 weeks) — see [milestones/m5_streaming_stt.md](milestones/m5_streaming_stt.md)
 - whisper.cpp **streaming** integration (sliding-window inference; not utterance-only).
 - `PartialTranscript` + `FinalTranscript` event flow with stable-prefix tracking.
 - Multilingual model; language detection per utterance.
@@ -794,19 +796,19 @@ digraph Milestones {
 - Reconciliation logic: speculation kept vs. cancelled-and-restarted.
 - Tests: prefix-stable utterances commit speculation; revision-heavy utterances correctly restart.
 
-### M6: AEC / NS / AGC (1–2 weeks)
+### M6: AEC / NS / AGC (1–2 weeks) — see [milestones/m6_aec.md](milestones/m6_aec.md)
 - WebRTC APM integration.
 - Loopback tap from playback resampler.
 - Reference-signal alignment + delay estimation.
 - Verify echo suppression on speaker mode.
 
-### M7: Barge-In (1 week)
+### M7: Barge-In (1 week) — see [milestones/m7_barge_in.md](milestones/m7_barge_in.md)
 - Detect speech during Speaking state via VAD on AEC-cleaned audio.
 - Cancellation propagation across LLM/TTS/Playback.
 - Assistant-turn outcome handling (Discarded vs Interrupted).
 - Memory persistence policy on interruption.
 
-### M8: Production Hardening (2 weeks)
+### M8: Production Hardening (2 weeks) — see [milestones/m8_hardening.md](milestones/m8_hardening.md)
 - Soak test infrastructure.
 - Metrics dashboard (Grafana or simple HTML).
 - Config hot-reload.

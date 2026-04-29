@@ -251,6 +251,268 @@ tar xzf piper_linux_x86_64.tar.gz
 
 systemd units that wrap each service ship in `packaging/systemd/` once that directory exists; see `plans/project_design.md` §4.12.
 
+## Setting up the runtime services with systemd
+
+The orchestrator does **not** fork its model backends — it manages them as systemd units via sd-bus. You install the units once, then `systemctl --user start lclva-llama.service` (etc.) brings each backend up. The orchestrator's supervisor takes over from there: probes health, restarts on failure, exposes state via `/status`.
+
+We default to **per-user systemd** (`systemctl --user`). It needs no privileges, doesn't pollute the system unit namespace, and works with the same sd-bus API the orchestrator uses. System-wide units are supported for shared workstations; the layout is identical except for the install path and `--user` becoming root.
+
+### 1. Decide where the binaries and models live
+
+Convention used below — adjust as you like:
+
+```
+~/.local/opt/llama.cpp/build/bin/llama-server     # built by you
+~/.local/opt/whisper-server/                      # ours; M5 deliverable
+~/.local/opt/piper/piper                          # release tarball
+~/.local/share/lclva/models/qwen2.5-7b-instruct-q4_k_m.gguf
+~/.local/share/lclva/models/ggml-small.bin        # whisper
+~/.local/share/lclva/voices/en_US-amy-medium.onnx
+~/.local/share/lclva/voices/en_US-amy-medium.onnx.json
+```
+
+Create the dirs:
+```sh
+mkdir -p ~/.local/opt ~/.local/share/lclva/{models,voices,db}
+```
+
+Download the models (sizes from the README dependency table):
+
+```sh
+# Qwen2.5-7B-Instruct GGUF Q4_K_M (~4.5 GB)
+curl -L -o ~/.local/share/lclva/models/qwen2.5-7b-instruct-q4_k_m.gguf \
+  https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf
+
+# Whisper small multilingual (~244 MB)
+curl -L -o ~/.local/share/lclva/models/ggml-small.bin \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin
+
+# Silero VAD (~2 MB)
+curl -L -o ~/.local/share/lclva/models/silero_vad.onnx \
+  https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx
+
+# A Piper voice (~30 MB) — repeat per language you want
+mkdir -p ~/.local/share/lclva/voices
+curl -L -o ~/.local/share/lclva/voices/en_US-amy-medium.onnx \
+  https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx
+curl -L -o ~/.local/share/lclva/voices/en_US-amy-medium.onnx.json \
+  https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json
+```
+
+### 2. Write the unit files
+
+Per-user units live in `~/.config/systemd/user/`. Create the directory if it doesn't exist:
+
+```sh
+mkdir -p ~/.config/systemd/user
+```
+
+#### `~/.config/systemd/user/lclva-llama.service`
+
+```ini
+[Unit]
+Description=lclva — llama.cpp (LLM backend)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/opt/llama.cpp/build/bin/llama-server \
+  --host 127.0.0.1 \
+  --port 8081 \
+  --model %h/.local/share/lclva/models/qwen2.5-7b-instruct-q4_k_m.gguf \
+  --ctx-size 8192 \
+  --n-gpu-layers 999 \
+  --threads 4 \
+  --metrics
+Restart=on-failure
+RestartSec=2
+TimeoutStartSec=120
+# Resource limits — the LLM is the heaviest component.
+MemoryMax=10G
+
+[Install]
+WantedBy=default.target
+```
+
+Notes:
+- `--n-gpu-layers 999` offloads everything to GPU (your 4060 has the headroom for Q4_K_M).
+- `--metrics` enables the OpenAI-compat `/metrics` endpoint that prometheus-cpp can scrape later.
+- The orchestrator probes `/health` on this port; matches `cfg.llm.base_url` in the YAML.
+
+#### `~/.config/systemd/user/lclva-whisper.service`
+
+Until M5 ships the streaming wrapper, you can run the upstream `whisper.cpp` server example directly:
+
+```ini
+[Unit]
+Description=lclva — whisper.cpp (STT backend)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/opt/whisper.cpp/build/bin/whisper-server \
+  --host 127.0.0.1 \
+  --port 8082 \
+  --model %h/.local/share/lclva/models/ggml-small.bin \
+  --threads 6 \
+  --processors 1
+Restart=on-failure
+RestartSec=2
+TimeoutStartSec=60
+
+[Install]
+WantedBy=default.target
+```
+
+(Once M5 lands, replace `ExecStart` with the streaming wrapper at `~/.local/opt/whisper-server/whisper-server`.)
+
+#### `~/.config/systemd/user/lclva-piper.service`
+
+```ini
+[Unit]
+Description=lclva — Piper (TTS backend)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/opt/lclva/piper-server.py \
+  --host 127.0.0.1 \
+  --port 8083 \
+  --voices-dir %h/.local/share/lclva/voices
+Restart=on-failure
+RestartSec=2
+TimeoutStartSec=60
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
+```
+
+(`piper-server.py` is the wrapper M3 ships — see `packaging/piper-server/`. Until M3 lands, the unit is a placeholder.)
+
+#### `~/.config/systemd/user/lclva.service`
+
+```ini
+[Unit]
+Description=lclva — Long Conversation Local Voice Agent
+After=lclva-llama.service lclva-whisper.service lclva-piper.service
+Wants=lclva-llama.service lclva-whisper.service lclva-piper.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/lclva --config %h/.config/lclva/config.yaml
+Restart=on-failure
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+# Real-time scheduling for the audio thread (optional, but reduces underruns).
+LimitRTPRIO=20
+LimitMEMLOCK=infinity
+
+[Install]
+WantedBy=default.target
+```
+
+#### `~/.config/systemd/user/lclva.target` (convenience)
+
+```ini
+[Unit]
+Description=lclva voice stack (orchestrator + backends)
+Wants=lclva-llama.service lclva-whisper.service lclva-piper.service lclva.service
+After=lclva-llama.service lclva-whisper.service lclva-piper.service
+
+[Install]
+WantedBy=default.target
+```
+
+### 3. Reload, enable, start
+
+```sh
+systemctl --user daemon-reload
+
+# Enable to start on login (optional — skip if you prefer manual control).
+systemctl --user enable lclva-llama.service lclva-whisper.service lclva-piper.service lclva.service
+
+# Bring the whole stack up.
+systemctl --user start lclva.target
+```
+
+If you don't run a graphical session and want services to keep running after logout, enable lingering once:
+
+```sh
+sudo loginctl enable-linger "$USER"
+```
+
+### 4. Verify
+
+```sh
+# All four units active?
+systemctl --user status lclva.target
+
+# Health checks on each backend.
+curl -sS http://127.0.0.1:8081/health     # llama.cpp
+curl -sS http://127.0.0.1:8082/health     # whisper
+curl -sS http://127.0.0.1:8083/health     # piper
+
+# Orchestrator status (FSM, supervisor states, queue depths).
+curl -sS http://127.0.0.1:9876/status | python -m json.tool
+
+# Prometheus metrics — useful for hooking up Grafana later.
+curl -sS http://127.0.0.1:9876/metrics | head -40
+```
+
+### 5. Logs
+
+systemd captures stdout/stderr from each unit into journald. View them:
+
+```sh
+# Live tail of the orchestrator.
+journalctl --user -fu lclva.service
+
+# Last 500 lines of llama.cpp.
+journalctl --user -n 500 -u lclva-llama.service
+
+# Across all units.
+journalctl --user -fu lclva-llama -fu lclva-whisper -fu lclva-piper -fu lclva
+```
+
+### 6. Stopping / restarting
+
+```sh
+# Stop everything.
+systemctl --user stop lclva.target
+
+# Restart just the LLM (e.g., after a model swap).
+systemctl --user restart lclva-llama.service
+
+# Disable everything from auto-starting on login.
+systemctl --user disable lclva.target lclva.service \
+  lclva-llama.service lclva-whisper.service lclva-piper.service
+```
+
+### Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `lclva-llama.service` enters `failed` immediately | `llama-server` couldn't load the model (path / OOM / GPU not visible) | `journalctl --user -u lclva-llama -n 100` shows the underlying error. Common fixes: check model path, lower `--n-gpu-layers`, free VRAM. |
+| `lclva.service` exits with "control server: failed to bind" | Port already in use | Another `lclva` is running, or the port is taken. `ss -tlnp \| grep 9876` to confirm. |
+| Orchestrator's `/status` shows `state=unconfigured` for `llm` | Supervisor can't reach `lclva-llama.service` over sd-bus | Check `cfg.llm.unit` matches the unit filename. `busctl --user list \| grep systemd1`. |
+| Audio crackles or no sound | systemd unit can't access the sound server | If you launched lclva from an SSH session without a graphical login, PulseAudio/PipeWire may not be reachable. Either use linger + autospawn, or run lclva interactively from a desktop session. |
+| Logs say "permission denied: /dev/snd" | Missing audio group membership | `sudo usermod -aG audio "$USER"` and re-login. |
+| `--n-gpu-layers` ignored | NVIDIA driver / CUDA not loaded for the user session | `nvidia-smi` from the same login that runs the unit. May need `Environment=CUDA_VISIBLE_DEVICES=0` in the unit. |
+
+### System-wide install (alternative)
+
+If you want services to run regardless of user session — useful for a headless server:
+
+1. Move binaries to `/opt/lclva/` (or similar root-owned path).
+2. Place units in `/etc/systemd/system/` instead of `~/.config/systemd/user/`.
+3. Add a dedicated `lclva` system user; `User=lclva` in each unit.
+4. `sudo systemctl daemon-reload && sudo systemctl enable --now lclva.target`.
+5. In `cfg.supervisor.bus_kind`, set `system` instead of `user`.
+
+The orchestrator's sd-bus client picks up `bus_kind` and connects to the appropriate bus. Everything else is the same.
+
 ## License
 
 See `LICENSE`.

@@ -1,0 +1,7 @@
+[Unit]
+Description=lclva voice stack (orchestrator + backends)
+Wants=lclva-llama.service lclva-whisper.service lclva-piper.service lclva.service
+After=lclva-llama.service lclva-whisper.service lclva-piper.service
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,18 @@
+[Unit]
+Description=lclva — Long Conversation Local Voice Agent
+After=lclva-llama.service lclva-whisper.service lclva-piper.service
+Wants=lclva-llama.service lclva-whisper.service lclva-piper.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/lclva --config %h/.config/lclva/config.yaml
+Restart=on-failure
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+# Real-time scheduling for the audio thread (optional, but reduces underruns).
+LimitRTPRIO=20
+LimitMEMLOCK=infinity
+
+[Install]
+WantedBy=default.target

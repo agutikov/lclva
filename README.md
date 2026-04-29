@@ -299,131 +299,31 @@ curl -L -o ~/.local/share/lclva/voices/en_US-amy-medium.onnx.json \
   https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json
 ```
 
-### 2. Write the unit files
+### 2. Install the unit files
 
-Per-user units live in `~/.config/systemd/user/`. Create the directory if it doesn't exist:
+Five unit files ship in [`packaging/systemd/`](packaging/systemd/) — see that directory's README for the full reference (path conventions, system-wide install variant, edits you may want to make):
+
+| File | Role |
+|---|---|
+| `lclva-llama.service`   | LLM backend (llama.cpp) on `127.0.0.1:8081` |
+| `lclva-whisper.service` | STT backend (whisper.cpp) on `127.0.0.1:8082` |
+| `lclva-piper.service`   | TTS backend (Piper) on `127.0.0.1:8083` |
+| `lclva.service`         | Orchestrator (control plane on `127.0.0.1:9876`) |
+| `lclva.target`          | Convenience target — brings up all four in order |
+
+Copy them into the user-systemd directory:
 
 ```sh
 mkdir -p ~/.config/systemd/user
+cp packaging/systemd/lclva-*.service packaging/systemd/lclva.target ~/.config/systemd/user/
 ```
 
-#### `~/.config/systemd/user/lclva-llama.service`
+The units use `%h` (systemd specifier expanding to your home directory) and assume the layout from step 1. If your binaries or models live elsewhere, edit each `ExecStart=` line accordingly before continuing.
 
-```ini
-[Unit]
-Description=lclva — llama.cpp (LLM backend)
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=%h/.local/opt/llama.cpp/build/bin/llama-server \
-  --host 127.0.0.1 \
-  --port 8081 \
-  --model %h/.local/share/lclva/models/qwen2.5-7b-instruct-q4_k_m.gguf \
-  --ctx-size 8192 \
-  --n-gpu-layers 999 \
-  --threads 4 \
-  --metrics
-Restart=on-failure
-RestartSec=2
-TimeoutStartSec=120
-# Resource limits — the LLM is the heaviest component.
-MemoryMax=10G
-
-[Install]
-WantedBy=default.target
-```
-
-Notes:
-- `--n-gpu-layers 999` offloads everything to GPU (your 4060 has the headroom for Q4_K_M).
-- `--metrics` enables the OpenAI-compat `/metrics` endpoint that prometheus-cpp can scrape later.
-- The orchestrator probes `/health` on this port; matches `cfg.llm.base_url` in the YAML.
-
-#### `~/.config/systemd/user/lclva-whisper.service`
-
-Until M5 ships the streaming wrapper, you can run the upstream `whisper.cpp` server example directly:
-
-```ini
-[Unit]
-Description=lclva — whisper.cpp (STT backend)
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=%h/.local/opt/whisper.cpp/build/bin/whisper-server \
-  --host 127.0.0.1 \
-  --port 8082 \
-  --model %h/.local/share/lclva/models/ggml-small.bin \
-  --threads 6 \
-  --processors 1
-Restart=on-failure
-RestartSec=2
-TimeoutStartSec=60
-
-[Install]
-WantedBy=default.target
-```
-
-(Once M5 lands, replace `ExecStart` with the streaming wrapper at `~/.local/opt/whisper-server/whisper-server`.)
-
-#### `~/.config/systemd/user/lclva-piper.service`
-
-```ini
-[Unit]
-Description=lclva — Piper (TTS backend)
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=%h/.local/opt/lclva/piper-server.py \
-  --host 127.0.0.1 \
-  --port 8083 \
-  --voices-dir %h/.local/share/lclva/voices
-Restart=on-failure
-RestartSec=2
-TimeoutStartSec=60
-Environment=PYTHONUNBUFFERED=1
-
-[Install]
-WantedBy=default.target
-```
-
-(`piper-server.py` is the wrapper M3 ships — see `packaging/piper-server/`. Until M3 lands, the unit is a placeholder.)
-
-#### `~/.config/systemd/user/lclva.service`
-
-```ini
-[Unit]
-Description=lclva — Long Conversation Local Voice Agent
-After=lclva-llama.service lclva-whisper.service lclva-piper.service
-Wants=lclva-llama.service lclva-whisper.service lclva-piper.service
-
-[Service]
-Type=simple
-ExecStart=%h/.local/bin/lclva --config %h/.config/lclva/config.yaml
-Restart=on-failure
-RestartSec=2
-StandardOutput=journal
-StandardError=journal
-# Real-time scheduling for the audio thread (optional, but reduces underruns).
-LimitRTPRIO=20
-LimitMEMLOCK=infinity
-
-[Install]
-WantedBy=default.target
-```
-
-#### `~/.config/systemd/user/lclva.target` (convenience)
-
-```ini
-[Unit]
-Description=lclva voice stack (orchestrator + backends)
-Wants=lclva-llama.service lclva-whisper.service lclva-piper.service lclva.service
-After=lclva-llama.service lclva-whisper.service lclva-piper.service
-
-[Install]
-WantedBy=default.target
-```
+A few quick notes that wouldn't fit into comments inside the unit files:
+- llama.cpp's `--n-gpu-layers 999` offloads every layer to GPU. With Q4_K_M on a 4060 there's headroom.
+- llama.cpp's `--metrics` flag enables a Prometheus endpoint on the same port — handy for future scraping.
+- The orchestrator probes `/health` on each backend's port; the ports above must match `cfg.llm.base_url`, `cfg.stt.base_url`, `cfg.tts.base_url` in the YAML.
 
 ### 3. Reload, enable, start
 

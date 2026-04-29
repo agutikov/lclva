@@ -1,0 +1,21 @@
+[Unit]
+Description=lclva — whisper.cpp (STT backend)
+After=network.target
+
+[Service]
+Type=simple
+# Until M5 ships the streaming wrapper, this runs the upstream whisper.cpp
+# server example directly. Replace ExecStart with the streaming wrapper at
+# %h/.local/opt/whisper-server/whisper-server once M5 lands.
+ExecStart=%h/.local/opt/whisper.cpp/build/bin/whisper-server \
+  --host 127.0.0.1 \
+  --port 8082 \
+  --model %h/.local/share/lclva/models/ggml-small.bin \
+  --threads 6 \
+  --processors 1
+Restart=on-failure
+RestartSec=2
+TimeoutStartSec=60
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,19 @@
+[Unit]
+Description=lclva — Piper (TTS backend)
+After=network.target
+
+[Service]
+Type=simple
+# piper-server.py is the wrapper M3 ships — see packaging/piper-server/.
+# Until M3 lands, this unit is a placeholder.
+ExecStart=%h/.local/opt/lclva/piper-server.py \
+  --host 127.0.0.1 \
+  --port 8083 \
+  --voices-dir %h/.local/share/lclva/voices
+Restart=on-failure
+RestartSec=2
+TimeoutStartSec=60
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

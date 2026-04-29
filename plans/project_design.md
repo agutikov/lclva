@@ -14,12 +14,14 @@ Open questions are tracked separately in `plans/open_questions.md`.
 A local, production-grade, configurable voice assistant for long (30 min – multi-hour) conversations on a single workstation with an RTX 4060 (8 GB VRAM). The system must support reliable barge-in, bounded latency, crash recovery, and observability from day one.
 
 Hardware target:
-- GPU: RTX 4060 8 GB
+- GPU: RTX 4060 8 GB (exclusive use; no graceful degradation under contention)
 - CPU: modern x86_64 (≥ 8 cores assumed)
 - OS: Linux (Manjaro/Arch family primary; Ubuntu LTS secondary)
-- Audio: USB or built-in mic + speakers/headphones
+- Audio: speakers (primary UX) or headphones; mic via USB or built-in
 
-Non-goals for MVP: multi-user, mobile, custom model training, full-duplex perfection, emotional prosody.
+Deployment: single-machine, all services on `127.0.0.1`, no auth/TLS on local IPC.
+
+Non-goals for MVP: multi-user, mobile, custom model training, full-duplex perfection, emotional prosody, GPU-contention graceful degradation.
 
 ---
 
@@ -55,8 +57,10 @@ The loopback path from final speaker output back into APM as the reference signa
 
 ### 4.1 Audio I/O
 
-- Backend: PortAudio (primary). RtAudio as fallback if PortAudio shows latency issues.
+- Backend: **PortAudio**.
 - Single `AudioDevice` abstraction; capture and playback share a `MonotonicAudioClock`.
+- Hardware sample rate **48 kHz**; internal pipeline **16 kHz mono**. Single resample at capture entry.
+- Device selection: OS default by default; config can override by name or index.
 - Sample-rate conversion at well-defined points (see §5).
 - Audio callback runs on the OS-provided realtime thread; pushes to lock-free SPSC ring; never allocates.
 - Underrun/overrun counters exported as metrics.
@@ -88,17 +92,22 @@ The loopback path from final speaker output back into APM as the reference signa
 
 ### 4.5 STT Service
 
-- whisper.cpp running as a separate process behind a small REST API.
-- Utterance-based transcription for MVP; streaming partial transcription deferred.
-- Input: 16 kHz mono PCM `AudioSlice`.
-- Output: `FinalTranscript` event with text, confidence, audio duration, processing duration.
+- whisper.cpp running as a separate process. **CPU execution** (saves ~1 GB VRAM for Qwen).
+- Multilingual model. Default size **small** (configurable: base / small / medium).
+- **Streaming partial transcription** is in-MVP, not deferred. Sliding-window inference produces `PartialTranscript` events; on `SpeechEnded`, a `FinalTranscript` event closes the utterance.
+- Each partial includes: text, language, confidence, "stable prefix length" (number of leading characters unlikely to be revised), and a sequence number per utterance.
+- Input: 16 kHz mono PCM stream tagged with utterance ID; the service consumes audio incrementally as VAD emits frames.
+- Output stream:
+  - `PartialTranscript {utterance_id, sequence, text, stable_prefix_len, lang, confidence}`
+  - `FinalTranscript   {utterance_id, text, lang, confidence, audio_duration_ms, processing_ms}`
 - Health: HTTP `/health`; supervisor pings every 5 s when idle.
 
 ### 4.6 LLM Service
 
 - llama.cpp server with OpenAI-compatible API.
-- Model: Qwen2.5-7B-Instruct, Q4_K_M default (Q5_K_M optional if VRAM allows after Whisper placement decision).
+- Model: Qwen2.5-7B-Instruct, **Q4_K_M** (~4.5 GB VRAM).
 - Streaming via SSE.
+- Multilingual: Qwen2.5 handles many languages; system prompt instructs the model to reply in the detected user-turn language (passed in as context).
 - Keep-alive: orchestrator sends a 1-token completion every `keep_alive_interval_sec` (default 60 s) when idle to prevent model offload.
 - HTTP client split:
   - `cpp-httplib` for health checks, simple completions, model warmup.
@@ -110,12 +119,14 @@ Owns conversational state. Pure logic component; no audio, no I/O, no inference.
 
 Responsibilities:
 - Drive the Dialogue FSM (§6).
-- Build LLM prompt from memory + recent turns (delegates to `PromptBuilder`).
+- Consume `PartialTranscript` and `FinalTranscript` events. Apply **speculation policy**: if a partial's stable prefix is "long enough and stable" (see §6) and VAD has been near-silent for `speculation_hangover_ms`, optimistically start LLM generation against the speculative transcript. If the final transcript diverges from the speculation, cancel the speculative LLM run and restart against the final.
+- Build LLM prompt from memory + recent turns (delegates to `PromptBuilder`). Pass detected language to PromptBuilder so the system prompt instructs the model to reply in that language.
 - Receive LLM token stream; pass to `SentenceSplitter`.
-- Forward sentences to TTS with sequence numbers tied to the active turn ID.
+- Forward sentences to TTS with sequence numbers tied to the active turn ID, **and the detected language** (selects Piper voice).
 - Decide turn outcome on interruption.
-- Decide what gets persisted to memory.
+- Decide what gets persisted to memory (turn text, language, speculative-vs-final marker if relevant).
 - Apply backpressure limits (max sentences, max queued TTS).
+- (Tool calling is **out of scope for MVP** — no architectural reservation; revisit post-MVP.)
 
 ### 4.8 SentenceSplitter
 
@@ -131,8 +142,18 @@ Explicit, unit-tested component. Not "split on `.!?`".
 ### 4.9 TTS Service
 
 - Piper as a separate process. CPU-resident (frees VRAM).
-- Sentence-level synthesis. Each request carries `(turn_id, sequence_number, text)`.
+- **Per-language voice pack.** Config maps language → voice model path. Voices are **lazy-loaded** on first use and kept resident (LRU eviction if total voice memory exceeds budget; default budget 500 MB).
+- Sentence-level synthesis. Each request carries `(turn_id, sequence_number, language, text)`.
 - Output: 22.05 kHz audio chunks tagged with turn_id and sequence_number.
+- Voice pack config example:
+  ```yaml
+  tts:
+    voices:
+      en: /opt/piper/voices/en_US-amy-medium.onnx
+      ru: /opt/piper/voices/ru_RU-irina-medium.onnx
+      de: /opt/piper/voices/de_DE-thorsten-medium.onnx
+    voice_memory_budget_mb: 500
+  ```
 
 ### 4.10 Playback Queue
 
@@ -149,11 +170,18 @@ Explicit, unit-tested component. Not "split on `.!?`".
 
 ### 4.12 Supervisor
 
-- Per-service state machine: `NotConfigured → Starting → Healthy → Degraded → Unhealthy → Restarting → Disabled`.
-- Health probes per service.
-- Exponential backoff with jitter on restart.
+The supervisor manages **systemd units** for external services (llama.cpp, whisper.cpp, Piper). It does **not** fork child processes. It treats systemd as the process manager and itself as a controller/observer.
+
+- Per-service logical state machine: `NotConfigured → Starting → Healthy → Degraded → Unhealthy → Restarting → Disabled`.
+- Unit interaction via `systemctl` (subprocess) or sd-bus (preferred, see open questions).
+- On unhealthy: `systemctl restart lclva-llama.service` (or equivalent), with the orchestrator's own backoff layered on top of systemd's restart policy.
+- Health probes (HTTP `/health`, completion probes) run from the orchestrator regardless of systemd status — systemd knows the process is up, only the orchestrator can know whether the model is actually serving.
 - Pipeline-level fail conditions (see §10).
 - Keep-alive policy for LLM.
+
+Distribution ships systemd unit files (`lclva-llama.service`, `lclva-whisper.service`, `lclva-piper.service`, plus `lclva.service` for the orchestrator itself) under `/usr/lib/systemd/system/` or `~/.config/systemd/user/`. Per-user (`systemd --user`) is the default deployment mode; system-wide is supported for shared workstations.
+
+Logs from external services flow into journald automatically; the orchestrator's structured JSON logs also go to journald via `StandardOutput=journal`.
 
 ### 4.13 Event Bus
 
@@ -164,10 +192,10 @@ Two distinct mechanisms:
 
 ### 4.14 Observability
 
-- Structured JSON logs to stdout + rolling file.
-- Per-turn trace IDs propagated through every event.
-- Prometheus-compatible text metrics endpoint (HTTP), or a simpler stats dump on signal — TBD (see open questions).
-- Trace stages per turn: `audio_segment, vad_end, stt_start, stt_final, llm_start, first_token, first_sentence, tts_start, first_audio, playback_start, playback_end, turn_committed`.
+- **Logs**: structured JSON to stdout (captured by journald via systemd unit). One event per line. Per-turn trace IDs propagated through every event.
+- **Metrics**: Prometheus exposition format on `/metrics` (HTTP, localhost only) via `prometheus-cpp`.
+- **Traces**: real **OTLP traces** via `opentelemetry-cpp`. Each user turn is a span tree with stages as child spans (`audio_segment, vad_end, stt_start, stt_final, llm_start, first_token, first_sentence, tts_start, first_audio, playback_start, playback_end, turn_committed`). OTLP HTTP export to a configurable endpoint (default disabled; opt-in via `observability.otlp.endpoint`).
+- A local OTel collector (e.g., otelcol-contrib) is the recommended target; users without one can leave OTLP disabled and rely on JSON logs + offline trace reconstruction.
 
 ---
 
@@ -180,26 +208,47 @@ This was missing from both the original doc and the review.
   - Mic native (likely 44.1 or 48 kHz) → 16 kHz mono for APM/VAD/STT pipeline. One resample at capture entry.
   - Piper output (22.05 kHz) → playback device rate at playback resampler. Loopback tap is taken **after** this resample (so AEC sees what the speaker actually emits).
 - **MonotonicAudioClock**: a single clock object tied to capture frame counter, used to timestamp every audio frame and AEC reference frame. Drift between capture and playback hardware is corrected via the playback resampler ratio adjustment (slow drift) rather than buffer drops.
-- Resampling library: libsamplerate (good quality, well-tested) or speex resampler (lighter, lower-quality acceptable for AEC-only paths). One choice for the whole project (see open questions).
+- Resampling library: **soxr**, used everywhere. Higher quality than libsamplerate; phase-stable enough that AEC alignment is robust. Single library = single failure mode.
 
 ---
 
 ## 6. Dialogue State Machine
 
+With streaming partial STT, the FSM allows `Transcribing` and `Thinking` to **overlap**: the LLM may speculatively start on a stable partial while STT is still finalizing.
+
 ```
 Idle
   └─→ Listening (VAD armed)
-        └─→ UserSpeaking (SpeechStarted)
-              └─→ Transcribing (SpeechEnded → STT)
-                    └─→ Thinking (FinalTranscript → LLM)
+        └─→ UserSpeaking (SpeechStarted; partials begin streaming)
+              └─→ Transcribing (SpeechEnded; awaiting final)
+                    │       (may have entered SpeculativeThinking earlier)
+                    └─→ Thinking (FinalTranscript reconciled with speculation)
                           └─→ Speaking (first sentence ready → TTS → Playback)
                                 ├─→ Completed (LLM done + queue drained)
                                 └─→ Interrupted (UserInterrupted during Speaking)
                                       └─→ UserSpeaking (cancellation propagated)
+
+Concurrent sub-state from UserSpeaking onward:
+  SpeculativeThinking (LLM started against stable partial; subject to revision)
 ```
 
+### Speculation policy
+
+A speculative LLM run is started when **all** of:
+- VAD has been below `offset_threshold` for `speculation_hangover_ms` (default 250 ms — shorter than the full endpoint hangover of 600 ms).
+- The latest partial's `stable_prefix_len` covers ≥ `speculation_min_chars` (default 20) of text.
+- The stable prefix has not changed for `speculation_stability_ms` (default 200 ms).
+
+When `FinalTranscript` arrives:
+- If final's prefix matches the speculation's prefix within `speculation_match_ratio` (default 0.9), keep the speculative LLM run; just feed any tail tokens via prompt patch if necessary.
+- Otherwise, **cancel** the speculative LLM run (turn ID bump) and start fresh against the final. This is a normal cancellation path, not an error.
+
+Speculation savings: ~300–500 ms off perceived latency in the common case where STT's final matches its stable partial.
+
 **Assistant turn outcome states (orthogonal to FSM):**
-`NotStarted, Generating, Speaking, Interrupted, Completed, Discarded`.
+`NotStarted, Speculating, Generating, Speaking, Interrupted, Completed, Discarded`.
+- `Speculating`: started against a partial; not yet confirmed by final.
+- A speculative-but-discarded run that never produced spoken output is logged but not stored in `turns`.
 
 **Interruption persistence policy:**
 - Interrupted before first complete sentence finished playing → `Discarded` (do not store).
@@ -212,6 +261,8 @@ Idle
 4. Drain playback queue; emit `PlaybackInterrupted`.
 5. Update assistant turn outcome state.
 6. Transition FSM to `UserSpeaking`.
+
+**Cancellation on speculation mismatch** uses the same machinery: turn ID bump, cancel LLM, no TTS yet (speculation must mismatch *before* first sentence reaches TTS, otherwise the user hears the wrong answer). Therefore: speculation can only emit a sentence to TTS **after** `FinalTranscript` confirms it.
 
 ---
 
@@ -292,6 +343,7 @@ CREATE TABLE turns (
     session_id INTEGER NOT NULL REFERENCES sessions(id),
     role TEXT NOT NULL,                     -- 'user' | 'assistant'
     text TEXT,
+    lang TEXT,                              -- BCP-47 code (en, ru, de, ...) detected by STT or set by LLM
     started_at INTEGER NOT NULL,
     ended_at INTEGER,
     status TEXT NOT NULL,                   -- in_progress | committed | interrupted | discarded
@@ -305,6 +357,7 @@ CREATE TABLE summaries (
     range_start_turn INTEGER NOT NULL,
     range_end_turn INTEGER NOT NULL,
     summary TEXT NOT NULL,
+    lang TEXT NOT NULL,                     -- dominant language of the source range
     source_hash TEXT NOT NULL,              -- hash of source turn texts; allows re-summarize detection
     created_at INTEGER NOT NULL
 );
@@ -313,10 +366,11 @@ CREATE TABLE facts (
     id INTEGER PRIMARY KEY,
     key TEXT NOT NULL,
     value TEXT NOT NULL,
+    lang TEXT,                              -- language of the value (NULL = language-agnostic)
     source_turn_id INTEGER REFERENCES turns(id),
     confidence REAL NOT NULL,
     updated_at INTEGER NOT NULL,
-    UNIQUE(key)
+    UNIQUE(key, lang)
 );
 
 CREATE TABLE settings (
@@ -457,28 +511,38 @@ The original "1–2 s" target is a P50 figure for short prompts. Long-context tu
 
 ## 14. Testing Strategy
 
+**No CI.** All tests run on the developer's machine. Hygiene depends on developer discipline: tests must pass locally before merging to `main`, documented in CONTRIBUTING when that file exists. Trade-off accepted: faster iteration and no infrastructure cost; risk of "works on my machine" drift.
+
 ### Unit tests
 
-- Dialogue FSM transitions (table-driven).
-- SentenceSplitter (golden test set with abbreviations, lists, code, ellipses).
+- Dialogue FSM transitions (table-driven, including speculation reconcile/restart paths).
+- SentenceSplitter (golden test set with abbreviations, lists, code, ellipses, multilingual).
 - PromptBuilder (snapshot tests).
 - Memory write/recovery.
 - Cancellation propagation (mock clients, assert no work after cancel).
 - Config validation (invalid YAMLs produce specific errors).
+- SPSC ring (memory ordering, capacity boundaries, multi-producer rejection).
 
 ### Component integration tests
 
 - Fake STT → fake LLM → fake TTS pipeline driving the Dialogue FSM.
-- Real llama.cpp smoke test against a tiny model (TinyLlama).
-- Real whisper.cpp smoke test on fixed audio fixtures.
+- Real llama.cpp smoke test against a tiny model (TinyLlama or Qwen2.5-0.5B).
+- Real whisper.cpp streaming smoke test on fixed audio fixtures.
 - Playback queue cancellation under simulated barge-in.
+- Speculation reconcile: stable-prefix utterance keeps speculation; revision-heavy utterance restarts.
+- systemd unit interaction: start/stop/restart/status via sd-bus on a test unit.
+
+### Audio fixtures
+
+Source: **LibriSpeech (test-clean subset) + Common Voice (small multilingual subset) + hand-recorded edge cases** (noise, echo, accents, code-switching). Checked into the repo as a fixtures submodule or a download script (license-compliant subset only).
 
 ### Audio tests
 
-- Recorded utterance fixtures with known boundaries (assert VAD endpoints within tolerance).
+- VAD endpoint accuracy on LibriSpeech utterances (assert endpoints within ±100 ms of ground truth).
 - Noise fixtures (white, pink, babble) with target false-start rate.
-- Echo fixtures (TTS playing back through loopback) — assert AEC suppression > N dB.
-- Long-session soak test: 4 hours scripted interaction; assert no crash, bounded memory, bounded queue depth, stable latency percentiles.
+- Echo fixtures (TTS playing back through loopback) — assert AEC suppression > N dB after convergence.
+- Multilingual STT correctness: per-language WER on Common Voice subset within a documented threshold per Whisper size.
+- Long-session soak test: 4 hours scripted interaction; assert no crash, bounded memory, bounded queue depth, stable latency percentiles. Run before each release manually.
 
 ### Soak test acceptance
 
@@ -493,13 +557,26 @@ service restarts: ≤ 2 (incidental), pipeline never enters failed state
 
 ---
 
-## 15. Security & Privacy
+## 15. Security, Privacy & UX Conventions
 
-- All processing local. No network calls outside localhost.
-- Audio recordings: off by default. If enabled, written to a configurable path with session ID.
-- "Wipe session" command: deletes session row and cascade.
-- "Wipe all" command: drops and recreates schema, deletes audio files.
+### Privacy
+- All processing local. No network calls outside localhost (except optional OTLP export to a configured endpoint).
+- Audio recordings: off by default. If enabled, written to a configurable path with session ID; default retention rolling 24 h.
+- "Wipe session" command (HTTP `/wipe?session=<id>`): deletes session row and cascade.
+- "Wipe all" command (HTTP `/wipe?all=true`): drops and recreates schema, deletes audio files.
 - Config option `redact_pii_in_logs: true` (default) suppresses transcript text in info-level logs.
+
+### UX
+- **No GUI for MVP.** Headless service + HTTP control plane on `127.0.0.1`:
+  - `GET  /status` — current FSM state, supervisor states, queue depths
+  - `POST /reload` — hot-reload eligible config
+  - `POST /mute` / `POST /unmute` — toggle VAD intake
+  - `POST /new-session` — start a fresh session
+  - `POST /wipe` — privacy commands (above)
+  - `GET  /metrics` — Prometheus exposition
+- **Mute hotkey**: not implemented in-process. User binds an OS hotkey to `curl -X POST localhost:PORT/mute` via their compositor (sway, hyprland, GNOME, KWin, i3, etc.). Documented in README.
+- **Error UX**: errors are **never spoken**. Logs and `/status` are the only channels for error reporting. Rationale: voice interruptions for errors are jarring; users monitor logs/status when something feels off. (Configurable for development: `ux.speak_errors: false` default; can be enabled via debug flag.)
+- **Conversation export**: CLI subcommand `lclva export --session <id> [--format markdown|json]` reads SQLite and produces a transcript file. Audio export only when E1 (audio recording) is enabled.
 
 ---
 
@@ -509,18 +586,20 @@ service restarts: ≤ 2 (incidental), pipeline never enters failed state
 |----------------------|---------------------------------|--------------------------------------------|
 | Language             | C++20                           | Mature toolchain; defer C++23/Cobalt       |
 | Build system         | CMake + presets                 | Standard                                   |
-| Async                | asio (standalone or Boost)      | Battle-tested, no Cobalt risk              |
+| Async                | Boost.Asio                      | Battle-tested, no Cobalt risk              |
 | HTTP simple          | cpp-httplib                     | Header-only, simple, sufficient            |
 | HTTP SSE             | libcurl                         | Reliable streaming, well-debugged cancel   |
 | JSON + YAML          | glaze                           | One library for both; reflective structs   |
 | Audio                | PortAudio                       | Cross-platform, mature                     |
 | APM                  | WebRTC APM (vendored)           | Industry standard AEC                      |
-| Resampler            | libsamplerate                   | Quality                                    |
+| Resampler            | soxr                            | Highest quality; phase-stable for AEC      |
 | VAD                  | Silero VAD (ONNX runtime)       | Best of class                              |
 | DB                   | SQLite (WAL mode)               | Local, embeddable, atomic                  |
 | Logging              | spdlog (with JSON sink)         | Mature, fast                               |
 | Metrics              | prometheus-cpp                  | Standard format                            |
 | Tests                | doctest or Catch2               | Header-only, fast                          |
+| Tracing              | opentelemetry-cpp (OTLP HTTP)   | Real distributed traces; opt-in target     |
+| Process mgmt         | systemd (units) + sd-bus        | Orchestrator manages units, doesn't fork   |
 
 ---
 
@@ -549,9 +628,9 @@ The original order had AEC after barge-in, which is wrong. Without AEC the assis
 (Done early because LLM crashes during long-context dev are inevitable; retrofitting supervision is painful.)
 
 ### M3: TTS + Playback (1–2 weeks)
-- Piper integration.
+- Piper integration with **per-language voice pack and lazy load**.
 - Playback queue with sequence-number cancellation.
-- LLM → SentenceSplitter → TTS → Playback bridge.
+- LLM → SentenceSplitter → TTS → Playback bridge (language flows through).
 - End-to-end text-input → spoken-output.
 
 ### M4: Audio Capture + VAD (1–2 weeks)
@@ -561,10 +640,13 @@ The original order had AEC after barge-in, which is wrong. Without AEC the assis
 - Silero VAD on cleaned audio.
 - Utterance buffer with reference-counted slices.
 
-### M5: STT (1 week)
-- whisper.cpp integration.
-- Utterance → transcript flow.
-- End-to-end voice-input → text-input handled by M1.
+### M5: STT — Streaming Partials (2–3 weeks)
+- whisper.cpp **streaming** integration (sliding-window inference; not utterance-only).
+- `PartialTranscript` + `FinalTranscript` event flow with stable-prefix tracking.
+- Multilingual model; language detection per utterance.
+- **Speculative LLM start** in Dialogue Manager (speculation policy from §6).
+- Reconciliation logic: speculation kept vs. cancelled-and-restarted.
+- Tests: prefix-stable utterances commit speculation; revision-heavy utterances correctly restart.
 
 ### M6: AEC / NS / AGC (1–2 weeks)
 - WebRTC APM integration.
@@ -585,7 +667,7 @@ The original order had AEC after barge-in, which is wrong. Without AEC the assis
 - Wipe/privacy commands.
 - Packaging (single binary + config + service files).
 
-**Total: ~12–14 weeks** for a single competent C++ developer to MVP.
+**Total: ~14–16 weeks** for a single competent C++ developer to MVP. (Up from 12–14 due to M5 expansion for streaming partial STT and multilingual.)
 
 ---
 
@@ -607,6 +689,9 @@ The original order had AEC after barge-in, which is wrong. Without AEC the assis
 |12 | GPU memory exhaustion on 8 GB card with Whisper + Qwen        | Medium   | Whisper on CPU by default; Qwen Q4_K_M; budget verified at startup   |
 |13 | SentenceSplitter mis-fires on abbreviations/lists/code        | Medium   | Dedicated component with golden test corpus                          |
 |14 | Resampler chain introduces phase issues for AEC               | Low      | One resampler library (libsamplerate); document conversion points    |
+|15 | Speculative LLM run wastes cycles when partial-final mismatch | Medium   | Conservative speculation thresholds; cap speculative restart rate    |
+|16 | Wrong language voice/prompt on language-switch turns          | Medium   | Whisper language confidence threshold; fallback to user-configured default |
+|17 | Whisper multilingual model slower on CPU than English-only    | Medium   | Configurable model size; benchmark medium vs small at startup        |
 
 ---
 
@@ -614,7 +699,7 @@ The original order had AEC after barge-in, which is wrong. Without AEC the assis
 
 1. End-to-end P50 latency ≤ 2 s, P95 ≤ 3.5 s on the target hardware.
 2. 4-hour soak test passes acceptance criteria (§14).
-3. Barge-in reliability: ≥ 95 % correct cancellation within 300 ms of detected user speech, in headphone mode; ≥ 80 % in speaker mode with AEC.
+3. Barge-in reliability in **speaker mode with AEC** (primary UX): ≥ 90 % correct cancellation within 400 ms of detected user speech. Headphone mode: ≥ 95 % within 300 ms.
 4. No crashes in soak test.
 5. Crash mid-session: orchestrator restarts cleanly, recovers session state, continues conversation.
 6. Memory growth bounded over 4 hours.

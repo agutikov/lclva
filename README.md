@@ -11,10 +11,12 @@ Pre-implementation. The repository currently contains the architecture and proje
 A configurable voice assistant that:
 
 - runs entirely on local hardware (RTX 4060 8 GB target)
-- supports reliable barge-in (interrupt the assistant by speaking)
+- speaker mode primary, with AEC for reliable barge-in (interrupt the assistant by speaking)
+- supports multilingual conversation with per-utterance language detection
+- streams partial STT and starts the LLM speculatively for sub-2-second latency
 - holds 30-minute to multi-hour conversations without crashes, leaks, or latency drift
 - recovers cleanly from mid-turn crashes
-- is observable from day one (structured logs, per-turn traces, Prometheus metrics)
+- is observable from day one (structured logs, per-turn traces, Prometheus metrics, opt-in OTLP)
 
 ## Design at a Glance
 
@@ -35,20 +37,22 @@ See `plans/project_design.md` for the complete architecture.
 
 ## Target Stack
 
-| Concern         | Choice                          |
-|-----------------|---------------------------------|
-| Language        | C++20                           |
-| Async           | asio (standalone)               |
-| Audio backend   | PortAudio                       |
-| AEC/NS/AGC      | WebRTC Audio Processing Module  |
-| VAD             | Silero VAD (ONNX Runtime)       |
-| LLM             | llama.cpp + Qwen2.5-7B Q4_K_M   |
-| STT             | whisper.cpp                     |
-| TTS             | Piper                           |
-| Storage         | SQLite (WAL mode)               |
-| Config / JSON   | glaze (JSON + YAML)             |
-| Logs / metrics  | spdlog + prometheus-cpp         |
-| Build           | CMake + presets                 |
+| Concern           | Choice                                       |
+|-------------------|----------------------------------------------|
+| Language          | C++20                                        |
+| Async             | Boost.Asio                                   |
+| Audio backend     | PortAudio + soxr                             |
+| AEC/NS/AGC        | WebRTC Audio Processing Module               |
+| VAD               | Silero VAD (ONNX Runtime)                    |
+| LLM               | llama.cpp + Qwen2.5-7B Q4_K_M                |
+| STT               | whisper.cpp (streaming, multilingual)        |
+| TTS               | Piper (per-language voice pack, lazy load)   |
+| Storage           | SQLite (WAL mode)                            |
+| Config / JSON     | glaze (JSON + YAML)                          |
+| Logs / metrics    | spdlog + prometheus-cpp                      |
+| Tracing (opt-in)  | opentelemetry-cpp (OTLP)                     |
+| Process mgmt      | systemd units + sd-bus                       |
+| Build             | CMake + presets                              |
 
 ## Repository Layout
 
@@ -78,7 +82,7 @@ LICENSE
 | M7 | Barge-in                   | 1 week           |
 | M8 | Production hardening       | 2 weeks          |
 
-Total: **~12–14 weeks** for a single competent C++ developer to MVP.
+Total: **~14–16 weeks** for a single competent C++ developer to MVP.
 
 ## Success Criteria for MVP
 

@@ -4,9 +4,11 @@ Guidance for Claude Code when working in this repository.
 
 ## Project
 
-**lclva** — Long Conversation Local Voice Agent. A local, production-grade C++ voice assistant for multi-hour conversations on a single workstation (RTX 4060). All inference is local; model runtimes (llama.cpp, whisper.cpp, Piper) run as separate processes; the C++ orchestrator owns control plane, audio I/O, state, memory, and observability.
+**lclva** — Long Conversation Local Voice Agent. A local, production-grade C++ voice assistant for multi-hour conversations on a single workstation (RTX 4060). All inference is local; model runtimes (llama.cpp, whisper.cpp, Piper) run as **systemd-managed services**; the C++ orchestrator owns control plane, audio I/O, state, memory, and observability.
 
-Target hardware: Linux x86_64, RTX 4060 8 GB.
+Target hardware: Linux x86_64, RTX 4060 8 GB. Speakers + AEC is the primary UX (not headphones).
+Multilingual STT/TTS/LLM with auto language detection per turn.
+Streaming partial STT with speculative LLM start.
 
 ## Status
 
@@ -35,24 +37,27 @@ When code lands, expect: `src/`, `include/`, `tests/`, `config/`, `CMakeLists.tx
 
 ## Architectural Pillars (Do Not Violate Without Discussion)
 
-1. **Process isolation for model runtimes.** llama.cpp, whisper.cpp, Piper run as separate processes behind HTTP/IPC. Don't propose embedding them into the orchestrator until the control plane is mature (post-M8).
+1. **Process isolation for model runtimes.** llama.cpp, whisper.cpp, Piper run as **systemd units**. The orchestrator manages them via sd-bus (start/stop/restart/status), does **not** fork child processes. Don't propose embedding model runtimes until post-M8.
 2. **Realtime audio path is sacred.** Audio callback never blocks, never allocates, never does I/O or HTTP. SPSC ring buffer is the only mechanism crossing the audio thread boundary.
-3. **Cancellation is structural.** Every long-running operation carries a turn ID + cancellation token. TTS audio chunks carry sequence numbers; stale chunks are rejected at enqueue and dequeue.
+3. **Cancellation is structural.** Every long-running operation carries a turn ID + cancellation token. TTS audio chunks carry sequence numbers; stale chunks are rejected at enqueue and dequeue. Speculative LLM runs use the same machinery.
 4. **Backpressure everywhere.** Every async boundary uses bounded queues with explicit overflow policy.
-5. **Observability from day one.** Per-turn trace IDs, structured JSON logs, Prometheus metrics — not retrofitted later.
+5. **Observability from day one.** Per-turn trace IDs, structured JSON logs (to journald), Prometheus metrics on `/metrics`, OTLP traces (opt-in) — not retrofitted later.
 6. **Crash recovery is a state machine, not error handling.** SQLite turn lifecycle (`in_progress`, `committed`, `interrupted`, `discarded`) + startup recovery sweep.
+7. **Speaker mode + AEC is primary, not optional.** AEC reference-signal alignment is non-negotiable; M6 is a hard prerequisite to M7.
+8. **No CI.** Tests run locally. Discipline-based; no automated PR gates.
 
 ## Tech Stack (Locked for MVP)
 
 - C++20 (not C++23 — see project_design.md §16 for why; revisit after M8)
-- asio (standalone) for async, **not** Boost.Cobalt
+- Boost.Asio for async, **not** Boost.Cobalt
 - cpp-httplib for simple HTTP, **libcurl** for SSE streaming
-- PortAudio + libsamplerate
+- PortAudio + soxr
 - WebRTC APM (vendored) for AEC/NS/AGC
 - Silero VAD via ONNX Runtime
 - SQLite (WAL mode) + dedicated memory thread
 - glaze for JSON + YAML (config + IPC payloads)
-- spdlog (JSON sink), prometheus-cpp
+- spdlog (JSON sink), prometheus-cpp, opentelemetry-cpp (OTLP)
+- systemd unit management via sd-bus (libsystemd)
 - doctest or Catch2 for tests
 - CMake + presets
 
@@ -75,8 +80,11 @@ Don't propose moving these back without strong reasons.
 - **Every cancellable operation takes a `TurnContext`.** Don't add a "global cancel flag" or per-component bool.
 - **Memory writes go through the memory thread.** Don't open SQLite from random threads.
 - **HTTP client choice matters.** cpp-httplib for non-streaming, libcurl for SSE. Don't unify them on one library "for simplicity" without measuring.
-- **Tests for the SentenceSplitter must include**: abbreviations (`Dr.`, `e.g.`), decimals (`3.14`), enumerations (`1.`, `2.`), code fences, ellipses, and very-long-no-punctuation flush.
-- **Tests for the Dialogue FSM must be table-driven**, asserting all transitions including barge-in cancellation propagation.
+- **Process management is via sd-bus, not fork/exec.** Don't propose `popen` or `fork()` to launch llama.cpp/whisper.cpp/Piper.
+- **Language flows through the pipeline.** STT detects language → Dialogue Manager passes it to PromptBuilder + TTS. Voice selection is per-language.
+- **Errors are silent.** Voice agent never speaks errors to the user. Logs and `/status` are the only error channels (configurable for debug).
+- **Tests for the SentenceSplitter must include**: abbreviations (`Dr.`, `e.g.`), decimals (`3.14`), enumerations (`1.`, `2.`), code fences, ellipses, very-long-no-punctuation flush, and **multilingual** boundary cases.
+- **Tests for the Dialogue FSM must be table-driven**, asserting all transitions including barge-in cancellation propagation and speculation-reconcile/restart paths.
 
 ## Latency Budget (Realistic)
 
@@ -93,7 +101,7 @@ ctest --preset dev
 ./build/dev/lclva --config config/default.yaml
 ```
 
-External services (llama.cpp, whisper.cpp, Piper) are launched as supervised child processes by the orchestrator; paths come from the YAML config.
+External services (llama.cpp, whisper.cpp, Piper) run as **systemd units** (`lclva-llama.service`, `lclva-whisper.service`, `lclva-piper.service`); the orchestrator interacts with them via sd-bus. Per-user mode (`systemctl --user`) is the default deployment.
 
 ## Claude-Specific Working Notes
 

@@ -1,94 +1,134 @@
 # Open Questions
 
-Decisions to make before or during implementation. Grouped by area. Each question notes the default assumption used in `project_design.md` so we can proceed if the question stays open, plus what specifically would change if the answer differs.
+Decisions to make before or during implementation. Grouped by area.
+
+## Status
+
+After the Section A–K interview, **all original questions are resolved**. New questions surfaced during the interview (B7–B10, C7, E5b, H6–H7) are listed inline and either resolved or carry default assumptions.
+
+Resolved decisions are marked *(resolved)* with the chosen answer and consequence. Unresolved entries (`B8`, `B10`, `H6`, `H7` — minor implementation details) keep their default assumption and impact note for future handling.
+
+Major shifts from the original design that came out of this interview:
+
+- **Speakers + AEC is the primary UX** (was: both, headphones reliable until M6).
+- **Streaming partial STT + speculative LLM in MVP** (was: utterance-based, deferred).
+- **Full multilingual** STT/TTS/LLM with per-utterance language detection (was: English-only).
+- **systemd-managed services** instead of orchestrator-forked child processes.
+- **OTLP traces** opt-in (was: logs only).
+- **No CI** — local-only testing.
+- **soxr** instead of libsamplerate.
+- **Boost.Asio** instead of standalone asio (Boost is now a project dep).
+- **Tool calling fully out of scope** — no architectural reservation.
+- **Errors never spoken** — logs and `/status` only.
+
+Schedule shifted from ~12–14 weeks to **~14–16 weeks** because of M5 expansion.
 
 ---
 
 ## A. Hardware & Deployment
 
-**A1. Headphones or speakers as the default UX?**
-- Default assumption: support both, but headphone mode is the reliable mode until M6 (AEC) lands.
-- Impact: if speaker-only is required from day one, M6 must move before M7 *and* the latency budget for AEC delay estimation must be tight. If headphones-only is acceptable, AEC can be a stretch goal.
+**A1. Headphones or speakers as the default UX?** *(resolved)*
+- Decision: **speakers**, AEC mandatory.
+- Consequence: M6 (AEC) is a hard prerequisite to M7 (barge-in) — already the order. AEC reference-signal alignment must be tight; AEC delay estimate is a first-class metric. Speaker-mode barge-in reliability is a primary success criterion, not "≥ 80% with AEC".
 
-**A2. Single-machine deployment only, or multiple workstations?**
-- Default assumption: single machine. All services on `127.0.0.1`.
-- Impact: cross-machine deployment changes service discovery, auth, and TLS posture. Would also reopen the "is HTTP the right IPC?" question.
+**A2. Single-machine deployment only, or multiple workstations?** *(resolved)*
+- Decision: **single machine only**.
+- Consequence: all services on `127.0.0.1`. No auth, no TLS on local IPC. Service discovery is config-file paths.
 
-**A3. Background usage during active GPU workloads (gaming, video work)?**
-- Default assumption: voice assistant has exclusive GPU access while running.
-- Impact: graceful degradation under VRAM pressure (offload Whisper to CPU dynamically? quantize down?) is not in the design today.
+**A3. Background usage during active GPU workloads (gaming, video work)?** *(resolved)*
+- Decision: **exclusive GPU access required**.
+- Consequence: documented as a precondition; no VRAM-pressure detection or graceful degradation in MVP. If GPU is contended, behavior is "errors, possibly crashes" — handled by supervisor restarts but not gracefully.
 
 ---
 
 ## B. Models & Inference
 
-**B1. Whisper on GPU or CPU?**
-- Default assumption: CPU (Whisper small or medium-CPU). Saves VRAM for Qwen.
-- Impact: GPU Whisper is faster (sub-200 ms STT on small) but eats ~1 GB VRAM. Decide based on measured first-token P95 budget pressure.
+**B1. Whisper on GPU or CPU?** *(resolved)*
+- Decision: **CPU**.
+- Consequence: ~1 GB VRAM saved for Qwen. STT latency higher (~600–1000 ms with small) — partially offset by speculative LLM start (B5).
 
-**B2. Qwen2.5-7B Q4_K_M vs Q5_K_M vs Q4_K_S?**
-- Default assumption: Q4_K_M (~4.5 GB).
-- Impact: Q5_K_M is higher quality but ~5.4 GB; Q4_K_S faster cold-start but lower quality. Should be a config flag with a benchmark-driven default.
+**B2. Qwen2.5-7B Q4_K_M vs Q5_K_M vs Q4_K_S?** *(resolved)*
+- Decision: **Q4_K_M** (~4.5 GB).
+- Consequence: standard balance. Q5_K_M can be added later as opt-in if quality demands it.
 
-**B3. Whisper model size: tiny / base / small / medium?**
-- Default assumption: small (en) or small (multilingual) depending on B6.
-- Impact: tiny is fast but error-prone; medium is accurate but slow. Ties into latency budget.
+**B3. Whisper model size?** *(resolved)*
+- Decision: **configurable, default small** (multilingual).
+- Consequence: small is the recommended default; users can switch to base (faster, less accurate) or medium (slower, more accurate). Config gate exists from M5.
 
-**B4. Piper voice model selection?**
-- Default assumption: one English voice, configurable.
-- Impact: voice quality is purely UX; pick something pleasant and document how to swap.
+**B4. Piper voice model selection?** *(resolved)*
+- Decision: **per-language voice pack with lazy load**, ~500 MB voice memory budget by default.
+- Consequence: config maps language → voice path. Voices loaded on first use; LRU eviction over budget. Aligns with B6 multilingual decision.
 
-**B5. Streaming partial STT — defer to post-MVP?**
-- Default assumption: utterance-based for MVP; partial transcription is post-MVP.
-- Impact: partial STT enables overlapping STT/LLM ("speculative thinking") and shaves ~400 ms; complicates cancellation. Worth a follow-up.
+**B5. Streaming partial STT — defer to post-MVP?** *(resolved)*
+- Decision: **in-MVP**.
+- Consequence: M5 scope expands to 2–3 weeks. Dialogue FSM grows a `SpeculativeThinking` concurrent sub-state (§6). Speculation policy is configurable. Speculation can only emit to TTS after `FinalTranscript` confirms — protects user from hearing mismatched answers.
 
-**B6. English-only or multilingual?**
-- Default assumption: English-only for MVP.
-- Impact: multilingual changes Whisper model choice, Piper voice catalog, and prompt policy.
+**B6. English-only or multilingual?** *(resolved)*
+- Decision: **full multilingual** (STT + TTS + LLM).
+- Consequence: multilingual Whisper, per-language Piper voices, language flows through prompt + TTS request as a first-class field. Memory schema gains a `lang` column on turns (see §9.1 update needed).
+
+**B7 (new). How is the active language determined per turn?** *(resolved)*
+- Decision: **auto-detect from STT output**.
+- Consequence: Whisper detects language per utterance and emits it on `FinalTranscript`. Dialogue Manager passes it to PromptBuilder (system-prompt instruction "reply in {lang}") and to TTS (voice selection).
+
+**B8 (new). Speculation policy thresholds — what defaults?**
+- Default assumption: `speculation_hangover_ms=250`, `speculation_min_chars=20`, `speculation_stability_ms=200`, `speculation_match_ratio=0.9`. Cap speculative restarts per minute to prevent thrash.
+- Impact: too aggressive → wasted GPU cycles and possible visible glitches; too conservative → no latency benefit. Tune empirically during M5.
+
+**B9 (new). Memory in multilingual context — store turns in original language or normalize?**
+- Default assumption: store turns in their **original language**; add a `lang` column. Summaries written in the dominant language of the source range (Whisper-detected). Facts stored language-tagged.
+- Impact: prompt assembly should not auto-translate; LLM handles cross-language context natively.
+
+**B10 (new). Whisper streaming — reuse existing whisper.cpp `stream` example or integrate at library level?**
+- Default assumption: wrap the streaming approach as a small service binary (HTTP API for partials + finals). Reuse whisper.cpp's `stream` algorithm (sliding window with N seconds context).
+- Impact: writing a streaming HTTP wrapper around whisper.cpp is non-trivial; the project may need a custom whisper service binary instead of using a stock one. Allow ~1 week of M5 for this.
 
 ---
 
 ## C. Audio
 
-**C1. Resampler choice: libsamplerate, speex resampler, or soxr?**
-- Default assumption: libsamplerate (`SRC_SINC_FASTEST` for realtime paths, `SRC_SINC_MEDIUM_QUALITY` for playback).
-- Impact: speex is lighter, soxr is highest quality. One choice for the project.
+**C1. Resampler choice: libsamplerate, speex resampler, or soxr?** *(resolved)*
+- Decision: **soxr**, used everywhere.
+- Consequence: highest quality; phase-stable for AEC. One library = one failure mode.
 
-**C2. Audio backend: PortAudio or RtAudio?**
-- Default assumption: PortAudio.
-- Impact: minor; both work. Only matters if a target distro has packaging issues with one.
+**C2. Audio backend: PortAudio or RtAudio?** *(resolved)*
+- Decision: **PortAudio**.
 
-**C3. AEC reference signal: post-resampler loopback tap, or virtual loopback device (PulseAudio/PipeWire monitor)?**
-- Default assumption: in-process post-resampler tap.
-- Impact: virtual loopback is simpler to wire but adds OS-level latency variability; in-process tap is more reliable but requires careful frame alignment.
+**C3. AEC reference signal source?** *(resolved)*
+- Decision: **in-process post-resampler tap**.
+- Consequence: requires careful frame alignment between mic stream and the loopback tap point. AEC delay estimate becomes a first-class metric. The tap is taken *after* the playback resampler so AEC sees what the speaker actually emits.
 
-**C4. VAD hangover defaults: 600 ms?**
-- Default assumption: 600 ms hangover, 200 ms minimum utterance.
-- Impact: lower hangover = snappier turn-taking but more interruptions of slow speakers. Should expose as config and tune on real data.
+**C4. VAD hangover defaults?** *(resolved)*
+- Decision: **600 ms hangover, 200 ms minimum utterance**.
+- Consequence: configurable; tune on real audio fixtures during M4. Note: speculation hangover (B8) is shorter (250 ms) and runs in parallel.
 
-**C5. Wake-word vs always-on VAD vs push-to-talk for Phase 1?**
-- Default assumption: always-on VAD, with manual mute hotkey.
-- Impact: always-on has false-trigger issues with TV/music in the room. PTT is more reliable but worse UX. Wake-word is Phase 3.
+**C5. Trigger mode for Phase 1 (pre-wake-word)?** *(resolved)*
+- Decision: **always-on VAD with mute hotkey**.
+- Consequence: AEC + multilingual VAD is mandatory to keep false-triggers in check. Mute hotkey implementation is itself an open question (see I5).
 
-**C6. Sample rate for capture and playback?**
-- Default assumption: 48 kHz hardware, 16 kHz internal pipeline (post-resample).
-- Impact: 44.1 kHz hardware also possible. Both should work but require explicit config.
+**C6. Sample rates?** *(resolved)*
+- Decision: **48 kHz hardware, 16 kHz internal**.
+- Consequence: single soxr resample at capture entry; playback resampler converts 22.05 kHz Piper → 48 kHz speaker.
+
+**C7 (new). Audio device selection policy?** *(resolved)*
+- Decision: **OS default; configurable override by name or index**.
+- Consequence: simple, predictable. Hot-plug detection (USB headset reconnect) is post-MVP.
 
 ---
 
 ## D. Concurrency & I/O
 
-**D1. asio: standalone or Boost.Asio?**
-- Default assumption: standalone asio (one less Boost dependency).
-- Impact: minor. Boost.Asio is identical API but pulls Boost.
+**D1. asio: standalone or Boost.Asio?** *(resolved)*
+- Decision: **Boost.Asio**.
+- Consequence: Boost is now a project dependency. This implicitly enables boost::beast, boost::lockfree etc. if needed later (we still chose libcurl and hand-rolled SPSC). Build system must locate Boost ≥ 1.83.
 
-**D2. SSE client: libcurl directly, or a thin C++ wrapper (cpr)?**
-- Default assumption: libcurl directly.
-- Impact: cpr is friendlier but adds dependency. Direct libcurl is fine for our use.
+**D2. SSE client?** *(resolved)*
+- Decision: **libcurl directly** for SSE; **cpp-httplib** for non-streaming HTTP.
+- Consequence: two HTTP libraries on purpose. cpp-httplib is header-only and trivial; libcurl handles streaming with reliable cancellation.
 
-**D3. Lock-free SPSC ring: hand-roll, or a library (boost::lockfree, moodycamel)?**
-- Default assumption: hand-roll a simple SPSC ring (atomic head/tail, fixed size). It's ~100 lines.
-- Impact: minor. Library use is fine if dependency cost is acceptable.
+**D3. Lock-free SPSC ring?** *(resolved)*
+- Decision: **hand-roll**.
+- Consequence: ~100 lines, fixed-size, atomic head/tail, padded to avoid false sharing. Tailored to our 10 ms frame format. Dedicated unit tests for it (memory ordering matters).
 
 **D4. JSON library: nlohmann or glaze?** *(resolved)*
 - Decision: glaze, used for both JSON and YAML.
@@ -98,142 +138,160 @@ Decisions to make before or during implementation. Grouped by area. Each questio
 
 ## E. Memory & Persistence
 
-**E1. Should the orchestrator record raw audio per turn?**
-- Default assumption: off by default; configurable.
-- Impact: privacy, disk space, and a useful debugging tool. If on, decide retention policy (rolling N hours? per session? wipe on session end?).
+**E1. Record raw audio per turn?** *(resolved)*
+- Decision: **off by default, configurable**.
+- Consequence: when on, audio path stored in `turns.audio_path`. Retention is also configurable: rolling N hours / per-session / wipe-on-session-end (default rolling 24 h when enabled).
 
-**E2. Encryption-at-rest for SQLite?**
-- Default assumption: none (local single-user machine).
-- Impact: SQLCipher adds dependency and complexity. Worth it only if user wants confidentiality from local attackers.
+**E2. Encryption-at-rest for SQLite?** *(resolved)*
+- Decision: **none**.
+- Consequence: plain SQLite WAL files. Document that the DB and any audio are unencrypted on disk.
 
-**E3. Session boundary: when does a new session start?**
-- Default assumption: explicit user command, or after N minutes of idle.
-- Impact: too-frequent session breaks fragment memory; never-ending sessions accumulate noise.
+**E3. Session boundary?** *(resolved)*
+- Decision: **idle timeout** (default 30 min) **+ explicit `/new-session` command**.
+- Consequence: each session has its own ID; memory boundaries follow sessions; summaries are per-session.
 
-**E4. Facts table: who decides what's a "stable preference"?**
-- Default assumption: a separate, conservative LLM extraction prompt run on summarization boundaries.
-- Impact: aggressive extraction → noise; conservative → useful facts get missed. Needs offline evaluation.
+**E4. Facts extraction policy?** *(resolved — configurable)*
+- Decision: **configurable**, default **conservative** ("only directly stated").
+- Knobs: `memory.facts.policy: conservative | moderate | aggressive | manual_only`; `memory.facts.confidence_threshold: 0.7`.
+- Consequence: ship with conservative; provide moderate/aggressive presets and a `manual_only` mode that disables auto-extraction entirely.
 
-**E5. Summary regeneration: when?**
-- Default assumption: when source-hash mismatches, or every N new turns since last summary.
-- Impact: too frequent → wastes LLM cycles; too rare → stale summary. Tune empirically.
+**E5. Summary regeneration trigger?** *(resolved — configurable)*
+- Decision: **configurable**, default **every 15 new turns since last summary**.
+- Knobs: `memory.summary.trigger: turns | tokens | idle | hybrid`; `memory.summary.turn_threshold: 15`; `memory.summary.token_threshold: 4000`; `memory.summary.idle_seconds: 120`.
+- Consequence: summarization runs on the memory thread, never blocks Dialogue. Source-hash check triggers refresh independently when source turns change.
 
-**E6. Memory bootstrap on first launch — empty, or load preferences from a YAML?**
-- Default assumption: empty; user state grows over time.
-- Impact: a YAML "user profile" seed makes first-session behavior much better. Could be added without changing schema (just pre-populate `facts` and `settings`).
+**E5b (new). Summary language strategy?** *(resolved — configurable)*
+- Decision: **configurable**, default **dominant language of source range**.
+- Knobs: `memory.summary.language: dominant | english | recent`.
+- Consequence: `summaries.lang` column stores the chosen language. Prompt assembly passes summary-as-is to the LLM regardless of current turn language.
+
+**E6. Memory bootstrap on first launch?** *(resolved)*
+- Decision: **optional YAML profile seed**.
+- Consequence: empty by default; if `user_profile.yaml` exists at the configured path, pre-populate `facts` and `settings` from it on first launch (idempotent: re-running with the same file is a no-op, second run with new keys adds them).
 
 ---
 
 ## F. Dialogue & Prompting
 
-**F1. System prompt: in code, or in config?**
-- Default assumption: in YAML config so it's editable without rebuild.
-- Impact: easy answer, just confirm.
+**F1. System prompt location?** *(resolved)*
+- Decision: **in YAML config**. Hot-reloadable.
+- Consequence: per-language system prompts can be configured under `dialogue.system_prompts.{lang}:`.
 
-**F2. Tool calling reservation: where does the hook go?**
-- Default assumption: Dialogue Manager parses LLM output for tool-call markers before passing to SentenceSplitter; if a tool call is detected, suppress TTS and execute the tool. Phase 3.
-- Impact: design must reserve a "non-spoken token segment" path now, even if unused. Requires deciding tool-call format (JSON in fenced block? OpenAI-compatible function calling?).
+**F2. Tool calling reservation?** *(resolved — postponed)*
+- Decision: **out of scope for MVP**. No architectural reservation; revisit entirely as a post-MVP follow-up.
+- Consequence: Dialogue Manager does not need to inspect LLM output for tool-call markers. SentenceSplitter handles raw text. K3 (security model for tool execution) is also deferred.
 
-**F3. Maximum prompt length policy?**
-- Default assumption: cap context at ~3000 tokens (system + facts + summary + last 10 turns + current). Hit ceiling → trigger summarization.
-- Impact: directly drives LLM first-token latency. Tune against measured latency.
+**F3. Maximum prompt length policy?** *(resolved — configurable)*
+- Decision: **configurable, default 3000 tokens**.
+- Knob: `llm.max_prompt_tokens: 3000`. When prompt assembly hits the cap, the prompt builder triggers summarization-then-shrink.
+- Consequence: this is the lever for first-token latency vs. recall trade-off.
 
-**F4. Should the assistant be allowed to ask clarifying questions, and how often?**
-- Default assumption: at most one clarification per turn (per the system prompt).
-- Impact: enforced via prompt only. Not enforced structurally; rely on Qwen's instruction-following.
+**F4. Clarifying-question policy?** *(resolved)*
+- Decision: **at most one per turn, prompt-enforced**.
+- Consequence: not structurally enforced; rely on Qwen's instruction-following. Document as "best effort" in tests.
 
-**F5. Spoken-style enforcement: prompt only, or post-process LLM output?**
-- Default assumption: prompt only for MVP.
-- Impact: LLMs ignore "no lists" instructions sometimes. Post-processing (strip markdown bullets, collapse code fences to "I have a code snippet, want me to send it?") is robust but complex.
+**F5. Spoken-style enforcement?** *(resolved)*
+- Decision: **prompt only** for MVP.
+- Consequence: ship with strong system-prompt language ("answer in short spoken paragraphs, no lists, no markdown"). If observed non-compliance becomes a real issue, a post-processor can be added later.
 
 ---
 
 ## G. Cancellation & Backpressure
 
-**G1. On `UserInterrupted`, do we cancel the LLM HTTP request, or let it complete and discard?**
-- Default assumption: actively cancel (libcurl abort).
-- Impact: completing-and-discarding wastes GPU but is simpler. Aborting saves cycles but requires server-side support (llama.cpp does support client disconnect).
+**G1. LLM cancellation on UserInterrupted?** *(resolved)*
+- Decision: **actively cancel via libcurl abort**.
+- Consequence: llama.cpp handles client disconnect by stopping generation. Saves GPU cycles; reduces the cancellation race window.
 
-**G2. TTS request cancellation: cancel-in-flight, or wait + drop?**
-- Default assumption: wait + drop. Piper synthesis is fast (sub-second per sentence); cancel mid-synthesis adds complexity without much benefit.
-- Impact: under bursty interruptions, slight CPU waste. Acceptable for MVP.
+**G2. TTS cancellation policy?** *(resolved)*
+- Decision: **wait + drop**.
+- Consequence: in-flight Piper synthesis completes; the audio chunk is rejected at playback enqueue (turn-ID mismatch). Slight CPU waste for the rare long-sentence case; acceptable simplicity.
 
-**G3. Hard cap on assistant response length in voice mode?**
-- Default assumption: 6 sentences default, configurable.
-- Impact: too low → assistant feels truncated; too high → spoken responses become tedious.
+**G3. Hard cap on assistant response length?** *(resolved)*
+- Decision: **6 sentences default, configurable**.
+- Knobs: `dialogue.max_assistant_sentences: 6`; `dialogue.max_assistant_tokens: 400` (secondary cap).
+- Consequence: enforced by Dialogue Manager — when reached, sends LLM cancel signal, finishes the current sentence, transitions to Listening.
 
 ---
 
 ## H. Observability & Operations
 
-**H1. Metrics: Prometheus endpoint, or stdout dump on signal?**
-- Default assumption: Prometheus on `/metrics` (HTTP, localhost).
-- Impact: stdout-only is simpler but harder to graph. Prometheus is small dep (`prometheus-cpp`) and standard.
+**H1. Metrics export?** *(resolved)*
+- Decision: **Prometheus on `/metrics`** (HTTP, localhost) via `prometheus-cpp`.
 
-**H2. Tracing: in-process logs only, or OTLP export?**
-- Default assumption: logs only for MVP. JSON logs are sufficient to reconstruct traces offline.
-- Impact: OTLP would require an OTel collector. Not worth it for single-user local app.
+**H2. Tracing?** *(resolved)*
+- Decision: **OTLP traces** via `opentelemetry-cpp`.
+- Consequence: adds a dependency. OTLP endpoint is opt-in via config (`observability.otlp.endpoint`). Recommended target: a local otelcol-contrib instance. When disabled, tracing degrades gracefully to JSON logs only.
 
-**H3. Crash dump policy?**
-- Default assumption: rely on systemd-coredump or equivalent; no custom signal handler.
-- Impact: a custom handler that flushes the event ring before crash would be useful but is complex.
+**H3. Crash dump policy?** *(resolved)*
+- Decision: **rely on systemd-coredump**.
+- Consequence: no custom signal handler. systemd journal will reference the dump. Document `coredumpctl list lclva` for users.
 
-**H4. Single-binary distribution, or a service-set with a launcher?**
-- Default assumption: single orchestrator binary; services launched as child processes via the supervisor with paths from config.
-- Impact: simpler packaging; relies on user installing llama.cpp/whisper.cpp/Piper separately. A bundled distribution is post-MVP.
+**H4. Distribution model?** *(resolved — implied by H5)*
+- Decision: **service-set with systemd units**, not a single self-launching binary.
+- Consequence: package installs `lclva` orchestrator binary + systemd unit files for `lclva.service`, `lclva-llama.service`, `lclva-whisper.service`, `lclva-piper.service`. User-level units (`systemd --user`) are the default; system-wide units are supported.
 
-**H5. How are external services started initially — by orchestrator, by systemd, or by user?**
-- Default assumption: orchestrator launches them as supervised child processes.
-- Impact: systemd integration would be cleaner on Linux but couples the design to systemd. Orchestrator-launched is portable.
+**H5. External services launched by whom?** *(resolved)*
+- Decision: **systemd**. Orchestrator manages units (start/stop/restart/status), does not fork child processes.
+- Consequence: §4.12 Supervisor rewritten. systemd handles process lifecycle; orchestrator handles application-level health and coordination. Linux-only deployment (already implicit).
+
+**H6 (new). systemd interaction — sd-bus or `systemctl` subprocess?**
+- Default assumption: **sd-bus** (libsystemd) for runtime interaction; `systemctl` only for one-off install/uninstall scripts.
+- Impact: sd-bus is faster, structured, and async-friendly via Boost.Asio file descriptors. Adds `libsystemd-dev` build dep.
+
+**H7 (new). OTLP collector packaging — do we ship one?**
+- Default assumption: no. Document recommended config for otelcol-contrib in README; user installs separately. OTLP off by default.
+- Impact: bundling a collector would simplify "trace works out of the box" but adds binary size.
 
 ---
 
 ## I. UX & Control Plane
 
-**I1. Is there a GUI for MVP, or CLI/headless only?**
-- Default assumption: headless. Optional minimal HTTP control plane (`/reload`, `/wipe`, `/status`).
-- Impact: GUI is Phase 3.
+**I1. GUI for MVP?** *(resolved)*
+- Decision: **headless + HTTP control plane** on localhost.
+- Endpoints: `/status`, `/reload`, `/mute`, `/unmute`, `/new-session`, `/wipe`, `/metrics`.
 
-**I2. Mute / push-to-talk hotkey: where does it come from?**
-- Default assumption: no hotkey for MVP; a `/mute` HTTP endpoint and a config-toggleable behavior.
-- Impact: a system-wide hotkey requires X11/Wayland-specific code. Out of scope.
+**I2. Mute hotkey?** *(resolved)*
+- Decision: **HTTP endpoint, user wires their own hotkey** via compositor.
+- Consequence: README documents how to bind a hotkey under sway/hyprland/GNOME/KWin/i3 to `curl -X POST localhost:PORT/mute`.
 
-**I3. Error feedback to the user: spoken, written, or both?**
-- Default assumption: spoken for unrecoverable errors only ("I lost the speech engine, please repeat"); written to logs always.
-- Impact: too talkative on errors is annoying; too silent is confusing.
+**I3. Error feedback?** *(resolved)*
+- Decision: **always silent — logs only**.
+- Consequence: errors never spoken to user. `ux.speak_errors: false` is the only setting; debug flag can enable for development.
+- Note: this is a deliberate UX choice. If field testing shows users miss errors, revisit.
 
-**I4. Conversation export: text only, or audio + text?**
-- Default assumption: text export from `turns` table via CLI.
-- Impact: audio export requires E1 to be enabled.
+**I4. Conversation export?** *(resolved)*
+- Decision: **text export via CLI**, markdown by default, JSON optional.
+- CLI: `lclva export --session <id> [--format markdown|json]`.
 
 ---
 
 ## J. Testing & Validation
 
-**J1. Soak test environment: developer machine, or CI?**
-- Default assumption: developer machine; CI runs only short integration tests with fake services.
-- Impact: a 4-hour soak in CI is impractical; a nightly run on a dedicated box is the right answer eventually.
+**J1. Soak test environment & CI strategy?** *(resolved)*
+- Decision: **no CI**. All testing is local on developer's machine.
+- Consequence: discipline-based; tests must pass locally before merging. Soak tests run manually before releases. No automated PR gating, no GitHub Actions, no nightly runs.
+- Risk: "works on my machine" drift across collaborators. Mitigated by single-developer assumption for MVP; revisit if team grows.
 
-**J2. Audio fixture corpus: where does it come from?**
-- Default assumption: hand-recorded by the developer for MVP; expand to LibriSpeech-style fixtures later.
-- Impact: small fixture set risks overfitting VAD/STT thresholds. Document this limitation.
+**J2. Audio fixture corpus?** *(resolved)*
+- Decision: **LibriSpeech + Common Voice from day one**, plus hand-recorded edge cases (noise, echo, accents, code-switching).
+- Consequence: license-compliant subsets included via a download script (not checked-in binaries). Per-language WER thresholds documented. Multilingual coverage from start aligns with B6 decision.
 
-**J3. Latency-regression detection?**
-- Default assumption: log P50/P95 in soak test summary; manual review.
-- Impact: an automated regression gate would catch drift early; out of scope for MVP.
+**J3. Latency-regression detection?** *(resolved)*
+- Decision: **manual review of soak summary**.
+- Consequence: developer reads P50/P95 numbers from soak runs. No automated gate. Acceptable for solo MVP development.
 
 ---
 
 ## K. Strategic / Future-Proofing
 
-**K1. When (if ever) do we move from external services to embedded model runtimes?**
-- Default assumption: revisit after Milestone 8 once control plane is stable. May never be worth it.
-- Impact: low-priority decision; flagged so we don't accidentally do it early.
+**K1. Embed model runtimes ever?** *(resolved)*
+- Decision: **revisit after M8; may never**.
+- Consequence: no in-process model assumption baked into APIs. External services are the architecture indefinitely unless measured benefit demands embedding.
 
-**K2. How does this design extend to a streaming end-to-end speech model (e.g., Qwen-Audio, future models)?**
-- Default assumption: such a model would replace the STT+LLM stages, keeping VAD/Dialogue/TTS/Playback. The Dialogue Manager's responsibilities don't change.
-- Impact: the design is compatible. No action now.
+**K2. Streaming end-to-end speech model compatibility?** *(resolved)*
+- Decision: **compatible by replacing STT+LLM stages**; no architectural changes today.
+- Consequence: when such a model emerges (Qwen-Audio etc.), STT and LLM service interfaces collapse into one. VAD/Dialogue/TTS/Playback stay intact. Document this future path; no code now.
 
-**K3. Multi-turn tool use (web fetch, file read, code execution) — security model?**
-- Default assumption: out of scope for MVP. When added, tool execution must be sandboxed and user-approved per call.
-- Impact: shapes Phase 3 architecture; reserve a `ToolExecutor` component slot now.
+**K3. Tool calling — timing and security model?** *(resolved)*
+- Decision: **defer entirely; revisit post-MVP**. When added: sandboxed execution (firejail or bubblewrap) + per-call user approval.
+- Consequence: aligns with F2. No `ToolExecutor` slot reserved now.

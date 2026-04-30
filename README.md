@@ -4,7 +4,7 @@
 
 ## Status
 
-In progress. Skeleton runtime (M0) and the M1 memory + sentence-splitter slice are landed. 48 unit tests passing. Next: bring up the Docker Compose stack of model backends (M1.B) and wire the LLM client into the dialogue manager (M1 slice 2). See `plans/milestones/` for per-milestone detail.
+In progress. Skeleton runtime (M0), the M1 memory + sentence-splitter slice, and the M1 Docker Compose stack scaffold are landed. 48 unit tests passing. Next: wire the LLM client into the dialogue manager (M1 slice 2) and switch logging to JSON (slice 3). See `plans/milestones/` for per-milestone detail.
 
 ## Goal
 
@@ -57,12 +57,24 @@ See `plans/project_design.md` for the complete architecture.
 ## Repository Layout
 
 ```
+src/                      C++ source (config, dialogue, event, http, log, memory, metrics, pipeline)
+tests/                    doctest-based unit tests
+config/default.yaml       default runtime config
+cmake/                    CMake helpers
+third_party/              vendored single-header libs (cpp-httplib)
 plans/
   project_design.md       full architecture, milestones, risk register
   open_questions.md       unresolved decisions with default assumptions
+  milestones/m{0..8}_*.md per-milestone implementation plans
   architecture_review.md  first review of the original design
   local_voice_ai_orchestrator_mvp_cpp_architecture_2026.md
                           original design draft
+packaging/
+  compose/                docker-compose.yml + local Dockerfiles for whisper/piper + fetch-assets.sh
+  systemd/                per-user systemd units (alternative production path)
+compose.yaml              top-level compose shim that include:s packaging/compose/docker-compose.yml
+.env.example              env override template (LCLVA_MODELS_DIR, LCLVA_LLM_MODEL, ...)
+CMakeLists.txt, CMakePresets.json
 CLAUDE.md                 guidance for Claude Code in this repo
 README.md
 LICENSE
@@ -126,9 +138,9 @@ Total: **~14–16 weeks** for a single competent C++ developer to MVP.
 
 | Component            | Notes                                                                |
 |----------------------|----------------------------------------------------------------------|
-| llama.cpp server     | OpenAI-compatible REST + SSE. CUDA build for 4060. Default image: `ghcr.io/ggml-org/llama.cpp:server-cuda`. |
-| whisper.cpp server   | Upstream `whisper-server`. Request/response transcription through M4. M5 picks one of: custom streaming wrapper, [Speaches](https://github.com/speaches-ai/speaches) (faster-whisper, OpenAI Realtime API), or defer streaming past MVP. |
-| Piper TTS            | Upstream `python -m piper.http_server`. One process per language, routed by URL. |
+| llama.cpp server     | OpenAI-compatible REST + SSE. CUDA build for 4060. Upstream image: `ghcr.io/ggml-org/llama.cpp:server-cuda`. |
+| whisper.cpp server   | Upstream `whisper-server`. Request/response transcription through M4. Upstream publishes no server image, so the Compose stack builds it locally from `packaging/compose/whisper/Dockerfile` (pinned to `v1.8.4`). M5 picks one of: custom streaming wrapper, [Speaches](https://github.com/speaches-ai/speaches) (faster-whisper, OpenAI Realtime API), or defer streaming past MVP. |
+| Piper TTS            | Upstream `python -m piper.http_server`. Built locally from `packaging/compose/piper/Dockerfile` (pinned to piper-tts 1.4.2). One process per language, routed by URL. |
 | Docker Engine ≥ 26   | Default deployment in dev. Compose v2 built-in.                      |
 | systemd ≥ 252        | Optional alternative for production. Required only on the systemd path; otherwise unused. |
 
@@ -136,12 +148,14 @@ Total: **~14–16 weeks** for a single competent C++ developer to MVP.
 
 | Model                          | Size     | Source                                                  |
 |--------------------------------|----------|---------------------------------------------------------|
-| Qwen2.5-7B-Instruct GGUF Q4_K_M| ~4.5 GB  | huggingface.co (Qwen GGUF community quantizations)      |
-| Whisper small (multilingual)   | ~244 MB  | github.com/ggerganov/whisper.cpp/releases (ggml format) |
+| Qwen2.5-7B-Instruct GGUF Q4_K_M| ~4.4 GB (split 2 shards) | huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF |
+| Whisper small (multilingual)   | ~466 MB  | huggingface.co/ggerganov/whisper.cpp                    |
 | Silero VAD ONNX                | ~2 MB    | github.com/snakers4/silero-vad                          |
-| Piper voices (per language)    | 30–100 MB each | github.com/rhasspy/piper/releases               |
+| Piper voices (per language)    | 30–100 MB each | huggingface.co/rhasspy/piper-voices               |
 
-Total disk footprint with Qwen Q4_K_M + Whisper small + 3 Piper voices: **~5.5 GB**.
+Total disk footprint with Qwen Q4_K_M + Whisper small + 1 Piper voice: **~5.0 GB**.
+
+The `packaging/compose/fetch-assets.sh` helper downloads the LLM, Whisper model, and one Piper voice to the standard host paths in one shot. Silero VAD is fetched lazily by the orchestrator once M4 lands.
 
 ### Optional
 
@@ -255,31 +269,52 @@ systemd units that wrap each service ship in `packaging/systemd/` once that dire
 
 ## Quickstart with Docker Compose (dev — recommended)
 
-Default for development. Backends run as Compose containers using **upstream images verbatim**; `lclva` runs on the host as a CLI binary. No custom Dockerfiles, no systemd, no sd-bus. Bring everything up with `docker compose up`.
+Default for development. Backends run as Compose containers; `lclva` runs on the host as a CLI binary. A top-level `compose.yaml` re-includes `packaging/compose/docker-compose.yml`, so all `docker compose ...` commands work from the repository root.
+
+llama.cpp uses the upstream `ghcr.io/ggml-org/llama.cpp:server-cuda` image verbatim. Whisper and Piper are built locally from minimal Dockerfiles under `packaging/compose/{whisper,piper}/` because upstream does not publish HTTP-server images for either project. Both Dockerfiles are short (≤ 30 lines) and pin to release tags / package versions.
 
 ### 1. Prerequisites
 
 - Docker Engine ≥ 26 (Compose v2 built-in). Podman ≥ 4 with `podman-compose` works as well.
 - **NVIDIA Container Toolkit** ≥ 1.14 for GPU passthrough to llama.cpp.
-  - Arch: `sudo pacman -S nvidia-container-toolkit && sudo systemctl restart docker`
-  - Debian/Ubuntu: follow upstream NVIDIA Container Toolkit install guide.
+  - Arch / Manjaro: `sudo pacman -S nvidia-container-toolkit && sudo systemctl restart docker`
+  - Debian / Ubuntu: follow the upstream NVIDIA Container Toolkit install guide.
   - Verify: `docker run --rm --gpus all nvidia/cuda:12.6.0-base-ubuntu24.04 nvidia-smi` prints the GPU table.
+  - **CDI spec drift on rolling-release distros:** if the toolkit was generated against a previous driver version, container start fails with `failed to fulfil mount request: open /usr/lib/libnvidia-*.so: no such file or directory`. Regenerate the spec after every NVIDIA driver upgrade:
+    ```sh
+    sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+    ```
 - User in the `docker` group (or rootless Docker).
-- Models present on the host under `~/.local/share/lclva/{models,voices}/` (download commands in the systemd section below — same files).
+- Models and voices present on the host under `~/.local/share/lclva/{models,voices}/`. The `fetch-assets.sh` helper below downloads the defaults.
 
-### 2. Bring up the backends
+### 2. Download the default model assets
 
 ```sh
-cd packaging/compose
-docker compose up -d            # first run pulls ~5 GB of images
-docker compose ps               # all 3 services 'healthy' within ~60 s
+bash packaging/compose/fetch-assets.sh
+```
+
+Idempotent and resumable (curl `--continue-at -`). Default footprint ≈ 5.2 GB:
+
+| File | Size | Source |
+|---|---|---|
+| `qwen2.5-7b-instruct-q4_k_m-{00001,00002}-of-00002.gguf` | ~4.4 GB | Qwen GGUF on HuggingFace |
+| `ggml-small.bin` | ~466 MB | ggerganov/whisper.cpp on HuggingFace |
+| `en_US-amy-medium.onnx` (+ `.json`) | ~63 MB | rhasspy/piper-voices on HuggingFace |
+
+Override the destination dirs with `LCLVA_MODELS_DIR` / `LCLVA_VOICES_DIR` (the same env vars compose reads).
+
+### 3. Bring up the backends
+
+```sh
+docker compose up -d            # first run pulls ~5 GB of images and builds whisper+piper
+docker compose ps               # all 3 services 'healthy' within ~60 s once images cached
 ```
 
 This starts:
 
-- `llama` on `127.0.0.1:8081` — `ghcr.io/ggml-org/llama.cpp:server-cuda`
-- `whisper` on `127.0.0.1:8082` — `ghcr.io/ggml-org/whisper.cpp:server`
-- `piper` on `127.0.0.1:8083` — `python:3.12-slim` + `pip install piper-tts` (one voice per service; per-language deployments add more services on adjacent ports)
+- `llama` on `127.0.0.1:8081` — `ghcr.io/ggml-org/llama.cpp:server-cuda` (CUDA build, GPU passthrough)
+- `whisper` on `127.0.0.1:8082` — `lclva/whisper.cpp:server-v1.8.4` (built locally from `packaging/compose/whisper/Dockerfile`)
+- `piper` on `127.0.0.1:8083` — `lclva/piper:1.4.2` (built locally from `packaging/compose/piper/Dockerfile`; one voice per service, per-language deployments add more services on adjacent ports)
 
 Health check each backend:
 
@@ -289,9 +324,9 @@ curl -fsS http://127.0.0.1:8082/health
 curl -fsS http://127.0.0.1:8083/health
 ```
 
-See `packaging/compose/` for the `docker-compose.yml` and `.env.example`.
+To override host paths or model file selection, copy `.env.example` to `.env` at the repo root and edit. Compose reads `.env` from the working directory by default.
 
-### 3. Run the orchestrator on the host
+### 4. Run the orchestrator on the host
 
 ```sh
 cmake --preset dev && cmake --build --preset dev
@@ -303,15 +338,14 @@ curl -sS http://127.0.0.1:9876/metrics
 
 Until M1 slice 2 lands, lclva runs in M0 fake-driver mode — it doesn't yet use the Compose backends. Once slice 2 is in, the orchestrator connects to llama / whisper / piper at the URLs in `config/default.yaml`.
 
-### 4. Stop / clean
+### 5. Stop / clean
 
 ```sh
-cd packaging/compose
 docker compose down                  # stop, keep images and volumes
-docker compose down -v --rmi all     # nuke everything
+docker compose down -v --rmi all     # nuke everything (including the locally-built images)
 ```
 
-### 5. Logs
+### 6. Logs
 
 ```sh
 docker compose logs -f llama         # live tail of one backend
@@ -322,7 +356,7 @@ The orchestrator's logs go to its own stdout (terminal where you launched it).
 
 ### Switching to systemd
 
-For unattended / production-style deployments, replace step 2 with the systemd path below. Steps 3 and onward are identical.
+For unattended / production-style deployments, replace steps 3–6 with the systemd path below. Step 2 (asset download) and step 4 (running the orchestrator) are identical.
 
 ---
 

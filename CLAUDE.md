@@ -12,7 +12,7 @@ Streaming partial STT with speculative LLM start (M5 — three options on the ta
 
 ## Status
 
-**M0 complete; M1 slice 1 (config, memory layer, SentenceSplitter) complete.** 48/48 tests passing. Next: M1 Part B (Compose stack scaffolding), then M1 slices 2–3 (LLM client, Dialogue Manager, turn writer, JSON logging).
+**M0 complete; M1 slice 1 (config, memory layer, SentenceSplitter) and M1 Part B (Compose stack scaffolding) complete.** 48/48 tests passing. `packaging/compose/docker-compose.yml` validates with `docker compose config --quiet`; the live B.7 smoke test (image pulls + GPU passthrough) is pending and runs on the dev workstation. Next: M1 slices 2–3 (LLM client, Dialogue Manager, turn writer, JSON logging).
 
 ## Repository Layout
 

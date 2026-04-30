@@ -1,0 +1,127 @@
+# lclva — model backend stack for dev.
+#
+# This file follows plans/milestones/m1_llm_memory.md §B verbatim:
+#   - upstream images, no custom Dockerfiles
+#   - model files live on the host and are bind-mounted read-only
+#   - everything binds to 127.0.0.1 so containers stay private to the host
+#   - healthchecks gate compose's restart loop; the orchestrator's HTTP
+#     `/health` probes (cfg.supervisor) are independent and gate the
+#     dialogue path
+#
+# The orchestrator (`lclva`) itself runs on the host, NOT in compose, so
+# the realtime audio path stays direct.
+
+name: lclva
+
+services:
+  # ---------------------------------------------------------------------
+  # llama.cpp — LLM. Official ggml-org image, CUDA build of llama-server.
+  # ---------------------------------------------------------------------
+  llama:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    container_name: lclva-llama
+    ports:
+      - "127.0.0.1:8081:8081"
+    volumes:
+      - ${LCLVA_MODELS_DIR:-${HOME}/.local/share/lclva/models}:/models:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8081/health"]
+      interval: 5s
+      timeout: 2s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+    command:
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8081"
+      - "--model"
+      - "/models/${LCLVA_LLM_MODEL:-qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf}"
+      - "--alias"
+      - "qwen2.5-7b-instruct"
+      - "--ctx-size"
+      - "8192"
+      - "--n-gpu-layers"
+      - "999"
+      - "--threads"
+      - "4"
+      - "--metrics"
+
+  # ---------------------------------------------------------------------
+  # whisper.cpp — STT. Built locally because upstream publishes neither a
+  # server image nor a `.devops/server.Dockerfile`. Sync request/response
+  # transcription is enough through M4; M5 may swap this for a streaming
+  # backend (Speaches / faster-whisper / custom wrapper — see
+  # m5_streaming_stt.md).
+  # ---------------------------------------------------------------------
+  whisper:
+    build:
+      context: ./whisper
+      args:
+        WHISPER_REF: v1.8.4
+    image: lclva/whisper.cpp:server-v1.8.4
+    container_name: lclva-whisper
+    ports:
+      - "127.0.0.1:8082:8082"
+    volumes:
+      - ${LCLVA_MODELS_DIR:-${HOME}/.local/share/lclva/models}:/models:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8082/health"]
+      interval: 5s
+      timeout: 2s
+      retries: 12
+      start_period: 15s
+    restart: unless-stopped
+    command:
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8082"
+      - "--model"
+      - "/models/${LCLVA_WHISPER_MODEL:-ggml-small.bin}"
+
+  # ---------------------------------------------------------------------
+  # Piper — TTS. Built locally because the rhasspy project does not yet
+  # publish an HTTP-server image. The Dockerfile bakes `piper-tts` into
+  # `python:3.12-slim` so there is no per-boot pip install.
+  # ---------------------------------------------------------------------
+  piper:
+    build:
+      context: ./piper
+      args:
+        PIPER_VERSION: 1.4.2
+    image: lclva/piper:1.4.2
+    container_name: lclva-piper
+    ports:
+      - "127.0.0.1:8083:8083"
+    volumes:
+      - ${LCLVA_VOICES_DIR:-${HOME}/.local/share/lclva/voices}:/voices:ro
+    # piper.http_server only accepts `POST /` with a JSON body — no GET `/`
+    # or `/health` route. Use a plain TCP probe to confirm the server is
+    # bound and accepting connections.
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import socket; socket.create_connection(('127.0.0.1', 8083), timeout=2).close()"
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+    restart: unless-stopped
+    command:
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8083"
+      - "--model"
+      - "/voices/${LCLVA_PIPER_VOICE:-en_US-amy-medium.onnx}"

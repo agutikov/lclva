@@ -120,11 +120,21 @@ The M0 fake driver still runs; sentences travel as events but aren't yet routed 
 
 ---
 
-# Part B — Environment setup (Docker Compose, upstream images)
+# Part B — Environment setup (Docker Compose, upstream images) ✅ landed
 
 What you do **before** starting slice 2. The output is a `docker-compose.yml` that brings up llama.cpp / whisper.cpp / piper, all reachable on `127.0.0.1` ports that match the lclva config.
 
 **Update from earlier draft:** all three backends ship official-or-upstream HTTP servers. We do *not* write or build custom Dockerfiles in M1. We use upstream images verbatim. The custom whisper-streaming wrapper is M5's concern (and may itself be skipped — see m5_streaming_stt.md).
+
+**Status:** `packaging/compose/docker-compose.yml`, root-level `compose.yaml` shim, and root-level `.env.example` are in the tree as of this writing. Four additions vs. the draft below worth recording:
+
+- A two-line `compose.yaml` at the project root re-includes `packaging/compose/docker-compose.yml` so `docker compose up` works from the repo root without `-f`. Definitions stay under `packaging/compose/` per the layout principle; the root shim is just discovery. `.env.example` lives at the project root alongside it (Compose's default `.env` lookup dir), and `.env` is gitignored.
+
+- The compose `command` for each service is wired to the env-override variables, not just the host paths. `LCLVA_LLM_MODEL`, `LCLVA_WHISPER_MODEL`, and `LCLVA_PIPER_VOICE` all flow through. The plan listed only `LCLVA_LLM_MODEL` in `.env.example` but didn't actually expand it inside `command:` — which would have made the override a dead variable.
+- `--alias qwen2.5-7b-instruct` is added to the llama command so the OpenAI-compatible endpoint reports the same model name that `llm.model` carries in `config/default.yaml`. Saves a moment of confusion when staring at request/response bodies.
+- `start_period:` is set per service (30 s llama / 15 s whisper / 60 s piper) because piper does a `pip install` on first boot and the default 0-second grace would mark it `unhealthy` before the install finishes.
+
+End-to-end smoke (B.7 acceptance) still has to be run on the dev machine — it requires NVIDIA Container Toolkit, ~5 GB of model files, and image pulls that aren't worth doing in a sandboxed automation context. `docker compose config --quiet` validates the YAML locally and was clean.
 
 ## B.1 Prerequisites
 
@@ -139,12 +149,19 @@ What you do **before** starting slice 2. The output is a `docker-compose.yml` th
 ## B.2 File layout
 
 ```
+compose.yaml                 # top-level shim — `include:`s the file below
+.env.example                 # paths to model files, port overrides
 packaging/compose/
-  docker-compose.yml         # the only file we ship in M1
-  .env.example               # paths to model files, port overrides
+  docker-compose.yml         # service definitions
+  whisper/Dockerfile         # local whisper-server build (no upstream image exists)
+  piper/Dockerfile           # local piper-tts image (no per-boot pip install)
 ```
 
-That's it — no `llama/`, `whisper/`, `piper/` subdirs, no hand-rolled Dockerfiles. Models live on the host and are bind-mounted read-only into each container.
+llama.cpp uses the upstream `ghcr.io/ggml-org/llama.cpp:server-cuda` image verbatim. Models live on the host and are bind-mounted read-only into each container.
+
+**Original draft said "no Dockerfiles in M1.B".** That guidance was based on the assumption that all three backends had publishable upstream HTTP-server images. Verification at first build showed two of them did not, so this milestone now ships two minimal Dockerfiles. See the Status note above for the full reasoning.
+
+**Why the root-level shim:** Compose v2 auto-discovers `compose.yaml` in the working directory, so `docker compose up` from the project root just works without `-f packaging/compose/docker-compose.yml`. The shim is two non-comment lines and `include:`s the canonical file under `packaging/compose/`. `.env` lives at the project root (where Compose looks by default) and `.env.example` lives next to it; `.env` is gitignored.
 
 ## B.3 docker-compose.yml shape
 
@@ -429,11 +446,11 @@ Existing `info(component, message)` call sites stay unchanged.
 | Part / step | Estimate | Status |
 |---|---|---|
 | **A** Slice 1 (memory, splitter, config) | 5 days | ✅ landed |
-| **B** Compose stack (upstream images, no Dockerfiles) | ~1 day | next |
+| **B** Compose stack (upstream images, no Dockerfiles) | ~1 day | ✅ landed |
 | **C.1.1** Prompt builder | 1 day | planned |
 | **C.1.2** LLM client | 2 days | planned |
 | **C.1.3** Dialogue Manager | 1 day | planned |
 | **C.1.4** Turn writer | 0.5 day | planned |
 | **C.2.1** Summarizer stub | 0.5 day | planned |
 | **C.2.2** JSON logging | 1 day | planned |
-| **Total** | **~13 days = ~2.5 weeks** | (slice 1 done; ~7 days remaining + 2–3 days for B) |
+| **Total** | **~13 days = ~2.5 weeks** | (slices 1 & B landed; ~6 days remaining for slices 2 & 3) |

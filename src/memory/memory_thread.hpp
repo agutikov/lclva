@@ -51,7 +51,11 @@ public:
         using R = std::invoke_result_t<Fn, Repository&>;
         auto promise = std::make_shared<std::promise<R>>();
         auto future = promise->get_future();
-        const bool accepted = post([promise = std::move(promise),
+        // Copy-capture the shared_ptr so the outer `promise` stays valid for
+        // the !accepted shutdown path below. Moving it into the lambda would
+        // leave the outer in a null moved-from state and turn the shutdown
+        // path's `*promise` into UB.
+        const bool accepted = post([promise,
                                     fn = std::forward<Fn>(fn)](Repository& repo) mutable {
             try {
                 if constexpr (std::is_void_v<R>) {

@@ -7,6 +7,7 @@ add_library(lclva_core STATIC
     event/bus.cpp
     event/event.cpp
     http/server.cpp
+    llm/prompt_builder.cpp
     log/log.cpp
     memory/db.cpp
     memory/memory_thread.cpp

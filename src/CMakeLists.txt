@@ -12,6 +12,7 @@ add_library(lclva_core STATIC
     llm/client.cpp
     llm/prompt_builder.cpp
     llm/sse_parser.cpp
+    log/json_sink.cpp
     log/log.cpp
     memory/db.cpp
     memory/memory_thread.cpp

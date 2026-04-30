@@ -51,6 +51,23 @@ Registry::Registry() : registry_(std::make_shared<prometheus::Registry>()) {
     for (auto* s : kAllStates) {
         fsm_state_->Add({{"state", s}}).Set(0.0);
     }
+
+    llm_first_token_ms_ = &prometheus::BuildHistogram()
+        .Name("voice_llm_first_token_ms")
+        .Help("Time from LlmStarted to first LlmToken, milliseconds")
+        .Register(*registry_);
+    // Buckets: cover sub-100ms (cache-warm) up to multi-second (cold/long).
+    llm_first_token_ms_metric_ = &llm_first_token_ms_->Add({},
+        prometheus::Histogram::BucketBoundaries{
+            50, 100, 200, 350, 500, 750, 1000, 1500, 2000, 3000, 5000, 10000});
+
+    llm_tokens_per_sec_ = &prometheus::BuildHistogram()
+        .Name("voice_llm_tokens_per_sec")
+        .Help("LLM token generation rate per turn (tokens / stream duration)")
+        .Register(*registry_);
+    llm_tokens_per_sec_metric_ = &llm_tokens_per_sec_->Add({},
+        prometheus::Histogram::BucketBoundaries{
+            5, 10, 20, 40, 80, 120, 200, 400});
 }
 
 void Registry::on_event_published(const char* event_name) {
@@ -79,14 +96,70 @@ void Registry::set_fsm_state(const char* state_name) {
 std::vector<event::SubscriptionHandle> Registry::subscribe(event::EventBus& bus) {
     std::vector<event::SubscriptionHandle> handles;
 
-    event::SubscribeOptions opts;
-    opts.name = "metrics.events";
-    opts.queue_capacity = 4096;
-    opts.policy = event::OverflowPolicy::DropOldest; // metrics are lossy
+    {
+        event::SubscribeOptions opts;
+        opts.name = "metrics.events";
+        opts.queue_capacity = 4096;
+        opts.policy = event::OverflowPolicy::DropOldest;
+        handles.push_back(bus.subscribe_all(opts, [this](const event::Event& e) {
+            on_event_published(event::event_name(e));
+        }));
+    }
 
-    handles.push_back(bus.subscribe_all(opts, [this](const event::Event& e) {
-        on_event_published(event::event_name(e));
-    }));
+    // LLM-timing fan-out. Each turn's start time is recorded on
+    // LlmStarted; first LlmToken records first-token latency; LlmFinished
+    // records tokens-per-second over the whole stream and clears the
+    // entry. A single subscription serializes all three so the
+    // per-turn map needs only the trailing erase under the mutex.
+    {
+        event::SubscribeOptions opts;
+        opts.name = "metrics.llm";
+        opts.queue_capacity = 1024;
+        opts.policy = event::OverflowPolicy::DropOldest;
+        handles.push_back(bus.subscribe_all(opts, [this](const event::Event& e) {
+            std::visit([this]<class T>(const T& evt) {
+                using namespace std::chrono;
+                if constexpr (std::is_same_v<T, event::LlmStarted>) {
+                    std::lock_guard lk(timers_mu_);
+                    timers_[evt.turn] = TurnTimer{
+                        .started_at = steady_clock::now(),
+                        .first_token_seen = false,
+                    };
+                } else if constexpr (std::is_same_v<T, event::LlmToken>) {
+                    auto now = steady_clock::now();
+                    double ms = -1.0;
+                    {
+                        std::lock_guard lk(timers_mu_);
+                        auto it = timers_.find(evt.turn);
+                        if (it == timers_.end() || it->second.first_token_seen) return;
+                        it->second.first_token_seen = true;
+                        ms = duration<double, std::milli>(
+                                 now - it->second.started_at).count();
+                    }
+                    if (ms >= 0.0 && llm_first_token_ms_metric_) {
+                        llm_first_token_ms_metric_->Observe(ms);
+                    }
+                } else if constexpr (std::is_same_v<T, event::LlmFinished>) {
+                    auto now = steady_clock::now();
+                    double tps = 0.0;
+                    {
+                        std::lock_guard lk(timers_mu_);
+                        auto it = timers_.find(evt.turn);
+                        if (it == timers_.end()) return;
+                        const auto secs = duration<double>(
+                                              now - it->second.started_at).count();
+                        if (secs > 0.0 && evt.tokens_generated > 0) {
+                            tps = static_cast<double>(evt.tokens_generated) / secs;
+                        }
+                        timers_.erase(it);
+                    }
+                    if (tps > 0.0 && llm_tokens_per_sec_metric_) {
+                        llm_tokens_per_sec_metric_->Observe(tps);
+                    }
+                }
+            }, e);
+        }));
+    }
 
     return handles;
 }

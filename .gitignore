@@ -71,3 +71,4 @@ Testing/
 # compose env overrides (the .env.example template is checked in)
 .env
 packaging/compose/.env
+*.db

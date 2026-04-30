@@ -297,7 +297,7 @@ Acceptance:
 
 ---
 
-# Part C — Remaining (Slices 2 & 3, planned)
+# Part C — Slices 2 & 3 ✅ landed
 
 The components below assume Part B has been completed at least once on the dev machine.
 
@@ -447,10 +447,10 @@ Existing `info(component, message)` call sites stay unchanged.
 |---|---|---|
 | **A** Slice 1 (memory, splitter, config) | 5 days | ✅ landed |
 | **B** Compose stack (upstream images, no Dockerfiles) | ~1 day | ✅ landed |
-| **C.1.1** Prompt builder | 1 day | planned |
-| **C.1.2** LLM client | 2 days | planned |
-| **C.1.3** Dialogue Manager | 1 day | planned |
-| **C.1.4** Turn writer | 0.5 day | planned |
-| **C.2.1** Summarizer stub | 0.5 day | planned |
-| **C.2.2** JSON logging | 1 day | planned |
-| **Total** | **~13 days = ~2.5 weeks** | (slices 1 & B landed; ~6 days remaining for slices 2 & 3) |
+| **C.1.1** Prompt builder | 1 day | ✅ landed |
+| **C.1.2** LLM client | 2 days | ✅ landed |
+| **C.1.3** Dialogue Manager | 1 day | ✅ landed |
+| **C.1.4** Turn writer | 0.5 day | ✅ landed |
+| **C.2.1** Summarizer stub | 0.5 day | ✅ landed |
+| **C.2.2** JSON logging | 1 day | ✅ landed |
+| **Total** | **~13 days = ~2.5 weeks** | **M1 complete** |

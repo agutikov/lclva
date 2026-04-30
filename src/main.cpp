@@ -12,6 +12,7 @@
 #include "memory/memory_thread.hpp"
 #include "memory/recovery.hpp"
 #include "memory/repository.hpp"
+#include "memory/summarizer.hpp"
 #include "metrics/registry.hpp"
 #include "pipeline/fake_driver.hpp"
 
@@ -197,6 +198,7 @@ int main(int argc, char** argv) {
     std::unique_ptr<lclva::llm::LlmClient> llm_client;
     std::unique_ptr<lclva::dialogue::Manager> manager;
     std::unique_ptr<lclva::dialogue::TurnWriter> turn_writer;
+    std::unique_ptr<lclva::memory::Summarizer> summarizer;
     std::thread stdin_reader;
 
     if (args.stdin_mode) {
@@ -210,17 +212,22 @@ int main(int argc, char** argv) {
             return EXIT_FAILURE;
         }
         const auto session_id = std::get<lclva::memory::SessionId>(sid_or);
-        lclva::log::info("main", fmt::format("opened session {}", session_id));
+        lclva::log::event("main", "session_opened", lclva::event::kNoTurn,
+                          {{"session_id", std::to_string(session_id)}});
 
         prompt_builder = std::make_unique<lclva::llm::PromptBuilder>(cfg, *memory);
         llm_client     = std::make_unique<lclva::llm::LlmClient>(cfg, bus);
         manager        = std::make_unique<lclva::dialogue::Manager>(
                             cfg, bus, *prompt_builder, *llm_client, turns);
         turn_writer    = std::make_unique<lclva::dialogue::TurnWriter>(bus, *memory);
+        summarizer     = std::make_unique<lclva::memory::Summarizer>(
+                            cfg, bus, *memory, *llm_client);
         manager->set_session(session_id);
         turn_writer->set_session(session_id);
+        summarizer->set_session(session_id);
         manager->start();
         turn_writer->start();
+        summarizer->start();
 
         if (!llm_client->probe()) {
             lclva::log::info("main",
@@ -274,6 +281,7 @@ int main(int argc, char** argv) {
     }
     if (manager)     manager->stop();
     if (turn_writer) turn_writer->stop();
+    if (summarizer)  summarizer->stop();
     fsm.stop();
     control.reset();
     bus.shutdown();

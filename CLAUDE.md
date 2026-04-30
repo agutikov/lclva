@@ -12,7 +12,7 @@ Streaming partial STT with speculative LLM start (M5 — three options on the ta
 
 ## Status
 
-**M0 complete; M1 slice 1 (config, memory layer, SentenceSplitter) and M1 Part B (Compose stack scaffolding) complete.** 48/48 tests passing. `packaging/compose/docker-compose.yml` validates with `docker compose config --quiet`; the live B.7 smoke test (image pulls + GPU passthrough) is pending and runs on the dev workstation. Next: M1 slices 2–3 (LLM client, Dialogue Manager, turn writer, JSON logging).
+**M0 + M1 complete.** 90/90 tests passing. The compose stack reaches all-three-healthy on the dev workstation; `lclva --stdin` drives a real LLM end-to-end via the in-tree `PromptBuilder` → `LlmClient` (libcurl SSE) → `DialogueManager` → `SentenceSplitter` → `LlmSentence` events → `TurnWriter` → SQLite chain. JSON-per-line logs land on stderr; `voice_llm_first_token_ms` and `voice_llm_tokens_per_sec` histograms emit non-zero on `/metrics`. Next: **M2 — service supervision** (HTTP `/health` probes, dialogue gating, restart-loop coordination with Compose's `restart: unless-stopped`).
 
 ## Repository Layout
 

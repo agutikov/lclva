@@ -4,7 +4,7 @@
 
 ## Status
 
-In progress. Skeleton runtime (M0), the M1 memory + sentence-splitter slice, and the M1 Docker Compose stack scaffold are landed. 48 unit tests passing. Next: wire the LLM client into the dialogue manager (M1 slice 2) and switch logging to JSON (slice 3). See `plans/milestones/` for per-milestone detail.
+In progress. **M0 and M1 complete.** Skeleton runtime, memory layer, sentence splitter, Docker Compose stack, libcurl SSE LLM client, dialogue manager, turn writer, summarizer stub, and JSON-per-line logging are all landed. 90 unit tests passing. The `lclva --stdin` binary drives a real LLM end-to-end against the Compose stack. Next: **M2 — service supervision** (HTTP `/health` probes, dialogue gating). See `plans/milestones/` for per-milestone detail.
 
 ## Goal
 

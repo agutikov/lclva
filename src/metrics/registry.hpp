@@ -6,10 +6,14 @@
 #include <prometheus/counter.h>
 #include <prometheus/family.h>
 #include <prometheus/gauge.h>
+#include <prometheus/histogram.h>
 #include <prometheus/registry.h>
 
+#include <chrono>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 
 namespace lclva::metrics {
 
@@ -53,11 +57,25 @@ public:
 private:
     std::shared_ptr<prometheus::Registry> registry_;
 
-    prometheus::Family<prometheus::Counter>* events_published_;
-    prometheus::Family<prometheus::Counter>* turns_total_;
-    prometheus::Family<prometheus::Counter>* queue_drops_;
-    prometheus::Family<prometheus::Counter>* service_restarts_;
-    prometheus::Family<prometheus::Gauge>*   fsm_state_;
+    prometheus::Family<prometheus::Counter>*   events_published_;
+    prometheus::Family<prometheus::Counter>*   turns_total_;
+    prometheus::Family<prometheus::Counter>*   queue_drops_;
+    prometheus::Family<prometheus::Counter>*   service_restarts_;
+    prometheus::Family<prometheus::Gauge>*     fsm_state_;
+    prometheus::Family<prometheus::Histogram>* llm_first_token_ms_;
+    prometheus::Family<prometheus::Histogram>* llm_tokens_per_sec_;
+    prometheus::Histogram* llm_first_token_ms_metric_ = nullptr;
+    prometheus::Histogram* llm_tokens_per_sec_metric_ = nullptr;
+
+    // Per-turn timing state captured between LlmStarted / LlmToken /
+    // LlmFinished. Single mutex covers both maps; events are infrequent
+    // relative to other contention.
+    struct TurnTimer {
+        std::chrono::steady_clock::time_point started_at{};
+        bool first_token_seen = false;
+    };
+    std::mutex timers_mu_;
+    std::unordered_map<event::TurnId, TurnTimer> timers_;
 };
 
 } // namespace lclva::metrics

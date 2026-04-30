@@ -1,21 +1,26 @@
 #pragma once
 
 #include "config/config.hpp"
+#include "event/event.hpp"
 
+#include <fmt/format.h>
 #include <spdlog/spdlog.h>
 
+#include <initializer_list>
 #include <memory>
+#include <string>
 #include <string_view>
+#include <utility>
 
 namespace lclva::log {
 
 // Initialize the global logger from config. Must be called once at startup.
 // Subsequent calls re-init in place (intended for hot reload of log level).
 //
-// At M0 this emits a structured plain-text format (ISO ts | level | component
-// | message). When the event bus and per-turn trace IDs land in M1/M0-late,
-// this switches to a custom JSON sink emitting the schema documented in
-// project_design.md §4.14 / §12.
+// As of M1 slice 3 the active sink emits one JSON object per line,
+// matching the schema documented in project_design.md §4.14 / §12.
+// Structured events are produced via log::event(); plain log::info/warn/...
+// calls emit a {"msg": ...} field.
 void init(const config::LoggingConfig& cfg);
 
 // Returns the shared application logger. Always non-null after init().
@@ -45,5 +50,20 @@ inline void debug([[maybe_unused]] std::string_view component,
                   [[maybe_unused]] std::string_view message) {
     SPDLOG_LOGGER_DEBUG(logger(), "[{}] {}", component, message);
 }
+
+// Structured-event API. Emits a JSON line of the form
+//   {"ts":..., "level":"info", "component":"<component>",
+//    "event":"<event_name>", "turn_id":<turn>, "<k>":"<v>", ...}
+//
+// Pass kNoTurn as `turn` to omit the turn_id field.
+//
+// Values are JSON-escaped; keys are emitted as-is (use simple identifiers).
+// All values are stringified — wrap numeric strings yourself if you want
+// downstream parsers to see them as numbers (the JSON sink keeps numeric
+// fields like turn_id as integers automatically).
+void event(std::string_view component,
+           std::string_view event_name,
+           event::TurnId turn,
+           std::initializer_list<std::pair<std::string_view, std::string>> kv);
 
 } // namespace lclva::log

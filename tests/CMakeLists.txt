@@ -4,6 +4,7 @@ add_executable(lclva_tests
     test_config.cpp
     test_db.cpp
     test_fsm.cpp
+    test_json_sink.cpp
     test_llm_client.cpp
     test_manager.cpp
     test_memory_thread.cpp

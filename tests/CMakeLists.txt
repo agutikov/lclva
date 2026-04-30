@@ -4,9 +4,11 @@ add_executable(lclva_tests
     test_config.cpp
     test_db.cpp
     test_fsm.cpp
+    test_llm_client.cpp
     test_memory_thread.cpp
     test_prompt_builder.cpp
     test_queue.cpp
+    test_sse_parser.cpp
     test_recovery.cpp
     test_repository.cpp
     test_sentence_splitter.cpp
@@ -15,6 +17,7 @@ add_executable(lclva_tests
 target_link_libraries(lclva_tests
     PRIVATE
         lclva_core
+        lclva_httplib
         doctest::doctest
         lclva_warnings
 )

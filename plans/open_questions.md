@@ -11,9 +11,9 @@ Resolved decisions are marked *(resolved)* with the chosen answer and consequenc
 Major shifts from the original design that came out of this interview:
 
 - **Speakers + AEC is the primary UX** (was: both, headphones reliable until M6).
-- **Streaming partial STT + speculative LLM in MVP** (was: utterance-based, deferred).
+- **Streaming partial STT + speculative LLM in MVP** (was: utterance-based, deferred). *Note: revisited in L1 below — M5 may pick option C and defer speculation past MVP.*
 - **Full multilingual** STT/TTS/LLM with per-utterance language detection (was: English-only).
-- **systemd-managed services** instead of orchestrator-forked child processes.
+- **Docker Compose for backends in dev; systemd as alternative production path** (was: systemd-managed services from day one). See L0 below.
 - **OTLP traces** opt-in (was: logs only).
 - **No CI** — local-only testing.
 - **soxr** instead of libsamplerate.
@@ -21,7 +21,7 @@ Major shifts from the original design that came out of this interview:
 - **Tool calling fully out of scope** — no architectural reservation.
 - **Errors never spoken** — logs and `/status` only.
 
-Schedule shifted from ~12–14 weeks to **~14–16 weeks** because of M5 expansion.
+Schedule shifted from ~12–14 weeks to **~14–16 weeks** because of M5 expansion. M3 trimmed by ~1 week (no Piper wrapper); M2 trimmed by ~4 days (no sd-bus by default); M1 added ~1 day (Compose stack setup). Net: roughly the same total, with significantly less custom infrastructure.
 
 ---
 
@@ -295,3 +295,40 @@ Schedule shifted from ~12–14 weeks to **~14–16 weeks** because of M5 expansi
 **K3. Tool calling — timing and security model?** *(resolved)*
 - Decision: **defer entirely; revisit post-MVP**. When added: sandboxed execution (firejail or bubblewrap) + per-call user approval.
 - Consequence: aligns with F2. No `ToolExecutor` slot reserved now.
+
+---
+
+## L. Implementation-driven revisions
+
+Decisions that surfaced during M0/M1 implementation, post-interview. These supersede earlier sections where they conflict.
+
+**L0. Backend deployment for dev — Compose vs systemd.** *(resolved)*
+- Decision: **Docker Compose for the dev path; systemd as an alternative production path (M8).**
+- `lclva` itself runs as a host CLI binary throughout MVP — including production via the systemd path, where it gets its own `lclva.service` unit.
+- Compose runs three services using **upstream images verbatim** (`ghcr.io/ggml-org/llama.cpp:server-cuda`, `ghcr.io/ggml-org/whisper.cpp:server`, `python:3.12-slim` + `pip install piper-tts`). No custom Dockerfiles in M1.
+- Models live on the host under `~/.local/share/lclva/{models,voices}/` and are bind-mounted into containers read-only.
+- Consequences:
+  - M2 simplifies dramatically (HTTP probes only; Compose owns process lifecycle). Estimate dropped from ~1 week to ~3 days.
+  - M3 loses the Piper-wrapper subproject (~2 days saved). Per-language voices now mean per-language Compose services.
+  - M5's custom Whisper streaming wrapper gets reframed as one of three options — see L1.
+  - `packaging/systemd/` stays in tree as production deployment alternative; not the default.
+
+**L1. M5 streaming-STT engine.** *(unresolved — decide at M5 start)*
+- Three options:
+  - **A.** Custom C++ wrapper around `whisper.cpp/examples/stream` (~3 weeks).
+  - **B.** Adopt **Speaches** / faster-whisper, OpenAI-Realtime-compatible streaming server (~2 weeks).
+  - **C.** Defer streaming partials past MVP — drop the `SpeculativeThinking` FSM concurrent state; use upstream `whisper.cpp:server` request/response (~1 week).
+- Default assumption: B if Speaches is healthy at M5 start; otherwise A; C as fallback if the project is behind schedule.
+- Impact:
+  - On A/B: M5 estimate ~2-3 weeks; FSM speculation logic + reconciliation + speculation metrics ship.
+  - On C: M5 estimate ~1 week; design's "streaming partial STT in MVP" line in B5 reverts to its original "deferred" position. The SpeculativeThinking concurrent-state and speculation-policy code in §6 don't ship for MVP.
+  - End-to-end P50 latency 300-500 ms higher under C.
+- Verify before committing to B: Speaches recent commit activity, model format compatibility, 5-minute smoke against the image.
+
+**L2. C++23 baseline, not C++20.** *(resolved retroactively)*
+- The C++20 lock from B-section was inadvertently violated by glaze 7.x, which forces `-std=c++23` transitively. C++23 STL features (std::expected, deducing-this, etc.) are now fair game.
+- Cobalt and C++23 modules remain forbidden — that part of the original lock stands.
+
+**L3. JSON logging deferred from M0 to M1 slice 3.** *(resolved)*
+- spdlog 1.17 has no built-in `%j` JSON-escape format flag; we'd need a custom sink. M0 ships structured-text logs; M1 slice 3 implements the JSON sink.
+- Consequence: log lines through M0 and early M1 are not strict JSON. Greppable but not parseable as one-event-per-line JSON until M1.s3.

@@ -4,7 +4,7 @@
 
 ## Status
 
-Pre-implementation. The repository currently contains the architecture and project plan. Implementation has not started.
+In progress. Skeleton runtime (M0) and the M1 memory + sentence-splitter slice are landed. 48 unit tests passing. Next: bring up the Docker Compose stack of model backends (M1.B) and wire the LLM client into the dialogue manager (M1 slice 2). See `plans/milestones/` for per-milestone detail.
 
 ## Goal
 
@@ -28,8 +28,8 @@ Mic → Resample → APM (AEC/NS/AGC) → VAD → Utterance Buffer → STT
                                            Loopback (AEC reference)
 ```
 
-- **C++ orchestrator** owns audio I/O, dialogue state, memory, cancellation, and observability.
-- **Model runtimes run as systemd-managed services** — llama.cpp (LLM), whisper.cpp (STT), Piper (TTS) — the orchestrator interacts with them via sd-bus.
+- **C++ orchestrator** runs as a host CLI binary and owns audio I/O, dialogue state, memory, cancellation, and observability.
+- **Model backends run as separate processes** — llama.cpp (LLM), whisper.cpp (STT), Piper (TTS). Default deployment is **Docker Compose** for dev with upstream images verbatim. systemd units are an alternative production path.
 - **Realtime audio path is isolated**: lock-free SPSC ring between the audio callback and the processing thread; no blocking, no allocation, no I/O on the audio thread.
 - **Cancellation is structural**: every operation carries a turn ID; barge-in invalidates the turn ID and stale work is rejected at every queue boundary.
 
@@ -51,7 +51,7 @@ See `plans/project_design.md` for the complete architecture.
 | Config / JSON     | glaze (JSON + YAML)                          |
 | Logs / metrics    | spdlog + prometheus-cpp                      |
 | Tracing (opt-in)  | opentelemetry-cpp (OTLP)                     |
-| Process mgmt      | systemd units + sd-bus                       |
+| Backend deployment| Docker Compose (dev) / systemd (production)  |
 | Build             | CMake + presets                              |
 
 ## Repository Layout
@@ -122,14 +122,15 @@ Total: **~14–16 weeks** for a single competent C++ developer to MVP.
 | SQLite               | 3.42+       | Memory storage (WAL mode)             | no           |
 | doctest *or* Catch2  | latest      | Unit tests                            | yes (header-only) |
 
-### Runtime (separate processes, managed by systemd)
+### Runtime (model backends — separate processes)
 
 | Component            | Notes                                                                |
 |----------------------|----------------------------------------------------------------------|
-| llama.cpp server     | Built separately. OpenAI-compatible REST + SSE. CUDA build for 4060. |
-| whisper.cpp          | Built separately. **Custom streaming HTTP wrapper** required (M5).   |
-| Piper TTS            | Built separately. Per-language voice models.                         |
-| systemd              | ≥ 252. Required at runtime; orchestrator manages units via sd-bus.   |
+| llama.cpp server     | OpenAI-compatible REST + SSE. CUDA build for 4060. Default image: `ghcr.io/ggml-org/llama.cpp:server-cuda`. |
+| whisper.cpp server   | Upstream `whisper-server`. Request/response transcription through M4. M5 picks one of: custom streaming wrapper, [Speaches](https://github.com/speaches-ai/speaches) (faster-whisper, OpenAI Realtime API), or defer streaming past MVP. |
+| Piper TTS            | Upstream `python -m piper.http_server`. One process per language, routed by URL. |
+| Docker Engine ≥ 26   | Default deployment in dev. Compose v2 built-in.                      |
+| systemd ≥ 252        | Optional alternative for production. Required only on the systemd path; otherwise unused. |
 
 ### Models (downloaded; not packaged with source)
 
@@ -145,7 +146,8 @@ Total disk footprint with Qwen Q4_K_M + Whisper small + 3 Piper voices: **~5.5 G
 ### Optional
 
 - **otelcol-contrib** — local OpenTelemetry collector if OTLP traces are enabled. Otherwise OTLP stays disabled and JSON logs are sufficient.
-- **NVIDIA driver + CUDA toolkit** — required for llama.cpp GPU build (the only GPU-resident component; Whisper runs on CPU).
+- **NVIDIA Container Toolkit ≥ 1.14** — required for the Compose / GPU passthrough path (the default dev path). Skip if running backends as systemd units with a host CUDA install.
+- **NVIDIA driver + CUDA toolkit** — needed if you build llama.cpp from source for the systemd path. Not required if using the upstream Compose image.
 
 ## Installing dependencies
 
@@ -251,11 +253,84 @@ tar xzf piper_linux_x86_64.tar.gz
 
 systemd units that wrap each service ship in `packaging/systemd/` once that directory exists; see `plans/project_design.md` §4.12.
 
-## Setting up the runtime services with systemd
+## Quickstart with Docker Compose (dev — recommended)
 
-The orchestrator does **not** fork its model backends — it manages them as systemd units via sd-bus. You install the units once, then `systemctl --user start lclva-llama.service` (etc.) brings each backend up. The orchestrator's supervisor takes over from there: probes health, restarts on failure, exposes state via `/status`.
+Default for development. Backends run as Compose containers using **upstream images verbatim**; `lclva` runs on the host as a CLI binary. No custom Dockerfiles, no systemd, no sd-bus. Bring everything up with `docker compose up`.
 
-We default to **per-user systemd** (`systemctl --user`). It needs no privileges, doesn't pollute the system unit namespace, and works with the same sd-bus API the orchestrator uses. System-wide units are supported for shared workstations; the layout is identical except for the install path and `--user` becoming root.
+### 1. Prerequisites
+
+- Docker Engine ≥ 26 (Compose v2 built-in). Podman ≥ 4 with `podman-compose` works as well.
+- **NVIDIA Container Toolkit** ≥ 1.14 for GPU passthrough to llama.cpp.
+  - Arch: `sudo pacman -S nvidia-container-toolkit && sudo systemctl restart docker`
+  - Debian/Ubuntu: follow upstream NVIDIA Container Toolkit install guide.
+  - Verify: `docker run --rm --gpus all nvidia/cuda:12.6.0-base-ubuntu24.04 nvidia-smi` prints the GPU table.
+- User in the `docker` group (or rootless Docker).
+- Models present on the host under `~/.local/share/lclva/{models,voices}/` (download commands in the systemd section below — same files).
+
+### 2. Bring up the backends
+
+```sh
+cd packaging/compose
+docker compose up -d            # first run pulls ~5 GB of images
+docker compose ps               # all 3 services 'healthy' within ~60 s
+```
+
+This starts:
+
+- `llama` on `127.0.0.1:8081` — `ghcr.io/ggml-org/llama.cpp:server-cuda`
+- `whisper` on `127.0.0.1:8082` — `ghcr.io/ggml-org/whisper.cpp:server`
+- `piper` on `127.0.0.1:8083` — `python:3.12-slim` + `pip install piper-tts` (one voice per service; per-language deployments add more services on adjacent ports)
+
+Health check each backend:
+
+```sh
+curl -fsS http://127.0.0.1:8081/health
+curl -fsS http://127.0.0.1:8082/health
+curl -fsS http://127.0.0.1:8083/health
+```
+
+See `packaging/compose/` for the `docker-compose.yml` and `.env.example`.
+
+### 3. Run the orchestrator on the host
+
+```sh
+cmake --preset dev && cmake --build --preset dev
+./build/dev/lclva --config config/default.yaml
+# Control plane:
+curl -sS http://127.0.0.1:9876/status
+curl -sS http://127.0.0.1:9876/metrics
+```
+
+Until M1 slice 2 lands, lclva runs in M0 fake-driver mode — it doesn't yet use the Compose backends. Once slice 2 is in, the orchestrator connects to llama / whisper / piper at the URLs in `config/default.yaml`.
+
+### 4. Stop / clean
+
+```sh
+cd packaging/compose
+docker compose down                  # stop, keep images and volumes
+docker compose down -v --rmi all     # nuke everything
+```
+
+### 5. Logs
+
+```sh
+docker compose logs -f llama         # live tail of one backend
+docker compose logs -f               # tail all backends together
+```
+
+The orchestrator's logs go to its own stdout (terminal where you launched it).
+
+### Switching to systemd
+
+For unattended / production-style deployments, replace step 2 with the systemd path below. Steps 3 and onward are identical.
+
+---
+
+## Setting up the runtime services with systemd (production-style alternative)
+
+Use this path for unattended workstation deployments where you want services to survive logout, get journald aggregation, and don't want a Docker daemon running. This is also the path that exercises the optional sd-bus extension to the supervisor (gated by `-DLCLVA_ENABLE_SDBUS=ON` from M8 onward).
+
+We default to **per-user systemd** (`systemctl --user`). It needs no privileges, doesn't pollute the system unit namespace. System-wide units are supported for shared workstations; the layout is identical except for the install path and `--user` becoming root.
 
 ### 1. Decide where the binaries and models live
 

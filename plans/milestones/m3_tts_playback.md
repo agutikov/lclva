@@ -1,8 +1,8 @@
 # M3 — TTS + Playback
 
-**Estimate:** 1–2 weeks.
+**Estimate:** ~1 week (down from 1-2 weeks; the Piper-wrapper subproject is gone).
 
-**Depends on:** M1 (sentences flow as `LlmSentence` events), M2 (Piper supervised as a unit).
+**Depends on:** M1 (sentences flow as `LlmSentence` events; Compose stack from M1.B already runs `piper.http_server`), M2 (TTS service health-probed).
 
 **Blocks:** M7 (barge-in needs a playback queue to drain).
 
@@ -32,23 +32,23 @@ pkg_check_modules(soxr REQUIRED IMPORTED_TARGET soxr)
 
 ## Step 1 — Piper HTTP client
 
-Piper's official binary speaks WAV-over-stdin and binary-out, not HTTP. We have two options:
+We talk to **upstream `python -m piper.http_server`**, already running in the Compose stack from M1.B. No custom wrapper. The upstream server's API is documented in `rhasspy/piper`:
 
-**A.** Wrap Piper in a tiny HTTP server we ship (similar to the streaming-Whisper wrapper that M5 needs).
-**B.** Embed Piper as a child process we pipe text into and PCM out of.
+- `POST /` body: raw text (or JSON `{"text": "..."}`), header `Content-Type: text/plain`. Response: WAV bytes (PCM, mono, 22.05 kHz int16).
+- The voice is set per-process at startup via `--model` — there is no per-request voice selection.
 
-**Decision for M3:** option A. We're committing to systemd-managed services; that means everything is over HTTP. The wrapper is small (Python or a small C++ binary calling libpiper). Treat it as part of the M3 scope.
+**Implication for per-language voices.** Upstream `piper.http_server` runs *one* voice per server. So either:
+
+- **Option A (default):** run multiple Compose services (one per language) on different ports. `piper-en` on 8083, `piper-ru` on 8084, etc. The `PiperClient` selects the URL by language. Adds 1 service per language to compose; ~30-100 MB RAM each.
+- **Option B (post-MVP):** write a thin shim that loads multiple voices in one process and routes by `?voice=...`. Reverts to the original wrapper plan but only when proven necessary.
+
+M3 ships option A; it's simpler and matches the "use upstream verbatim" decision. The voice→URL map lives in `cfg.tts.voices`.
 
 **Files:**
-- `packaging/piper-server/` — a minimal HTTP wrapper around `piper`. Probably 50 lines of Python with `aiohttp` or `flask`, or a small C++ wrapper using cpp-httplib.
 - `src/tts/piper_client.hpp`
 - `src/tts/piper_client.cpp`
 
-Actually — for solo dev velocity, write the wrapper in **Python with stdlib `http.server` + Piper's Python bindings** so we don't grow the C++ build matrix. Document this is a packaging convenience, not a production C++ component.
-
-**Wrapper API (HTTP):**
-- `POST /synthesize` body `{ "text": "...", "lang": "en", "voice": "en_US-amy-medium" }` → response `audio/wav` (PCM 22.05 kHz mono int16) with header `X-Lclva-Sentence-Bytes`.
-- `GET /health` → `{ "ok": true, "loaded_voices": ["en_US-amy-medium"] }`.
+(No `packaging/piper-server/` — it's deleted from the plan.)
 
 **`PiperClient` API:**
 ```cpp
@@ -76,27 +76,24 @@ public:
 
 Each request runs to completion serially in M3 — Piper synthesis is sub-second per sentence and concurrent submission complicates voice loading. Reentrant in M5 if we need overlapping synthesis for speculation.
 
-## Step 2 — Per-language voice pack
+## Step 2 — Per-language voice routing (client-side)
 
-The TTS service hides voice selection behind `lang`. The Piper wrapper is responsible for:
-- Lazy-loading voices on first use.
-- Keeping at most `voice_memory_budget_mb` worth of voices resident; LRU-evict the rest.
-- Returning an error for unknown languages.
+Voice selection is done by URL: `cfg.tts.voices` maps `lang → http://...:port` and the `PiperClient` routes there. Each URL backs a separate Compose service with its own model file mounted in.
 
 **Config:**
 ```yaml
 tts:
-  unit: "lclva-piper.service"
-  base_url: "http://127.0.0.1:8082"
   voices:
-    en: en_US-amy-medium
-    ru: ru_RU-irina-medium
-    de: de_DE-thorsten-medium
-  voice_memory_budget_mb: 500
-  voice_models_dir: "${XDG_DATA_HOME:-~/.local/share}/lclva/voices"
+    en: { url: "http://127.0.0.1:8083" }   # piper-en service
+    ru: { url: "http://127.0.0.1:8084" }   # piper-ru service
+    de: { url: "http://127.0.0.1:8085" }   # piper-de service
+  fallback_lang: en       # used when detected lang has no entry
+  request_timeout_seconds: 10
 ```
 
-The wrapper reads voices from `voice_models_dir`. We ship a download script (`scripts/download-piper-voices.sh`) that grabs default voices.
+When the user adds a language: drop a `piper-<lang>` service into `docker-compose.yml`, drop the voice file into `~/.local/share/lclva/voices/`, add a row to `cfg.tts.voices`. We ship `scripts/download-piper-voices.sh` for grabbing default voices.
+
+There is no in-process voice memory budget anymore (it's now per-service RAM, governed by Compose). For workstations where this is too much, drop unused languages from compose.
 
 ## Step 3 — Playback queue
 
@@ -246,29 +243,29 @@ dialogue:
 2. With `lang="ru"` injected via test harness, hear the Russian voice.
 3. Issue a fake `UserInterrupted` mid-playback; sound cuts off within 50 ms; `voice_turns_total{outcome="interrupted"}` increments; remaining queued audio chunks are dropped (not played).
 4. Soak: 100 consecutive turns, no leaks (RSS within +20 MB of post-warmup baseline), no underruns above the noise floor.
-5. With Piper down, `voice_service_restarts_total{service="tts"}` increments and the supervisor flags the TTS service unhealthy. With `allow_tts_disabled=true`, the orchestrator continues running but `LlmSentence` events log "tts unavailable" instead of speaking.
+5. With one Piper service stopped (e.g. `docker compose stop piper-en`): the M2 supervisor flags it unhealthy. The orchestrator either uses the fallback language or, if `fail_pipeline_if_down` is true on the only configured TTS, gates the dialogue path.
 6. `voice_tts_first_audio_ms` histogram captures latency.
 
 ## Risks specific to M3
 
 | Risk | Mitigation |
 |---|---|
-| Piper Python wrapper packaging | Document as a packaging concern; provide `scripts/install-piper-server.sh` |
-| Voice load latency on first use | Lazy-load happens during `Speaking` state — measurable in latency histogram; tune `voice_memory_budget_mb` |
+| Per-language Compose service sprawl on a multilingual setup | Document; Option B (single shim with multi-voice routing) is the post-MVP escape hatch |
+| Container memory cost (each Piper voice ~30-100 MB resident) | Drop unused languages from compose; document RAM expectations |
 | PortAudio callback realtime constraints | Strictly no allocation/IO; cross-thread postbox for events; tested under heavy load |
 | TTS request cancellation racing playback | Sequence-no enqueue/dequeue gate (already designed); covered by tests |
-| Piper voice mismatches with detected language | Fallback to default voice if `lang` not in config map; emit warning |
+| Piper voice mismatches with detected language | Fallback to `cfg.tts.fallback_lang` when not in voices map; emit warning |
 
 ## Time breakdown
 
 | Step | Estimate |
 |---|---|
-| 1 Piper wrapper + client | 2 days (wrapper writing + HTTP client) |
-| 2 Voice pack | 1 day |
+| 1 Piper HTTP client (no wrapper to write) | 0.5 day |
+| 2 Per-language URL routing | 0.5 day |
 | 3 Playback queue | 1 day |
 | 4 Playback engine + PortAudio | 2 days |
 | 5 Resampler | 0.5 day |
 | 6 TTS bridge | 1 day |
 | 7 Sentence cap | 0.5 day |
-| 8 Config + tests | 1.5 days |
-| **Total** | **~9–10 days = ~2 weeks** |
+| 8 Config + tests | 1 day |
+| **Total** | **~7 days = ~1 week** |

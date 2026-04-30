@@ -165,15 +165,20 @@ digraph Topology {
 
 ### 4.5 STT Service
 
-- whisper.cpp running as a separate process. **CPU execution** (saves ~1 GB VRAM for Qwen).
-- Multilingual model. Default size **small** (configurable: base / small / medium).
-- **Streaming partial transcription** is in-MVP, not deferred. Sliding-window inference produces `PartialTranscript` events; on `SpeechEnded`, a `FinalTranscript` event closes the utterance.
-- Each partial includes: text, language, confidence, "stable prefix length" (number of leading characters unlikely to be revised), and a sequence number per utterance.
+The STT service runs as a Docker Compose container in dev (since M1.B). CPU execution (saves ~1 GB VRAM for Qwen). Multilingual model, default size **small** (configurable: base / small / medium).
+
+The streaming-partial behavior depends on which engine is chosen at M5 — see `plans/milestones/m5_streaming_stt.md` for the decision matrix:
+
+- **Through M4:** upstream `whisper.cpp:server` (`POST` audio, `JSON` back). Request/response only. Sufficient because the orchestrator only feeds full utterances at this stage.
+- **From M5:** one of three options (custom wrapper / Speaches / defer). Two of the three deliver **streaming partials**; one defers them past MVP.
+
+Streaming-mode contract (Options A and B in M5):
+- Each partial includes: text, language, confidence, "stable prefix length" (leading characters unlikely to be revised), sequence number per utterance.
 - Input: 16 kHz mono PCM stream tagged with utterance ID; the service consumes audio incrementally as VAD emits frames.
 - Output stream:
   - `PartialTranscript {utterance_id, sequence, text, stable_prefix_len, lang, confidence}`
   - `FinalTranscript   {utterance_id, text, lang, confidence, audio_duration_ms, processing_ms}`
-- Health: HTTP `/health`; supervisor pings every 5 s when idle.
+- Health: HTTP `/health`; supervisor pings every `cfg.stt.probe_interval_*_ms`.
 
 ### 4.6 LLM Service
 
@@ -214,19 +219,20 @@ Explicit, unit-tested component. Not "split on `.!?`".
 
 ### 4.9 TTS Service
 
-- Piper as a separate process. CPU-resident (frees VRAM).
-- **Per-language voice pack.** Config maps language → voice model path. Voices are **lazy-loaded** on first use and kept resident (LRU eviction if total voice memory exceeds budget; default budget 500 MB).
-- Sentence-level synthesis. Each request carries `(turn_id, sequence_number, language, text)`.
+- Upstream `python -m piper.http_server`, run as a Docker Compose service. CPU-resident (frees VRAM). No custom wrapper.
+- **Per-language voice routing is by URL.** Each language gets its own Compose service on its own port, loading one Piper voice at startup. The `PiperClient` selects the URL by detected language; falls back to `cfg.tts.fallback_lang` if not configured.
+- Sentence-level synthesis. Each request carries `(turn_id, sequence_number, text)`. Voice is implicit in the URL.
 - Output: 22.05 kHz audio chunks tagged with turn_id and sequence_number.
 - Voice pack config example:
   ```yaml
   tts:
     voices:
-      en: /opt/piper/voices/en_US-amy-medium.onnx
-      ru: /opt/piper/voices/ru_RU-irina-medium.onnx
-      de: /opt/piper/voices/de_DE-thorsten-medium.onnx
-    voice_memory_budget_mb: 500
+      en: { url: "http://127.0.0.1:8083" }   # piper-en service
+      ru: { url: "http://127.0.0.1:8084" }   # piper-ru service
+      de: { url: "http://127.0.0.1:8085" }   # piper-de service
+    fallback_lang: en
   ```
+- Trade-off: simpler (no in-process voice pack code) at the cost of one Compose service per supported language. The post-MVP escape hatch (single shim with multi-voice routing) is documented but not built.
 
 ### 4.10 Playback Queue
 
@@ -243,18 +249,20 @@ Explicit, unit-tested component. Not "split on `.!?`".
 
 ### 4.12 Supervisor
 
-The supervisor manages **systemd units** for external services (llama.cpp, whisper.cpp, Piper). It does **not** fork child processes. It treats systemd as the process manager and itself as a controller/observer.
+The Supervisor is application-level: it runs HTTP `/health` probes against each backend, transitions a per-service state machine, publishes `HealthChanged` events on the bus, and gates the dialogue path when a critical backend stays unhealthy. It does **not** issue restart commands by default — that is delegated to the underlying process manager.
 
-- Per-service logical state machine: `NotConfigured → Starting → Healthy → Degraded → Unhealthy → Restarting → Disabled`.
-- Unit interaction via `systemctl` (subprocess) or sd-bus (preferred, see open questions).
-- On unhealthy: `systemctl restart lclva-llama.service` (or equivalent), with the orchestrator's own backoff layered on top of systemd's restart policy.
-- Health probes (HTTP `/health`, completion probes) run from the orchestrator regardless of systemd status — systemd knows the process is up, only the orchestrator can know whether the model is actually serving.
-- Pipeline-level fail conditions (see §10).
-- Keep-alive policy for LLM.
+**Two deployment paths, same Supervisor logic.**
 
-Distribution ships systemd unit files (`lclva-llama.service`, `lclva-whisper.service`, `lclva-piper.service`, plus `lclva.service` for the orchestrator itself) under `/usr/lib/systemd/system/` or `~/.config/systemd/user/`. Per-user (`systemd --user`) is the default deployment mode; system-wide is supported for shared workstations.
+- **Dev (default since M1.B): Docker Compose.** Backend containers' `restart: unless-stopped` policy handles process lifecycle. `lclva` itself runs as a host CLI binary; the Supervisor inside it only observes via HTTP probes. No sd-bus dependency.
+- **Production (alternative, M8): systemd.** Optional sd-bus client extension (`-DLCLVA_ENABLE_SDBUS=ON`) lets the Supervisor read `ActiveState`/`SubState` and issue `RestartUnit` calls. Same state machine, more inputs.
 
-Logs from external services flow into journald automatically; the orchestrator's structured JSON logs also go to journald via `StandardOutput=journal`.
+State machine in dev mode: `NotConfigured → Probing → Healthy ↔ Degraded → Unhealthy`. There is no `Restarting` or `Disabled` state in this mode — Compose owns those transitions silently. In systemd mode, those states reappear when `cfg.supervisor.bus_kind != "none"`.
+
+- Per-service health probe interval from config (default 5 s healthy, 1 s degraded).
+- Pipeline-level fail conditions (see §10): if the LLM stays Unhealthy for `pipeline_fail_grace_seconds`, Dialogue Manager refuses new turns until recovery.
+- LLM keep-alive: 1-token completion every `cfg.llm.keep_alive_interval_seconds` while the FSM is `Listening`.
+
+Logs from backends in dev: `docker compose logs -f`. Logs from `lclva` itself: stdout (when run as CLI) or journald (when packaged as `lclva.service` in production mode).
 
 ### 4.13 Event Bus
 
@@ -720,7 +728,8 @@ service restarts: ≤ 2 (incidental), pipeline never enters failed state
 | Metrics              | prometheus-cpp                  | Standard format                            |
 | Tests                | doctest or Catch2               | Header-only, fast                          |
 | Tracing              | opentelemetry-cpp (OTLP HTTP)   | Real distributed traces; opt-in target     |
-| Process mgmt         | systemd (units) + sd-bus        | Orchestrator manages units, doesn't fork   |
+| Backend deployment   | Docker Compose (dev)            | Upstream images; pinned digests; no custom Dockerfiles |
+| Process mgmt         | Compose (`restart: unless-stopped`) (dev) / systemd units + optional sd-bus (production, M8) | Compose owns lifecycle in dev; supervisor only observes via HTTP probes |
 
 ---
 

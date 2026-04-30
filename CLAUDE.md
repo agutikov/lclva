@@ -4,68 +4,78 @@ Guidance for Claude Code when working in this repository.
 
 ## Project
 
-**lclva** — Long Conversation Local Voice Agent. A local, production-grade C++ voice assistant for multi-hour conversations on a single workstation (RTX 4060). All inference is local; model runtimes (llama.cpp, whisper.cpp, Piper) run as **systemd-managed services**; the C++ orchestrator owns control plane, audio I/O, state, memory, and observability.
+**lclva** — Long Conversation Local Voice Agent. A local, production-grade C++ voice assistant for multi-hour conversations on a single workstation (RTX 4060). All inference is local; model backends (llama.cpp, whisper.cpp, Piper) run as **Docker Compose containers** in dev (with systemd as an alternative production path); the C++ orchestrator runs as a host CLI binary and owns control plane, audio I/O, state, memory, and observability.
 
 Target hardware: Linux x86_64, RTX 4060 8 GB. Speakers + AEC is the primary UX (not headphones).
 Multilingual STT/TTS/LLM with auto language detection per turn.
-Streaming partial STT with speculative LLM start.
+Streaming partial STT with speculative LLM start (M5 — three options on the table; see `plans/open_questions.md` L1).
 
 ## Status
 
-Pre-implementation. The repo currently contains design documents only — no source tree yet. Implementation is planned to begin from Milestone 0 (skeleton runtime) per `plans/project_design.md`.
+**M0 complete; M1 slice 1 (config, memory layer, SentenceSplitter) complete.** 48/48 tests passing. Next: M1 Part B (Compose stack scaffolding), then M1 slices 2–3 (LLM client, Dialogue Manager, turn writer, JSON logging).
 
 ## Repository Layout
 
 ```
+src/                     — C++ source. Per-subsystem subdirs: config/, dialogue/, event/,
+                            http/, log/, memory/, metrics/, pipeline/.
+tests/                   — doctest-based unit tests; one file per src subsystem.
+config/default.yaml      — default runtime config (M0 + M1.A coverage).
+cmake/                   — Dependencies.cmake, Warnings.cmake.
+third_party/cpp-httplib/ — vendored single-header HTTP server lib.
+packaging/
+  systemd/               — alternative production deployment: per-user units (M2 stretch / M8).
+  compose/               — dev default: docker-compose.yml + .env.example. NOT YET CREATED.
 plans/
-  project_design.md       — full consolidated architecture + 9 milestones + risk register
-  open_questions.md       — decisions to make; each has a default assumption + impact note
-  architecture_review.md  — first review of the original design
-  local_voice_ai_orchestrator_mvp_cpp_architecture_2026.md — original design doc
-README.md
-LICENSE
-.gitignore                — set up for C/C++ + CMake
+  project_design.md      — source of truth for architecture, components, milestones, risks.
+  open_questions.md      — resolved/unresolved decisions; section L holds implementation-driven revisions.
+  milestones/            — one detailed plan per milestone (m0_skeleton.md, m1_llm_memory.md, ...).
+  architecture_review.md, local_voice_ai_orchestrator_mvp_cpp_architecture_2026.md — historical inputs.
+CMakeLists.txt, CMakePresets.json
+README.md, CLAUDE.md, LICENSE, .editorconfig, .gitignore
+compile_commands.json    — symlink to build/dev/compile_commands.json (for clangd).
 ```
-
-When code lands, expect: `src/`, `include/`, `tests/`, `config/`, `CMakeLists.txt`, `CMakePresets.json`.
 
 ## Authoritative Documents
 
 - **`plans/project_design.md`** is the source of truth for architecture, components, threading model, latency budget, milestones, and risks. Reference its section numbers when discussing trade-offs.
+- **`plans/milestones/m{0..8}_*.md`** are the detailed per-milestone plans. The summary in `project_design.md` §17 links each. **`plans/open_questions.md` section L** holds implementation-driven revisions that supersede earlier sections — read L before assuming an earlier interview answer is still in force.
 - **`plans/open_questions.md`** lists unresolved decisions. Before recommending a choice that touches one of these questions, check the default assumption there. If the user is making a real decision, update the question's status in that file.
 - The two earlier docs (`architecture_review.md`, `local_voice_ai_orchestrator_mvp_cpp_architecture_2026.md`) are historical inputs; prefer `project_design.md` when they conflict.
 
 ## Architectural Pillars (Do Not Violate Without Discussion)
 
-1. **Process isolation for model runtimes.** llama.cpp, whisper.cpp, Piper run as **systemd units**. The orchestrator manages them via sd-bus (start/stop/restart/status), does **not** fork child processes. Don't propose embedding model runtimes until post-M8.
+1. **Process isolation for model backends.** llama.cpp, whisper.cpp, Piper run as separate processes the orchestrator does **not** fork. In dev (default since M1.B): Docker Compose containers using upstream images verbatim (`ghcr.io/ggml-org/llama.cpp:server-cuda` etc.). In production (M8 alternative): systemd units with optional sd-bus client (gated by `-DLCLVA_ENABLE_SDBUS=ON` + `cfg.supervisor.bus_kind`). The orchestrator never `popen`s or `fork()`s a backend. Don't propose embedding model runtimes until post-M8.
 2. **Realtime audio path is sacred.** Audio callback never blocks, never allocates, never does I/O or HTTP. SPSC ring buffer is the only mechanism crossing the audio thread boundary.
 3. **Cancellation is structural.** Every long-running operation carries a turn ID + cancellation token. TTS audio chunks carry sequence numbers; stale chunks are rejected at enqueue and dequeue. Speculative LLM runs use the same machinery.
 4. **Backpressure everywhere.** Every async boundary uses bounded queues with explicit overflow policy.
-5. **Observability from day one.** Per-turn trace IDs, structured JSON logs (to journald), Prometheus metrics on `/metrics`, OTLP traces (opt-in) — not retrofitted later.
+5. **Observability from day one.** Per-turn trace IDs, structured JSON logs (M1 slice 3 — currently structured plain text), Prometheus metrics on `/metrics`, OTLP traces (opt-in) — not retrofitted later.
 6. **Crash recovery is a state machine, not error handling.** SQLite turn lifecycle (`in_progress`, `committed`, `interrupted`, `discarded`) + startup recovery sweep.
 7. **Speaker mode + AEC is primary, not optional.** AEC reference-signal alignment is non-negotiable; M6 is a hard prerequisite to M7.
-8. **No CI.** Tests run locally. Discipline-based; no automated PR gates.
+8. **Supervisor observes, Compose acts.** The Supervisor in dev mode runs HTTP `/health` probes and gates the dialogue path; it does NOT issue restart commands — `restart: unless-stopped` in compose handles that. Same Supervisor logic in production with optional sd-bus extension.
+9. **No CI.** Tests run locally. Discipline-based; no automated PR gates.
 
 ## Tech Stack (Locked for MVP)
 
-- C++23 standard library + language. The CLAUDE-lock was specifically against **Boost.Cobalt + C++23 modules**, not C++23 STL features. Glaze 7.x requires C++23 transitively, so it's already implicit. `std::expected`, `std::print`, deducing `this`, etc. are fair game. Do NOT enable C++23 modules; do NOT use Cobalt.
-- Boost.Asio for async, **not** Boost.Cobalt
-- cpp-httplib for simple HTTP, **libcurl** for SSE streaming
-- PortAudio + soxr
-- WebRTC APM (vendored) for AEC/NS/AGC
-- Silero VAD via ONNX Runtime
-- SQLite (WAL mode) + dedicated memory thread
-- glaze for JSON + YAML (config + IPC payloads)
-- spdlog (JSON sink), prometheus-cpp, opentelemetry-cpp (OTLP)
-- systemd unit management via sd-bus (libsystemd)
-- doctest or Catch2 for tests
-- CMake + presets
+- C++23 standard library + language. Lock is specifically against **Boost.Cobalt + C++23 modules**, not C++23 STL features. Glaze 7.x requires C++23 transitively. `std::expected`, `std::print`, deducing `this`, etc. are fair game. Do NOT enable C++23 modules; do NOT use Cobalt.
+- Boost.Asio for async, **not** Boost.Cobalt.
+- cpp-httplib (vendored at `third_party/cpp-httplib/`) for simple HTTP server + non-streaming client. **libcurl** for SSE streaming (LLM client in M1).
+- PortAudio + soxr (M3/M4).
+- WebRTC APM (vendored) for AEC/NS/AGC (M6).
+- Silero VAD via ONNX Runtime (M4).
+- SQLite (WAL mode) + dedicated memory thread (M1).
+- glaze for JSON + YAML (config + IPC payloads).
+- spdlog (structured-text in M0/M1.A; JSON sink in M1.s3), prometheus-cpp, opentelemetry-cpp (OTLP, opt-in M8).
+- Docker Compose for dev backend deployment; **no custom Dockerfiles** in M1.B.
+- systemd + libsystemd (sd-bus) — optional production path, gated by `-DLCLVA_ENABLE_SDBUS=ON`. Not a default M2 dependency.
+- doctest for tests.
+- CMake + presets.
 
-If you find yourself recommending Boost.Cobalt, C++23 modules, or an embedded inference engine for MVP — re-read `project_design.md` §16 and the open questions first.
+If you find yourself recommending Boost.Cobalt, C++23 modules, an embedded inference engine for MVP, or a custom HTTP wrapper around a backend that already ships one — re-read `project_design.md` §16 and the open questions first.
 
 ## Milestone Order (Adjusted from Original)
 
-`M0 skeleton → M1 LLM+memory → M2 supervision → M3 TTS+playback → M4 audio+VAD → M5 STT → M6 AEC → M7 barge-in → M8 hardening`
+`M0 skeleton → M1 LLM+memory (split: A complete, B Compose stack, C remaining) → M2 supervision → M3 TTS+playback → M4 audio+VAD → M5 STT → M6 AEC → M7 barge-in → M8 hardening`
 
 Two reorderings vs. the original plan, both intentional:
 - **Supervision (M2) before TTS (M3)** — llama.cpp will crash during long-context dev; retrofitting supervision is painful.
@@ -73,18 +83,22 @@ Two reorderings vs. the original plan, both intentional:
 
 Don't propose moving these back without strong reasons.
 
+**M1 is split** in `plans/milestones/m1_llm_memory.md`: Part A (config, memory, splitter — landed), Part B (Compose stack — next), Part C (LLM client, Dialogue Manager, turn writer, JSON logging — slice 2/3).
+
 ## When Working on Code
 
 - **No unbounded queues.** If you need a queue, specify capacity and overflow policy.
 - **No blocking calls in the audio callback path.** Even logging — use a lossy queue.
 - **Every cancellable operation takes a `TurnContext`.** Don't add a "global cancel flag" or per-component bool.
-- **Memory writes go through the memory thread.** Don't open SQLite from random threads.
+- **Memory writes go through the memory thread.** Don't open SQLite from random threads — `MemoryThread::submit/read/post` is the only path.
 - **HTTP client choice matters.** cpp-httplib for non-streaming, libcurl for SSE. Don't unify them on one library "for simplicity" without measuring.
-- **Process management is via sd-bus, not fork/exec.** Don't propose `popen` or `fork()` to launch llama.cpp/whisper.cpp/Piper.
+- **Don't fork backends from the orchestrator.** They run as Compose containers (dev) or systemd units (prod alternative). The orchestrator only opens HTTP connections to them.
+- **Don't write a custom HTTP wrapper around a backend that already ships one.** llama.cpp ships `llama-server`; whisper.cpp ships `whisper-server`; Piper ships `piper.http_server`. Use them. The exception is M5 streaming-Whisper which may require a custom wrapper *or* Speaches (decision deferred to M5 start — see open_questions L1).
 - **Language flows through the pipeline.** STT detects language → Dialogue Manager passes it to PromptBuilder + TTS. Voice selection is per-language.
 - **Errors are silent.** Voice agent never speaks errors to the user. Logs and `/status` are the only error channels (configurable for debug).
 - **Tests for the SentenceSplitter must include**: abbreviations (`Dr.`, `e.g.`), decimals (`3.14`), enumerations (`1.`, `2.`), code fences, ellipses, very-long-no-punctuation flush, and **multilingual** boundary cases.
 - **Tests for the Dialogue FSM must be table-driven**, asserting all transitions including barge-in cancellation propagation and speculation-reconcile/restart paths.
+- **Use `std::variant<T, DbError>` and similar `Result<T>` patterns** for fallible APIs, not exceptions across module boundaries. Internal helpers may throw; public-facing methods return Result.
 
 ## Latency Budget (Realistic)
 
@@ -92,21 +106,38 @@ P50 end-to-end (user-stop → first-audio): **~1.7 s.** P95: **~3.5 s.** The ori
 
 ## Build & Run
 
-Not yet implemented. Once the build exists, expected commands:
+Build:
 
 ```sh
 cmake --preset dev
 cmake --build --preset dev
 ctest --preset dev
+```
+
+Run (dev path, with backends in Compose):
+
+```sh
+cd packaging/compose && docker compose up -d   # M1.B; not yet scaffolded
+cd ../..
 ./build/dev/lclva --config config/default.yaml
 ```
 
-External services (llama.cpp, whisper.cpp, Piper) run as **systemd units** (`lclva-llama.service`, `lclva-whisper.service`, `lclva-piper.service`); the orchestrator interacts with them via sd-bus. Per-user mode (`systemctl --user`) is the default deployment.
+Run (without backends, M0 fake-driver mode):
+
+```sh
+./build/dev/lclva --config config/default.yaml      # fake_driver_enabled: true is the default
+# in another terminal:
+curl http://127.0.0.1:9876/status
+curl http://127.0.0.1:9876/metrics
+```
+
+The `lclva` binary itself always runs on the host as a CLI process — it's intentionally never put inside Compose so the realtime audio path stays direct. Production-style packaging as `lclva.service` is M8 work.
 
 ## Claude-Specific Working Notes
 
-- Prefer editing `plans/project_design.md` and `plans/open_questions.md` over creating new design docs.
-- When user asks to "remember" a decision about an open question, update `plans/open_questions.md` (mark resolved, record the answer) — that's project state, not memory.
-- When the user asks for design changes, edit `plans/project_design.md` directly; don't write a separate change-proposal file.
+- Prefer editing `plans/project_design.md`, `plans/open_questions.md`, and the relevant `plans/milestones/m*_*.md` over creating new design docs.
+- When user asks to "remember" a decision about an open question, update `plans/open_questions.md` (mark resolved, record the answer) — that's project state, not memory. New revisions go in section L.
+- When the user asks for design changes, edit `plans/project_design.md` and the affected milestone plans directly; don't write a separate change-proposal file.
 - Don't generate planning/decision/analysis docs unless explicitly requested.
-- Don't add C++ source files until the user asks to start implementation. Design phase is not done.
+- After each implementation slice, update the relevant milestone plan to mark steps as ✅ landed and capture lessons learned (see `m0_skeleton.md` and `m1_llm_memory.md` Part A as templates).
+- When clangd flags errors that look like missing-include cascades, the most common cause is a stale `compile_commands.json`. The build itself is the truth — a clean `cmake --build --preset dev` is the verdict, not editor diagnostics.

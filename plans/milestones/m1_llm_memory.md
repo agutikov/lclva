@@ -1,10 +1,10 @@
 # M1 — LLM + Memory
 
-**Estimate:** 1–2 weeks.
+**Estimate:** 2–3 weeks across three slices.
 
 **Depends on:** M0 (event bus, FSM, config, logging).
 
-**Blocks:** M2 (supervisor probes the LLM service), M3 (TTS bridge consumes `LlmSentence`), M5 (streaming partial STT replaces the simple final-only flow).
+**Blocks:** M3 (TTS bridge consumes `LlmSentence`), M5 (streaming partial STT replaces the simple final-only flow).
 
 ## Goal
 
@@ -13,345 +13,427 @@ Drive a real LLM end-to-end against a console transcript: text in → tokens str
 ## Out of scope
 
 - Real audio (M4) — sentences emit as `LlmSentence` events and get logged, not spoken.
-- Real summarization quality tuning. M1 lands the *machinery* (async memory thread, summary table, source-hash). The summarizer prompt itself is a stub that records "[TODO summary]" until we evaluate prompt variants.
 - TTS / playback (M3).
-- Service supervision (M2). M1 assumes llama.cpp is up; the supervisor watches it in M2.
+- Service supervision proper (M2 — now retargeted to HTTP health probes; see m2_supervision.md).
+- Production-quality summarization prompt tuning. M1 lands the machinery; the summarizer's prompt is a stub recording `"[TODO summary]"` until we evaluate prompt variants in M8.
 
-## New deps
+## Deployment shape
 
-| Lib | Version | Purpose | Source |
-|---|---|---|---|
-| libcurl (dev) | 7.80+ | LLM SSE streaming | system pkg |
-| sqlite3 (dev) | 3.42+ | memory storage | system pkg |
-| (no client lib) | — | SQLite accessed via the C API directly. We'll write a thin wrapper rather than pulling SQLiteCpp; volume is small. |
+For dev (M1 onward), the **model backends run as Docker Compose containers on the host network**; **`lclva` runs on the host as a CLI** so debugging / step-through / log inspection is direct. The systemd unit files in `packaging/systemd/` remain valid for production-style deployment but are no longer the default path.
 
-Add to `cmake/Dependencies.cmake`:
-```cmake
-find_package(CURL REQUIRED)
-find_package(SQLite3 REQUIRED)
+This decision is captured in `plans/open_questions.md` as a follow-up to H4/H5; the design doc's §4.12 (Supervisor) and §16 (tech stack) are revised accordingly.
+
+---
+
+# Part A — Complete (Slice 1, landed)
+
+What's in the tree as of this writing.
+
+## A.0 New deps wired in CMake
+
+| Lib | Used in | `find_package` |
+|---|---|---|
+| SQLite3 | memory layer | `find_package(SQLite3 REQUIRED)` → `SQLite::SQLite3` |
+| libcurl (dev) | reserved for LLM SSE (slice 2) | `find_package(CURL REQUIRED)` → `CURL::libcurl` |
+
+Both linked through `lclva_core` so tests pick them up.
+
+## A.1 Configuration extension ✅
+
+`src/config/config.{hpp,cpp}` extended with:
+
+- `LlmConfig` — base_url, model, unit, temperature, max_tokens, max_prompt_tokens, request_timeout_seconds, keep_alive_interval_seconds.
+- `MemoryConfig` — db_path, recent_turns_n, write_queue_capacity, nested SummaryConfig + FactsConfig.
+- `DialogueConfig` — recent_turns_n, max_assistant_sentences, max_assistant_tokens, fallback_language, system_prompts (`std::map<std::string, std::string>`), nested SentenceSplitterConfig.
+- Validation: temperature in [0,2], max_tokens > 0, summary.trigger ∈ {turns, tokens, idle, hybrid}, facts.policy ∈ {conservative, moderate, aggressive, manual_only}, system_prompts (when non-empty) must contain the fallback_language.
+
+`config/default.yaml` extended in lockstep.
+
+## A.2 SQLite database wrapper ✅
+
+`src/memory/db.{hpp,cpp}` — RAII wrappers:
+
+- `Database` — opens with WAL + `synchronous=NORMAL` + `foreign_keys=ON`; nested `Transaction` guard with commit/rollback/auto-rollback-on-destruct.
+- `Statement` — prepared statement with bind helpers (incl. `optional<...>` overloads); step returns Row/Done/Error; column accessors.
+- `Result<T>` = `std::variant<T, DbError>` so we don't depend on `std::expected`.
+
+## A.3 Schema + repository ✅
+
+`src/memory/schema.hpp` — embedded SQL string. Tables: sessions, turns (with `lang`), summaries (with `lang` + `source_hash`), facts (UNIQUE(key, lang)), settings. Indexes on (session_id, id), (session_id, range_end_turn), and (key). `pragma user_version = 1`.
+
+`src/memory/repository.{hpp,cpp}` — typed CRUD. Notable methods:
+
+- `insert_session`, `close_session`, `sessions_open_no_ended_at`
+- `insert_turn`, `set_turn_status`, `recent_turns(session, limit)`, `turns_in_progress`, `max_turn_ended_at`
+- `insert_summary`, `latest_summary`, `all_summaries`
+- `upsert_fact` (ON CONFLICT(key, lang) DO UPDATE)
+- `set_setting`, `get_setting`
+- `database()` accessor — used by `run_recovery` to wrap its sweep in a `Transaction`.
+
+## A.4 Memory thread ✅
+
+`src/memory/memory_thread.{hpp,cpp}`:
+
+- Single dedicated writer/reader thread holding the only `Database`.
+- Bounded job queue (`event::BoundedQueue<WriteJob>`, default DropNewest, capacity from config).
+- API: `submit<Fn>(fn)` returns `std::future<R>`; `read<Fn>(fn)` blocking helper; `post(job)` fire-and-forget.
+- Posting order is preserved → causal consistency.
+- Drops counter exposed for metrics.
+
+## A.5 Recovery sweep ✅
+
+`src/memory/recovery.{hpp,cpp}`:
+
+- `run_recovery(repo, db)` runs in a single transaction:
+  1. For every session with `ended_at IS NULL`: set `ended_at = MAX(turns.ended_at)` (or session's `started_at` if none).
+  2. For every `status='in_progress'` turn: set to `interrupted`.
+  3. For every summary: recompute the FNV-1a-64 source-hash and count stale ones.
+- Returns counters; idempotent.
+- Wired into `main.cpp`: runs synchronously at startup, logs the summary, fails the orchestrator if the sweep errors.
+
+## A.6 Sentence splitter ✅
+
+`src/dialogue/sentence_splitter.{hpp,cpp}` — streaming token-in / sentence-out. Implementation notes worth recording:
+
+- **Pending-terminator state machine.** A terminator (`.!?`) doesn't immediately split — it goes pending and resolves on the next char. This handles decimals (`3.14`) and ellipsis runs uniformly.
+- **Dot-run counter** (`pending_dot_run_`): when ≥ 2, the run is treated as ellipsis and the buffer keeps growing (no split). Catches `Loading...` and the Unicode `…`.
+- **List-marker check before decimal.** `1. First item` would fail decimal check (digit-before-dot) but list-marker is more specific (short word + line start), so list-marker wins.
+- **Code-fence suppression** when `cfg.detect_code_fences = true`.
+- **Forced flush** at `max_sentence_chars` on the next whitespace-or-comma. Prevents TTS starvation on long unpunctuated chunks.
+
+48 tests total across the project, 24 of which are M1 slice-1: db, repository, recovery, memory_thread, sentence_splitter.
+
+## A.7 Wired into main.cpp ✅
+
+Startup sequence:
+
+1. Load config (existing).
+2. Init logging (existing).
+3. **Open MemoryThread** (M1.A) — creates DB if missing, applies pragmas, runs schema.
+4. **Run recovery sweep** synchronously (M1.A) — log summary line.
+5. Build event bus + metrics + FSM (existing M0).
+6. Build HTTP control plane (existing M0).
+7. Optional fake driver (existing M0).
+8. Block on signal; orderly shutdown.
+
+The M0 fake driver still runs; sentences travel as events but aren't yet routed through the LLM/SentenceSplitter. That happens in slice 2.
+
+---
+
+# Part B — Environment setup (Docker Compose, upstream images)
+
+What you do **before** starting slice 2. The output is a `docker-compose.yml` that brings up llama.cpp / whisper.cpp / piper, all reachable on `127.0.0.1` ports that match the lclva config.
+
+**Update from earlier draft:** all three backends ship official-or-upstream HTTP servers. We do *not* write or build custom Dockerfiles in M1. We use upstream images verbatim. The custom whisper-streaming wrapper is M5's concern (and may itself be skipped — see m5_streaming_stt.md).
+
+## B.1 Prerequisites
+
+- Docker Engine ≥ 26 (Compose v2 built-in). Podman ≥ 4 with `podman-compose` works as well.
+- For GPU: **NVIDIA Container Toolkit** ≥ 1.14.
+  - Arch: `sudo pacman -S nvidia-container-toolkit && sudo systemctl restart docker`
+  - Debian/Ubuntu: follow upstream NVIDIA Container Toolkit install guide.
+  - Verify: `docker run --rm --gpus all nvidia/cuda:12.6.0-base-ubuntu22.04 nvidia-smi` prints the GPU table.
+- User must be in the `docker` group (or use rootless Docker).
+- Model files already downloaded on the host under `~/.local/share/lclva/models/` and voices under `~/.local/share/lclva/voices/` (see README §"Setting up the runtime services").
+
+## B.2 File layout
+
+```
+packaging/compose/
+  docker-compose.yml         # the only file we ship in M1
+  .env.example               # paths to model files, port overrides
 ```
 
-## Step 1 — Memory thread + SQLite wrapper
+That's it — no `llama/`, `whisper/`, `piper/` subdirs, no hand-rolled Dockerfiles. Models live on the host and are bind-mounted read-only into each container.
 
-**Files:**
-- `src/memory/db.hpp` — RAII `Database` wrapper over `sqlite3*`, prepared-statement cache, WAL/synchronous=NORMAL pragmas applied on open.
-- `src/memory/db.cpp`
-- `src/memory/schema.sql` — embedded via `cmake_path` + `configure_file` or a generated header (probably a generated `schema_sql.hpp` via `file(READ ...)` at configure time).
-- `src/memory/repository.hpp` — typed read/write methods (`insert_turn`, `update_turn_status`, `latest_summary`, `recent_turns(N)`, `upsert_fact`, ...).
-- `src/memory/repository.cpp`
-- `src/memory/memory_thread.hpp` — owns the DB; serializes writes from a single dedicated thread; reads via `MemoryThread::read([](auto& repo){...})` posting onto its strand.
-- `src/memory/memory_thread.cpp`
+## B.3 docker-compose.yml shape
 
-**Schema:** identical to project_design.md §9.1. Embed it as a string and run on first open.
+```yaml
+name: lclva
 
-**API sketch:**
-```cpp
-class MemoryThread {
-public:
-    MemoryThread(std::filesystem::path db_path);
-    ~MemoryThread();
+services:
+  # llama.cpp — official ggml-org image with CUDA build of llama-server.
+  llama:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    ports:
+      - "127.0.0.1:8081:8081"
+    volumes:
+      - ${LCLVA_MODELS_DIR:-${HOME}/.local/share/lclva/models}:/models:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8081/health"]
+      interval: 5s
+      timeout: 2s
+      retries: 12
+    restart: unless-stopped
+    command: >
+      --host 0.0.0.0 --port 8081
+      --model /models/qwen2.5-7b-instruct-q4_k_m.gguf
+      --ctx-size 8192 --n-gpu-layers 999 --threads 4 --metrics
 
-    // Fire-and-forget write; returns a future for callers that want to wait.
-    std::future<void> write(std::function<void(Repository&)> op);
+  # whisper.cpp — official server image. Sync request/response transcription;
+  # M1-M4 only feed full utterances anyway. M5 may swap this for a streaming
+  # backend (Speaches / faster-whisper / custom wrapper — see m5).
+  whisper:
+    image: ghcr.io/ggml-org/whisper.cpp:server
+    ports:
+      - "127.0.0.1:8082:8082"
+    volumes:
+      - ${LCLVA_MODELS_DIR:-${HOME}/.local/share/lclva/models}:/models:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8082/health"]
+      interval: 5s
+      timeout: 2s
+      retries: 12
+    restart: unless-stopped
+    command: ["--host", "0.0.0.0", "--port", "8082", "--model", "/models/ggml-small.bin"]
 
-    // Synchronous read. Internally posts to the memory thread and waits.
-    template <class R>
-    R read(std::function<R(Repository&)> op);
-};
+  # Piper — runs the upstream piper.http_server Python module. We use the
+  # python base image and `pip install piper-tts`; the rhasspy project does
+  # not yet publish an official HTTP image. The shim is two lines.
+  piper:
+    image: python:3.12-slim
+    ports:
+      - "127.0.0.1:8083:8083"
+    volumes:
+      - ${LCLVA_VOICES_DIR:-${HOME}/.local/share/lclva/voices}:/voices:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8083/').read()"]
+      interval: 5s
+      timeout: 2s
+      retries: 12
+    restart: unless-stopped
+    command: >
+      sh -c "pip install --no-cache-dir piper-tts &&
+             python -m piper.http_server
+             --host 0.0.0.0 --port 8083
+             --model /voices/en_US-amy-medium.onnx"
 ```
 
-**Acceptance:** `tests/test_memory.cpp` covers schema creation, turn insert/read, recovery sweep (next step).
+**Tag/image notes** (verify at first build; pin to digests once verified):
 
-## Step 2 — Crash-recovery sweep
+- `ghcr.io/ggml-org/llama.cpp:server-cuda` — published by the llama.cpp project; CUDA 12.x.
+- `ghcr.io/ggml-org/whisper.cpp:server` — published by the whisper.cpp project. CPU build sufficient (B1 decision).
+- `python:3.12-slim` — official; the `pip install piper-tts` happens at container start. To pin: build a tiny derived image once that pre-installs `piper-tts`, push to a personal registry, replace the inline `pip install`.
 
-**Files:** `src/memory/recovery.hpp`, `src/memory/recovery.cpp`.
+Network mode: default bridge with port mapping to `127.0.0.1`. Avoids the `network_mode: host` complications on rootless Docker / WSL2 while keeping everything on localhost.
 
-**Behavior on `Database::open()`:**
-1. For each session with `ended_at IS NULL`: set `ended_at = COALESCE(MAX(turns.ended_at), started_at)`.
-2. For each turn with `status = 'in_progress'`: set `status = 'interrupted'`, `interrupted_at_sentence = NULL`.
-3. For each summary, recompute `source_hash` over the source turn texts; if it diverges, mark a stale-summary log line (regenerated lazily later by the summarizer).
-
-Recovery happens in a single transaction. Logged at info: `recovery: closed N sessions, marked M turns interrupted, K stale summaries`.
-
-**Tests:** `tests/test_recovery.cpp` — open a DB pre-populated with crashed states, recovery returns expected counts, queries return consistent state.
-
-## Step 3 — `lang` column wiring
-
-The schema gained `lang` columns in the design; M1 fills them. Most-used `lang` for assistant turns in M1 is "en" since multilingual STT is M5.
-
-## Step 4 — Prompt builder
-
-**Files:** `src/llm/prompt_builder.hpp`, `src/llm/prompt_builder.cpp`.
-
-**Structure** (project_design.md §9.3):
+If `ghcr.io/ggml-org/whisper.cpp:server` turns out not to exist at the right tag, fall back to building from upstream once and tagging locally:
+```sh
+git clone https://github.com/ggml-org/whisper.cpp.git && cd whisper.cpp
+docker build -t local/whisper.cpp:server -f .devops/server.Dockerfile .
 ```
-[system policy]              ← from cfg.dialogue.system_prompts[lang]
-[user preferences]           ← `settings` table (M1 just reads, doesn't yet write)
-[durable facts]              ← `facts` table where confidence > threshold
-[cached session summary]     ← latest `summaries` row
-[last N turns verbatim]      ← N from cfg.dialogue.recent_turns_n (default 10)
+Replace `image:` accordingly.
+
+## B.4 .env.example
+
+```ini
+# Override model/voice paths (default: ~/.local/share/lclva/...)
+# LCLVA_MODELS_DIR=/path/to/models
+# LCLVA_VOICES_DIR=/path/to/voices
+
+# Switch the LLM model file without editing docker-compose.yml:
+# LCLVA_LLM_MODEL=qwen2.5-7b-instruct-q4_k_m.gguf
+```
+
+## B.5 Operating the stack
+
+Bring up:
+```sh
+cd packaging/compose
+docker compose up -d                # first run: ~5 min for image pulls
+docker compose ps                    # all 3 healthy after ~30 s once images cached
+docker compose logs -f llama         # live log of one service
+```
+
+Stop / clean:
+```sh
+docker compose down                  # stop, keep images and volumes
+docker compose down -v --rmi all     # nuke everything
+```
+
+Switching the LLM model is a host-side file swap + `docker compose restart llama`.
+
+## B.6 Health checks the orchestrator relies on
+
+`lclva` polls each backend's `/health` endpoint per `cfg.supervisor.probe_interval_*_ms`. Compose's `healthcheck:` is independent — it dictates whether Compose marks the container ready/unhealthy and whether `restart: unless-stopped` kicks in. Both layers exist on purpose: Compose handles process lifecycle; the orchestrator handles application-level state and dialogue gating.
+
+## B.7 Verifying B is done
+
+Acceptance:
+
+1. `docker compose up -d` brings all three services to `healthy` within 60 s of pull/start.
+2. `curl -fsS 127.0.0.1:8081/health` returns 200; same for 8082 and 8083.
+3. Submitting a manual completion to llama works:
+   ```sh
+   curl -sS -X POST http://127.0.0.1:8081/v1/chat/completions \
+     -H 'Content-Type: application/json' \
+     -d '{"model":"qwen2.5-7b-instruct","messages":[{"role":"user","content":"hi"}],"max_tokens":20}'
+   ```
+4. With the orchestrator running on the host (M0 fake-driver mode), `curl /status` still works — host orchestrator is unaware of containers at this stage.
+
+---
+
+# Part C — Remaining (Slices 2 & 3, planned)
+
+The components below assume Part B has been completed at least once on the dev machine.
+
+## C.1 Slice 2 — LLM + Dialogue Manager + persistence
+
+### C.1.1 Prompt builder
+
+`src/llm/prompt_builder.{hpp,cpp}`. Structure (project_design.md §9.3):
+
+```
+[system policy]              ← cfg.dialogue.system_prompts[lang]
+[user preferences]           ← settings table (read-only in M1)
+[durable facts]              ← facts table where confidence > threshold
+[cached session summary]     ← latest summaries row
+[last N turns verbatim]      ← N from cfg.dialogue.recent_turns_n
 [current user turn]
 ```
 
-Output: an OpenAI-compatible `messages` JSON payload (system + alternating user/assistant + final user).
+Output: OpenAI-compatible `messages` JSON (system + alternating user/assistant + final user). Token-count estimate ≈ 1 token per ~4 chars; replaced by a real tokenizer if the estimate proves too loose.
 
-**API:**
+API:
 ```cpp
 struct PromptInputs {
-    std::string lang;                       // detected language (passed to system prompt)
+    std::string lang;
     std::string current_user_text;
 };
 
 class PromptBuilder {
 public:
     PromptBuilder(const Config& cfg, MemoryThread& memory);
-    std::string build(const PromptInputs& in); // returns serialized messages JSON
-    [[nodiscard]] std::size_t last_token_estimate() const noexcept; // cheap estimate
+    std::string build(const PromptInputs&);
+    [[nodiscard]] std::size_t last_token_estimate() const noexcept;
 };
 ```
 
-**Token-count estimate**: rough — 1 token per ~4 chars for budget enforcement. We'll wire a real tokenizer in M1's tail or M3 if the estimate proves too loose.
+Tests: snapshot tests with fixed memory state → byte-stable prompt JSON.
 
-**Tests:** snapshot tests with fixed memory contents → prompt JSON is stable byte-for-byte.
+### C.1.2 LLM client (libcurl SSE + cpp-httplib for non-streaming)
 
-## Step 5 — Sentence splitter
+`src/llm/client.{hpp,cpp}`. One I/O thread runs libcurl easy handles. Reentrant in M5; M1 keeps it serial.
 
-**Files:** `src/dialogue/sentence_splitter.hpp`, `src/dialogue/sentence_splitter.cpp`.
-
-**Spec** (project_design.md §4.8): streaming token-in, sentence-out. Emit when:
-- Terminal punctuation (`.!?`) seen, AND
-- followed by whitespace+capital, OR end-of-stream, OR tokens-since-punctuation exceeds `max_sentence_tokens` (forced flush).
-
-Must handle:
-- Abbreviations: `Dr.`, `Mr.`, `Mrs.`, `Ms.`, `e.g.`, `i.e.`, `etc.`, `vs.`, common short titles. Configurable allowlist.
-- Decimals: `3.14`, `0.5`, version `v1.2.3`.
-- Enumerations: `1.`, `2.`, `a)`. These reset the sentence boundary detector.
-- Code fences (` ``` `): suppress splitting inside fenced blocks; emit the entire block as a single "sentence" so TTS can do the right thing later (or skip it).
-- Ellipses (`...`, `…`): not a sentence boundary.
-- Multilingual: if `lang != "en"`, the punctuation set extends (e.g., `。` for ja, `！` for zh). Skip for M1; English is enough for M1.
-
-**API:**
-```cpp
-class SentenceSplitter {
-public:
-    explicit SentenceSplitter(const SentenceSplitterConfig& cfg);
-
-    // Feed an incremental token. May produce zero or more complete sentences.
-    void push(std::string_view token, std::string_view lang,
-              std::vector<std::string>& out_sentences);
-
-    // Stream end — flushes the buffered tail as a final sentence if non-empty.
-    void flush(std::vector<std::string>& out_sentences);
-
-    void reset(); // call between turns
-};
-```
-
-**Tests** — `tests/test_sentence_splitter.cpp`. Golden corpus including the cases above plus pathological inputs:
-- `"Dr. Smith said hello. What now?"` → 2 sentences.
-- `"The price is $3.14. Or maybe $4.20?"` → 2 sentences.
-- `"1. First item.\n2. Second item.\n3. Third."` → 3 sentences.
-- `"Loading..."` → 1 sentence.
-- A 4 KB chunk of text without any punctuation → emits at `max_sentence_tokens` boundary.
-
-## Step 6 — LLM client
-
-**Files:** `src/llm/client.hpp`, `src/llm/client.cpp`.
-
-Two HTTP libraries on purpose (per the locked design):
-- Non-streaming requests (health probe, prompt token count) → cpp-httplib.
-- SSE streaming completion → libcurl with the `CURLOPT_WRITEFUNCTION` callback.
-
-**Threading:** the LLM client owns one I/O thread that runs the libcurl easy handle. Multiple in-flight requests are serial in M1 (one turn at a time anyway). Reentrant in M5 when speculation arrives.
-
-**API:**
 ```cpp
 struct LlmRequest {
-    std::string messages_json;     // pre-built by PromptBuilder
+    std::string messages_json;
     int max_tokens = 400;
     float temperature = 0.7F;
     std::shared_ptr<dialogue::CancellationToken> cancel;
-    dialogue::TurnId turn;         // tagged onto every emitted event
+    dialogue::TurnId turn;
     std::string lang;
 };
 
 struct LlmCallbacks {
-    std::function<void(std::string token)> on_token;     // streamed
-    std::function<void(LlmFinish)> on_finished;          // tokens_total, cancelled, error
+    std::function<void(std::string token)> on_token;
+    std::function<void(LlmFinish)> on_finished;
 };
 
 class LlmClient {
 public:
     LlmClient(const Config& cfg, event::EventBus& bus);
-    ~LlmClient();
-
-    // Non-blocking. Posts the request to the I/O thread; returns when the
-    // request has been queued. Cancellation via the token in the request.
-    void submit(LlmRequest req, LlmCallbacks cb);
-
-    // Health probe. Returns true on success; logs detail on failure.
-    bool probe();
-
-    // Keep-alive completion: 1 max_token request to prevent model offload.
-    // The supervisor (M2) drives this on a timer; M1 just exposes the API.
-    void keep_alive();
+    void submit(LlmRequest, LlmCallbacks);
+    bool probe();             // GET /health
+    void keep_alive();        // 1-token completion, used by M2
 };
 ```
 
-**Implementation notes:**
-- The request is a POST to `/v1/chat/completions` with `stream: true`.
-- SSE parser handles `data: {...}\n\n` chunks, the `[DONE]` sentinel, and OpenAI-compatible delta format (`choices[0].delta.content`).
-- Cancellation is checked between SSE chunks — if `req.cancel->is_cancelled()`, libcurl is asked to abort (`return 0` from the write callback).
+SSE parser handles `data: {...}\n\n` chunks, the `[DONE]` sentinel, and OpenAI-compatible `choices[0].delta.content`. Cancellation aborts via `CURLOPT_WRITEFUNCTION` returning 0.
 
-**Tests:**
-- `tests/test_llm_client.cpp` — fakes via cpp-httplib's `Server` (in-process test fixture). One golden test that streams 5 fake SSE chunks, asserts on_token is called 5x, on_finished receives correct count.
-- Real llama.cpp smoke test: gated behind a `LCLVA_REAL_LLM=1` env var so it runs only when configured. Spins a tiny model (Qwen2.5-0.5B) and asks one question.
+Tests: cpp-httplib in-process fake server emitting known SSE byte sequences; cancellation mid-stream finishes within 100 ms.
 
-## Step 7 — Dialogue Manager wiring
+### C.1.3 Dialogue Manager (the active glue)
 
-The FSM in M0 is reactive: events go in, transitions come out. M1 adds the active behaviour:
+`src/dialogue/manager.{hpp,cpp}`.
 
-When the FSM enters `Thinking`, the Dialogue Manager:
-1. Reads `FinalTranscript` from the event.
-2. Calls `PromptBuilder::build()` synchronously (memory reads are fast — O(ms)).
-3. Submits to `LlmClient` with the active turn's `CancellationToken`.
-4. Wires `on_token` → `SentenceSplitter::push` → publish `LlmSentence` events for each complete sentence.
-5. On `on_finished`: publish `LlmFinished`. If cancelled, the FSM's existing handler does the right thing (UserInterrupted path bumped the turn already).
+The FSM stays a pure state machine. The Manager subscribes to `FinalTranscript` and runs:
 
-In M0, the fake driver simulates these. M1 replaces it with the real glue.
+1. `PromptBuilder::build()` (sync; reads memory).
+2. `LlmClient::submit()` with the active turn's `CancellationToken`.
+3. `on_token` → `SentenceSplitter::push` → publish `LlmSentence` events for each complete sentence.
+4. `on_finished` → publish `LlmFinished`. If cancelled, the FSM's existing handler does the right thing.
 
-**Files:**
-- `src/dialogue/manager.hpp`, `src/dialogue/manager.cpp` — the active glue. Subscribes to `FinalTranscript`; orchestrates prompt build → LLM → sentence stream.
-- Update `src/dialogue/fsm.hpp` — add a `Manager` reference, or have the Manager subscribe to bus events independently and the FSM only reacts to the resulting events. Prefer the second: keeps the FSM pure.
+### C.1.4 Turn writer
 
-**Recommendation:** Manager is its own component, separate from the FSM. The FSM remains a pure state machine driven by events. The Manager reads `FinalTranscript`, runs the LLM, emits `LlmSentence` and `LlmFinished` events. The FSM transitions on those events as it already does in M0.
+`src/dialogue/turn_writer.{hpp,cpp}`. Listens to FSM outcomes (mirrors the metrics observer) and posts writes to the MemoryThread:
 
-## Step 8 — Turn persistence + outcome wiring
+- `committed`: write assistant turn with concatenated sentence text.
+- `interrupted`: write only the played-out portion (sentences whose `PlaybackFinished` was observed).
+- `discarded`: do not persist.
 
-When the FSM observes a turn outcome:
-- `completed`: write a `turns` row with `role='assistant'`, the concatenated sentence text, `lang`, `status='committed'`.
-- `interrupted`: same, but `status='interrupted'` and the `text` includes only the sentences that finished playback (M1 has no playback, so it's "all sentences before UserInterrupted arrived").
-- `discarded`: do not persist. Log a counter increment.
+User turns get written when `FinalTranscript` arrives.
 
-Also write the user turn (status='committed') when `FinalTranscript` is observed.
+## C.2 Slice 3 — Async summarization + JSON logs
 
-**Files:** `src/dialogue/turn_writer.hpp`, `src/dialogue/turn_writer.cpp` — a small subscriber that listens to FSM outcomes (via a callback on the FSM, mirror of the metrics observer) and posts writes to the memory thread.
+### C.2.1 Summarizer stub
 
-## Step 9 — Async summarization stub
+`src/memory/summarizer.{hpp,cpp}`. Triggered by `cfg.memory.summary.trigger`:
 
-**Files:** `src/memory/summarizer.hpp`, `src/memory/summarizer.cpp`.
+- Runs on the memory thread.
+- Calls `LlmClient::submit` with a compact prompt.
+- Writes `summaries` row with the result and `source_hash`.
 
-For M1 the summarizer:
-- Triggers on `cfg.memory.summary.turn_threshold` new turns since last summary (configurable).
-- Runs on the memory thread (must not block dialogue).
-- Calls `LlmClient::submit` with a compact prompt that asks for a 200-word summary of the source range.
-- Writes a `summaries` row with the result and the `source_hash`.
+Prompt iteration is M8 work; M1 lands the machinery only.
 
-**Tunable:** `cfg.memory.summary.{trigger, turn_threshold, token_threshold, idle_seconds}`.
+### C.2.2 JSON structured logging
 
-The actual quality of the summarization prompt is *not* an M1 deliverable. Prompt iteration happens in M8 against soak-test recordings.
+Replace M0's structured-text output with a custom spdlog sink emitting per-line JSON:
 
-## Step 10 — JSON structured logging
-
-Replace M0's structured-text logging with a custom spdlog formatter or a custom sink that emits JSON:
 ```json
 {"ts":"2026-04-30T12:34:56.789+04:00","level":"info","component":"dialogue","event":"llm_first_token","turn_id":42,"latency_ms":381}
 ```
 
-**Files:** new `src/log/json_sink.hpp`, `src/log/json_sink.cpp`. Implements `spdlog::sinks::base_sink<std::mutex>::sink_it_` and serializes per-line.
+`src/log/json_sink.{hpp,cpp}` — `spdlog::sinks::base_sink<std::mutex>::sink_it_` impl. Adds a richer logging API:
 
-The `lclva::log::info(component, message)` API stays. Adds:
 ```cpp
 void event(std::string_view component, std::string_view event_name,
            dialogue::TurnId turn,
            std::initializer_list<std::pair<std::string_view, std::string>> kv);
 ```
 
-For machine-friendly tracing.
+Existing `info(component, message)` call sites stay unchanged.
 
-## Step 11 — Configuration extension
+---
 
-Add to `Config`:
-```yaml
-llm:
-  base_url: "http://127.0.0.1:8081/v1"
-  model: "qwen2.5-7b-instruct"
-  temperature: 0.7
-  max_tokens: 400
-  max_prompt_tokens: 3000
-  request_timeout_seconds: 60
-  keep_alive_interval_seconds: 60
+## Acceptance for M1 (full)
 
-memory:
-  db_path: "${XDG_DATA_HOME:-~/.local/share}/lclva/lclva.db"
-  recent_turns_n: 10
-  summary:
-    trigger: turns           # turns | tokens | idle | hybrid
-    turn_threshold: 15
-    token_threshold: 4000
-    idle_seconds: 120
-    language: dominant       # dominant | english | recent
-  facts:
-    policy: conservative     # conservative | moderate | aggressive | manual_only
-    confidence_threshold: 0.7
-
-dialogue:
-  recent_turns_n: 10
-  max_assistant_sentences: 6
-  max_assistant_tokens: 400
-  system_prompts:
-    en: |
-      You are a local voice assistant.
-      Answer in short spoken paragraphs.
-      Prefer direct answers over long lists.
-      Ask at most one clarification question.
-      For technical topics, give concise but precise explanations.
-```
-
-## Test plan
-
-| Test | Scope |
-|---|---|
-| `test_db.cpp` | open / pragmas / round-trip / WAL behavior |
-| `test_recovery.cpp` | crash sweep correctness |
-| `test_repository.cpp` | typed read/write methods |
-| `test_prompt_builder.cpp` | snapshot tests across memory states |
-| `test_sentence_splitter.cpp` | golden corpus (cases above) |
-| `test_llm_client.cpp` | fake server fixture; SSE parsing; cancellation; timeout |
-| `test_manager.cpp` | end-to-end with fake LLM client driving the Dialogue Manager |
-| Real-LLM smoke | `LCLVA_REAL_LLM=1` against a tiny model |
-
-## Acceptance
-
-1. With llama.cpp + Qwen2.5-7B running locally, `--config config/m1.yaml` accepts text input on stdin, streams an answer (logged as `LlmSentence` events), and writes both turns to SQLite with `status='committed'`.
-2. Killing the orchestrator mid-turn and restarting it: the recovery sweep marks the in-flight turn `interrupted`, the next session opens cleanly, prior session's `ended_at` is set.
-3. `tests/test_sentence_splitter.cpp` golden corpus passes.
+1. With `docker compose up` running, `./build/dev/lclva --config config/dev.yaml` accepts text input on stdin, streams an answer logged as `LlmSentence` events, and writes both turns to SQLite with `status='committed'`.
+2. Killing the orchestrator mid-turn and restarting it: recovery sweep marks the in-flight turn `interrupted`, the next session opens cleanly, prior session's `ended_at` set.
+3. `tests/test_sentence_splitter.cpp` golden corpus passes. ✅ (slice 1)
 4. SSE cancellation: setting the turn's cancellation token mid-stream causes the LLM client to abort and emit `LlmFinished{ cancelled=true }` within 100 ms.
-5. Logs are valid JSON, one event per line; per-turn `turn_id` field is populated for every event after the FSM mints a turn.
+5. Logs are valid JSON, one event per line.
 6. `voice_llm_first_token_ms` and `voice_llm_tokens_per_sec` metrics emit non-zero values.
 
 ## Risks specific to M1
 
 | Risk | Mitigation |
 |---|---|
-| SSE parser misses or duplicates events | Use libcurl, golden test fixture with SSE byte sequences captured from llama.cpp |
-| Prompt assembly slow at deep context | Token-estimate cap in `PromptBuilder::build`; trigger summarization on overflow |
-| Memory thread saturates under bursty writes | Bounded write queue (default 256); drop+log oldest with metric on overflow; soak test |
-| SQLite schema migrations later | M1 establishes v1 schema; add `pragma user_version = 1` and bake a migration framework before extending in M3 |
-| JSON logger performance | spdlog's async logger; the JSON formatter must not allocate per-call beyond a small reusable buffer |
+| GPU passthrough fragility on host upgrades | Document NVIDIA Container Toolkit version pin in compose README; smoke-test command in B.7 |
+| Compose-image build slow on CI/contributors | Pin upstream commits; pre-built images in a personal registry are an option once we have one |
+| SSE parser misses or duplicates events | Golden test fixture with captured llama.cpp SSE bytes |
+| Prompt assembly slow at deep context | Token-estimate cap; trigger summarization on overflow |
+| Memory thread saturates on bursty writes | Bounded write queue (default 256); DropNewest + metric on overflow |
+| JSON logger performance | spdlog async logger; reusable buffer in the sink |
+| Container-host time skew | Negligible; HTTP timestamps are server-authoritative |
 
 ## Time breakdown
 
-| Step | Estimate |
-|---|---|
-| 1–3 Memory + recovery | 2 days |
-| 4 Prompt builder | 1 day |
-| 5 SentenceSplitter | 2 days (golden corpus is half the work) |
-| 6 LLM client | 2 days |
-| 7 Dialogue Manager wiring | 1 day |
-| 8 Turn persistence | 0.5 day |
-| 9 Summarizer stub | 0.5 day |
-| 10 JSON logging | 1 day |
-| 11 Config extension | 0.5 day |
-| Tests + soak | 1.5 days |
-| **Total** | **~12 days** = ~2.5 weeks (vs the 1–2 week estimate; the extra is the SentenceSplitter golden corpus and JSON logger) |
+| Part / step | Estimate | Status |
+|---|---|---|
+| **A** Slice 1 (memory, splitter, config) | 5 days | ✅ landed |
+| **B** Compose stack (upstream images, no Dockerfiles) | ~1 day | next |
+| **C.1.1** Prompt builder | 1 day | planned |
+| **C.1.2** LLM client | 2 days | planned |
+| **C.1.3** Dialogue Manager | 1 day | planned |
+| **C.1.4** Turn writer | 0.5 day | planned |
+| **C.2.1** Summarizer stub | 0.5 day | planned |
+| **C.2.2** JSON logging | 1 day | planned |
+| **Total** | **~13 days = ~2.5 weeks** | (slice 1 done; ~7 days remaining + 2–3 days for B) |

@@ -1,71 +1,85 @@
 # M5 — Streaming STT + Speculation
 
-**Estimate:** 2–3 weeks. (Largest single milestone. Custom Whisper streaming wrapper + speculation FSM logic + multilingual flow.)
+**Estimate:** 1.5–3 weeks. The range depends on the streaming-engine decision in Step 1 below.
 
 **Depends on:** M1 (Dialogue Manager wiring; LLM client cancellation), M4 (utterance pipeline; AudioSlice).
 
-**Blocks:** M7 (full barge-in needs partials). M5 itself is the milestone where the FSM gains its `SpeculativeThinking` concurrent state.
+**Blocks:** M7 (full barge-in needs partials, *if* we keep speculation in MVP). If speculation is deferred (Option C), M7 still ships — just with slightly higher perceived latency.
 
 ## Goal
 
 Three things land together:
 
-1. **Streaming partial transcription**: whisper.cpp produces `PartialTranscript` events as the user speaks; a `FinalTranscript` closes the utterance.
-2. **Multilingual**: Whisper detects the language per utterance; the language flows through prompt assembly, TTS voice selection, and memory `lang` columns.
+1. **Streaming partial transcription**: the STT backend produces `PartialTranscript` events as the user speaks; a `FinalTranscript` closes the utterance.
+2. **Multilingual**: language is detected per utterance; the language flows through prompt assembly, TTS voice selection, and memory `lang` columns.
 3. **Speculative LLM start**: the Dialogue Manager opportunistically begins LLM generation against a stable prefix before the final transcript arrives, then either keeps or restarts based on reconciliation.
 
 ## Out of scope
 
-- Whisper.cpp source modifications. We use the upstream library and wrap it.
 - Production-quality multilingual evaluation across all Whisper-supported languages. M5 verifies a small set (en, ru, de, es, fr) on Common Voice fixtures.
 
-## New deps
+---
 
-| Lib | Source | Purpose |
-|---|---|---|
-| whisper.cpp | upstream, built locally | STT engine (linked into the wrapper, not the orchestrator) |
-| (orchestrator side) | nothing new | reuses libcurl, cpp-httplib |
+## Step 1 — Choose the streaming STT engine (decision point)
 
-## Step 1 — Whisper streaming HTTP wrapper
+Upstream `whisper.cpp/examples/server` (used through M4 in Compose) is **request/response only**. To stream partials we have three options. The decision is logged as an open question in `plans/open_questions.md`; pick at the start of M5.
 
-The wrapper is its own subproject; it ships in `packaging/whisper-server/` and is built independently. Without modifying whisper.cpp itself, we need:
+### Option A — Custom C++ wrapper around whisper.cpp's `stream` example
 
-- A long-lived process holding the model in memory.
-- An HTTP API that streams partials.
-- Sliding-window inference (whisper.cpp's `stream` example does this).
+What we originally planned.
 
-**Recommended approach:** vendor whisper.cpp's `examples/stream/stream.cpp` as a reference, write a C++ HTTP wrapper around it using cpp-httplib.
+- New deps: `whisper.cpp` upstream, linked into our own binary.
+- Files in `packaging/whisper-server/`: `CMakeLists.txt`, `main.cpp` (cpp-httplib server), `whisper_session.hpp/cpp`, `README.md`. Independent CMake subproject.
+- HTTP contract:
+  - `POST /utterance/start` `{utterance_id, expect_lang}` → `{ok}`
+  - `POST /utterance/audio` (raw PCM, 16 kHz mono int16, `X-Utterance-Id` header) → 204
+  - `GET /utterance/stream?id=...` → SSE: `partial` then `final` events
+  - `POST /utterance/end` → `{ok}`
+- Streaming algorithm: sliding window with overlap, per whisper.cpp's `examples/stream`. Run inference every `step_ms` (default 500) on the last `keep_ms + audio_since_last_step`; emit a partial after each step; stable prefix = unchanged substring.
+- **Pros:** maximal control; uses whisper.cpp directly (matches model files we already have); zero upstream dependency drift.
+- **Cons:** ~5 days of work; one more subproject to maintain; we own the streaming algorithm.
 
-**HTTP API (the orchestrator's contract):**
+### Option B — Adopt Speaches (faster-whisper) [RECOMMENDED]
 
-- `POST /utterance/start` body `{"utterance_id": "u-42", "expect_lang": null}` → `{ "ok": true }`
-  - Begins a new utterance session. Server allocates a sliding-window decoder.
-- `POST /utterance/audio` body raw PCM `audio/x-pcm; rate=16000; channels=1` with header `X-Utterance-Id: u-42` → `204 No Content`
-  - Append audio. Decoder runs incrementally.
-- `GET /utterance/stream?id=u-42` → SSE stream of:
+Drop-in OpenAI-compatible Realtime / streaming transcription server. Backend is `faster-whisper` (CTranslate2), typically faster than whisper.cpp on CPU. Active project, growing ecosystem.
+
+- New deps: none in our codebase. Add a `speaches` service to Compose.
+- The orchestrator's `WhisperClient` talks an OpenAI-Realtime-style WebSocket / SSE protocol.
+- Compose:
+  ```yaml
+  speaches:
+    image: ghcr.io/speaches-ai/speaches:latest-cpu   # or :latest-cuda
+    ports: ["127.0.0.1:8082:8000"]
+    volumes:
+      - ${LCLVA_MODELS_DIR:-${HOME}/.local/share/lclva/models}/speaches:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
   ```
-  event: partial
-  data: {"text":"hello","stable_prefix_len":5,"lang":"en","seq":1,"confidence":0.85}
+- Models: faster-whisper uses CTranslate2 format. Speaches downloads what it needs on first use.
+- **Pros:** ~5 days saved; faster STT engine; battle-tested by other projects; we get OpenAI-compat for both ends of the pipeline (consistent with llama-server).
+- **Cons:** upstream dependency we don't control; different model file format from M4's whisper.cpp setup (we'd swap the M1.B compose `whisper` service for `speaches`); WebSocket protocol on the client side instead of plain SSE.
 
-  event: final
-  data: {"text":"hello world","lang":"en","confidence":0.91,"audio_duration_ms":1200,"processing_ms":340}
-  ```
-- `POST /utterance/end` body `{"utterance_id": "u-42"}` → `{ "ok": true }`
-  - Forces the decoder to finalize and emit the `final` event.
-- `GET /health` → `{"ok": true, "model": "small", "loaded": true}`.
+### Option C — Defer speculation past MVP
 
-**Files in `packaging/whisper-server/`:**
-- `CMakeLists.txt`
-- `main.cpp` — cpp-httplib server.
-- `whisper_session.hpp/cpp` — wraps a single utterance's incremental decoder state.
-- `README.md` — build instructions and API contract documentation.
+Use upstream `whisper.cpp:server` (request/response) all the way through MVP. Drop the `SpeculativeThinking` concurrent state from the FSM. End-to-end latency takes a 300–500 ms hit on the median turn — perceived but bearable.
 
-**Build:** independent CMake project. Linked artifact is `whisper-server` binary, ~30 MB statically. Distribution is a separate concern; ships alongside the orchestrator.
+- New deps: none.
+- Files: `src/stt/whisper_client.{hpp,cpp}` only — no streaming, no speculation logic in dialogue manager.
+- M5 collapses to: multilingual flow + simple non-streaming whisper integration. ~5–6 days total.
+- **Pros:** smallest scope; ships fastest; lowest risk.
+- **Cons:** worse latency P95; the speculation FSM logic is post-MVP work.
 
-**Streaming algorithm:** straightforward sliding window with overlap. Per whisper.cpp's `stream`:
-- Run inference every `step_ms` (default 500) on the last `keep_ms + audio_since_last_step` (rolling).
-- Emit a partial after each step. The stable prefix is the substring that hasn't changed from the previous partial.
-- On `/utterance/end`, run a final inference over the full buffer and emit `final`.
+### Decision matrix
+
+| Option | Time | Streaming partials | Engine | Risk | Lock-in |
+|---|---|---|---|---|---|
+| A — Custom wrapper | ~3 weeks | Yes | whisper.cpp | Medium (we own a subproject) | Low |
+| B — Speaches | ~1.5 weeks | Yes | faster-whisper | Low (upstream maintained) | Medium |
+| C — Defer | ~1 week | No | whisper.cpp | Low | None |
+
+**Recommendation:** Option B unless Speaches has visibly stagnated by the time M5 starts. Verify before committing: read recent commit activity, check the model formats supported, run a 5-minute smoke against their image.
+
+The text below assumes Option A or B (streaming exists). If Option C is chosen, skip the speculation policy section and the FSM concurrent-state changes; M5 reduces to "wire whisper-server through with multilingual support."
 
 ## Step 2 — Whisper client
 
@@ -204,33 +218,37 @@ Touch points:
 
 ## Acceptance
 
-1. With `lclva-whisper.service` running, speaking a sentence emits 3+ `PartialTranscript` events and one `FinalTranscript`.
-2. Speculation savings are measurable: median first-token-ready latency 300 ms lower than M3-style behavior on a fixture set, while the assistant says the right thing on revisions.
-3. Multilingual: speaking in Russian routes to the Russian Piper voice (M3) and the LLM is prompted in Russian (system prompt selected by lang).
-4. Mid-utterance revision: speak "set an alarm for ten — wait, eleven AM"; the FSM either reconciles or restarts; the spoken answer is correct (mentions 11 AM, not 10).
+1. With the chosen STT backend running in Compose, speaking a sentence emits 3+ `PartialTranscript` events and one `FinalTranscript`. (Skip if Option C: only `FinalTranscript`.)
+2. Speculation savings: median first-token-ready latency 300 ms lower than non-speculation baseline on a fixture set. (N/A under Option C.)
+3. Multilingual: speaking in Russian routes to the Russian Piper voice (M3) and the LLM is prompted in Russian.
+4. Mid-utterance revision: speak "set an alarm for ten — wait, eleven AM"; the spoken answer mentions 11 AM, not 10. (Under Option C: works trivially since we wait for the final.)
 5. Memory rows have populated `lang` columns matching the detected language.
-6. `voice_speculation_kept_total` and `voice_speculation_restarted_total` counters emit non-zero values; ratio is >50% in stable sentences.
+6. (Options A/B only) `voice_speculation_kept_total` and `voice_speculation_restarted_total` counters emit non-zero values; ratio is > 50 % in stable sentences.
 
 ## Risks specific to M5
 
 | Risk | Mitigation |
 |---|---|
-| Whisper streaming wrapper complexity | Iterate against the upstream `stream.cpp` example; commit a vendored snapshot to keep build reproducible |
+| Streaming-engine choice deferred | Make decision early in M5; fallbacks to Option C if either A or B blocks |
+| Custom wrapper complexity (Option A) | Vendor whisper.cpp snapshot; iterate against `examples/stream` |
+| Speaches upstream drift (Option B) | Pin image digest; track upstream commit; one-line update PRs |
 | Speculative restart thrash | Conservative defaults; rate-limit; emit warning on disable |
 | Wrong language detection causes voice/prompt mismatch | Confidence threshold; fallback language; metric `voice_lang_low_confidence_total` |
-| Multilingual Whisper slower on CPU | Configurable model size (B3 decision); benchmark medium vs small at startup |
+| Multilingual STT slow on CPU | Configurable model size; benchmark at startup |
 | Race: FinalTranscript arrives before speculation is set up | Reconciliation handles both orders; FSM tests cover the race |
 | Speculative LLM run wastes GPU cycles | Hard cap by `speculation.max_restarts_per_minute`; report waste in metrics |
 
 ## Time breakdown
 
-| Step | Estimate |
-|---|---|
-| 1 Whisper wrapper (own subproject) | 5 days |
-| 2 Whisper client | 2 days |
-| 3 VAD → Whisper wiring | 1.5 days |
-| 4 FSM SpeculativeThinking | 2 days |
-| 5 Speculation policy | 1.5 days |
-| 6 Multilingual flow | 1 day |
-| 7 Tests + fixtures | 2 days |
-| **Total** | **~15 days = ~3 weeks** |
+Per option (steps 2-7 are mostly identical; Step 1 differs):
+
+| Step | A: Custom | B: Speaches | C: Defer |
+|---|---:|---:|---:|
+| 1 Streaming engine setup | 5 d | 0.5 d (compose only) | 0 |
+| 2 STT client (Whisper / Speaches / non-streaming) | 2 d | 1.5 d | 1 d |
+| 3 VAD → STT wiring | 1.5 d | 1.5 d | 1 d |
+| 4 FSM SpeculativeThinking | 2 d | 2 d | 0 (skip) |
+| 5 Speculation policy | 1.5 d | 1.5 d | 0 (skip) |
+| 6 Multilingual flow | 1 d | 1 d | 1 d |
+| 7 Tests + fixtures | 2 d | 2 d | 1.5 d |
+| **Total** | **~15 d (~3 wk)** | **~10 d (~2 wk)** | **~5 d (~1 wk)** |

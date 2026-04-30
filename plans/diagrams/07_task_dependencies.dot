@@ -1,0 +1,423 @@
+// 07_task_dependencies.dot — task-level dependency graph spanning all
+// nine milestones (M0..M8), with task → task edges.
+//
+// Render: dot -Tsvg 07_task_dependencies.dot -o 07_task_dependencies.svg
+//
+// What's drawn:
+//   • Each milestone is its own coloured cluster (palette mirrors
+//     project_design.md §17). M0 + M1 are done (✅ markers + bold task
+//     borders); M2..M8 are pending (dashed task borders, lighter cluster
+//     fill).
+//   • Intra-milestone edges are thin and use the milestone's own colour.
+//   • Cross-milestone deliverable edges are thick, labelled with the
+//     artefact that one milestone hands off to the next, and use the
+//     SOURCE milestone's colour. These come straight from each milestone
+//     plan's "Depends on:" / "Blocks:" lines.
+//
+// Source of truth for tasks: plans/milestones/m{0..8}_*.md.
+// Source of truth for done-status: CLAUDE.md ("M0 + M1 complete; Next: M2").
+
+digraph TaskDependencies {
+  rankdir=LR;
+  bgcolor="white";
+  pad=0.5;
+  splines=spline;
+  ranksep=0.7;
+  nodesep=0.20;
+  compound=true;
+
+  graph [fontname="Helvetica", fontsize=12];
+  node  [style="filled,rounded", shape=box, fontname="Helvetica",
+         fontsize=10, penwidth=1.0, color="#0F172A"];
+  edge  [fontname="Helvetica", fontsize=8, arrowsize=0.7];
+
+  // ===================================================================
+  // M0 — Skeleton runtime (DONE — slate)
+  // ===================================================================
+  subgraph cluster_M0 {
+    label="M0 ✅  Skeleton runtime  (≈ 1 week — landed)";
+    style="rounded,filled"; color="#334155"; fontcolor="#0F172A";
+    fillcolor="#E2E8F0"; fontsize=12; penwidth=2;
+
+    node [fillcolor="#64748B", fontcolor=white];
+    M0_1  [label="M0.1\nCMake + C++23"];
+    M0_2  [label="M0.2\nConfig (glaze YAML)"];
+    M0_3  [label="M0.3\nLogging (spdlog)"];
+    M0_4  [label="M0.4\nBoundedQueue<T>"];
+    M0_5  [label="M0.5\nEvent variant\n(19 types)"];
+    M0_6  [label="M0.6\nEventBus\npub/sub"];
+    M0_7  [label="M0.7\nTurnContext +\nCancellationToken"];
+    M0_8  [label="M0.8\nDialogue FSM\n(8 states)"];
+    M0_9  [label="M0.9\nMetrics Registry\n(prometheus-cpp)"];
+    M0_10 [label="M0.10\nControlServer\n/metrics /status /health"];
+    M0_11 [label="M0.11\nFakeDriver\n(synthetic turns)"];
+    M0_12 [label="M0.12\n24 doctest\nunit tests"];
+
+    edge [color="#475569", penwidth=0.8, arrowsize=0.6];
+    M0_1 -> M0_2 -> M0_3;
+    M0_4 -> M0_6;
+    M0_5 -> M0_6;
+    M0_6 -> M0_8;
+    M0_7 -> M0_8;
+    M0_3 -> M0_9;
+    M0_6 -> M0_9;
+    M0_9 -> M0_10;
+    M0_8 -> M0_10;
+    M0_8 -> M0_11;
+    {M0_2 M0_4 M0_5 M0_6 M0_7 M0_8 M0_9 M0_10 M0_11} -> M0_12 [style=dotted, arrowhead=none];
+  }
+
+  // ===================================================================
+  // M1 — LLM + Memory (DONE — violet, three parts)
+  // ===================================================================
+  subgraph cluster_M1 {
+    label="M1 ✅  LLM + Memory  (≈ 2 weeks — landed: A, B, C)";
+    style="rounded,filled"; color="#5B21B6"; fontcolor="#5B21B6";
+    fillcolor="#EDE9FE"; fontsize=12; penwidth=2;
+
+    // Part A — memory + foundation
+    subgraph cluster_M1A {
+      label="Part A: memory + foundation ✅";
+      style="rounded,dashed"; color="#7C3AED"; fontcolor="#5B21B6";
+      fillcolor="#F5F3FF"; fontsize=10;
+      node [fillcolor="#7C3AED", fontcolor=white];
+      M1_A1 [label="M1.A.1\nconfig: llm /\nmemory / dialogue"];
+      M1_A2 [label="M1.A.2\nDatabase + Statement\nResult<T,DbError>"];
+      M1_A3 [label="M1.A.3\nSchema + Repository\n(sessions/turns/\nsummaries/facts/settings)"];
+      M1_A4 [label="M1.A.4\nMemoryThread\n(single writer)"];
+      M1_A5 [label="M1.A.5\nRecovery sweep"];
+      M1_A6 [label="M1.A.6\nSentenceSplitter"];
+      M1_A7 [label="M1.A.7\nWire into\nmain.cpp"];
+
+      edge [color="#7C3AED", penwidth=0.8];
+      M1_A1 -> M1_A2 -> M1_A3 -> M1_A4 -> M1_A5;
+      M1_A1 -> M1_A6;
+      M1_A4 -> M1_A7;
+      M1_A5 -> M1_A7;
+      M1_A6 -> M1_A7;
+    }
+
+    // Part B — Compose stack
+    subgraph cluster_M1B {
+      label="Part B: Docker Compose stack ✅";
+      style="rounded,dashed"; color="#9333EA"; fontcolor="#5B21B6";
+      fillcolor="#F5F3FF"; fontsize=10;
+      node [fillcolor="#9333EA", fontcolor=white];
+      M1_B1 [label="M1.B.1\nDocker + NVIDIA\nContainer Toolkit"];
+      M1_B2 [label="M1.B.2\ncompose.yaml shim\n+ .env.example"];
+      M1_B3 [label="M1.B.3\ndocker-compose.yml\nllama / whisper / piper"];
+      M1_B4 [label="M1.B.4\n.env docs"];
+      M1_B5 [label="M1.B.5\nfetch-assets.sh\noperations"];
+      M1_B6 [label="M1.B.6\nhealthchecks"];
+      M1_B7 [label="M1.B.7\nsmoke verification"];
+
+      edge [color="#9333EA", penwidth=0.8];
+      M1_B1 -> M1_B2 -> M1_B3;
+      M1_B3 -> {M1_B4 M1_B5 M1_B6};
+      {M1_B4 M1_B5 M1_B6} -> M1_B7 [style=dotted, arrowhead=none];
+    }
+
+    // Part C — LLM integration + persistence
+    subgraph cluster_M1C {
+      label="Part C: LLM integration + persistence ✅";
+      style="rounded,dashed"; color="#A855F7"; fontcolor="#5B21B6";
+      fillcolor="#F5F3FF"; fontsize=10;
+      node [fillcolor="#A855F7", fontcolor=white];
+      M1_C1 [label="M1.C.1.1\nPromptBuilder"];
+      M1_C2 [label="M1.C.1.2\nLlmClient\n(libcurl SSE)"];
+      M1_C3 [label="M1.C.1.3\nDialogue Manager\n(I/O thread)"];
+      M1_C4 [label="M1.C.1.4\nTurnWriter\n(persistence)"];
+      M1_C5 [label="M1.C.2.1\nSummarizer stub"];
+      M1_C6 [label="M1.C.2.2\nJSON log sink"];
+
+      edge [color="#A855F7", penwidth=0.8];
+      M1_C1 -> M1_C3;
+      M1_C2 -> M1_C3;
+      M1_C3 -> M1_C4;
+      M1_C3 -> M1_C5;
+    }
+
+    // intra-Part dependencies
+    edge [color="#5B21B6", penwidth=1.0, style=dashed];
+    M1_A4 -> M1_C1 [label="MemoryThread::read"];
+    M1_A4 -> M1_C5 [label="MemoryThread::post"];
+    M1_A6 -> M1_C3 [label="splitter inside Manager"];
+    M1_B7 -> M1_C2 [label="llama service\nis up"];
+    M1_C2 -> M1_C5 [label="LLM for summary"];
+  }
+
+  // ===================================================================
+  // M2 — Supervision (PENDING — cyan)
+  // ===================================================================
+  subgraph cluster_M2 {
+    label="M2  Service supervision  (≈ 3 days — pending; next up)";
+    style="rounded,dashed"; color="#0891B2"; fontcolor="#155E75";
+    fillcolor="#ECFEFF"; fontsize=12; penwidth=1.4;
+
+    node [fillcolor="#0891B2", fontcolor=white, style="filled,rounded,dashed"];
+    M2_1 [label="M2.1\nHTTP probe\n(GET /health)"];
+    M2_2 [label="M2.2\nServiceMonitor FSM\nProbing→Healthy↔Degraded\n→Unhealthy"];
+    M2_3 [label="M2.3\nSupervisor\n(per-service monitors,\n/status aggregation)"];
+    M2_4 [label="M2.4\nLLM keep-alive\n1-token completion"];
+    M2_5 [label="M2.5\nPipeline gating\n(refuse turns if LLM\nUnhealthy > grace)"];
+    M2_6 [label="M2.6\nconfig: supervisor.*"];
+    M2_7 [label="M2.7\nintegration tests"];
+
+    edge [color="#0891B2", penwidth=0.8, style=dashed];
+    M2_1 -> M2_2 -> M2_3;
+    M2_3 -> M2_5;
+    M2_4 -> M2_5;
+    M2_6 -> {M2_1 M2_4} [style=dotted];
+    {M2_1 M2_2 M2_3 M2_4 M2_5} -> M2_7 [style=dotted, arrowhead=none];
+  }
+
+  // ===================================================================
+  // M3 — TTS + Playback (PENDING — amber)
+  // ===================================================================
+  subgraph cluster_M3 {
+    label="M3  TTS + Playback  (≈ 1 week — pending)";
+    style="rounded,dashed"; color="#D97706"; fontcolor="#92400E";
+    fillcolor="#FEF3C7"; fontsize=12; penwidth=1.4;
+
+    node [fillcolor="#F59E0B", fontcolor=white, style="filled,rounded,dashed"];
+    M3_1 [label="M3.1\nPiperClient\n(POST text→WAV)"];
+    M3_2 [label="M3.2\nPer-language\nvoice routing"];
+    M3_3 [label="M3.3\nPlaybackQueue\nturn_id + seq tagging"];
+    M3_4 [label="M3.4\nPlayback engine\n(PortAudio realtime cb)"];
+    M3_5 [label="M3.5\nResampler\n22.05 → 48 kHz (soxr)"];
+    M3_6 [label="M3.6\nTtsBridge\nLlmSentence → Piper\n→ resample → queue"];
+    M3_7 [label="M3.7\nSentence cap\nmax_assistant_sentences"];
+    M3_8 [label="M3.8\nconfig: tts /\nplayback / audio"];
+
+    edge [color="#D97706", penwidth=0.8, style=dashed];
+    M3_1 -> M3_2 -> M3_6;
+    M3_3 -> M3_4 -> M3_6;
+    M3_5 -> M3_6;
+    M3_8 -> {M3_1 M3_3 M3_4} [style=dotted];
+  }
+
+  // ===================================================================
+  // M4 — Audio capture + VAD (PENDING — blue)
+  // ===================================================================
+  subgraph cluster_M4 {
+    label="M4  Audio capture + VAD  (≈ 1–2 weeks — pending)";
+    style="rounded,dashed"; color="#1D4ED8"; fontcolor="#1E3A8A";
+    fillcolor="#DBEAFE"; fontsize=12; penwidth=1.4;
+
+    node [fillcolor="#3B82F6", fontcolor=white, style="filled,rounded,dashed"];
+    M4_1 [label="M4.1\nMonotonicAudioClock"];
+    M4_2 [label="M4.2\nSPSC ring\n(lock-free)"];
+    M4_3 [label="M4.3\nAudio capture\n(PortAudio cb)"];
+    M4_4 [label="M4.4\nSilero VAD\n(ONNX Runtime)"];
+    M4_5 [label="M4.5\nEndpointer\nQuiet→Onset→Speaking\n→Endpoint"];
+    M4_6 [label="M4.6\nUtterance buffer\nshared_ptr<AudioSlice>"];
+    M4_7 [label="M4.7\nWire SPSC→\nResample→VAD→Endpoint\n→UttBuf"];
+    M4_8 [label="M4.8\nDisable fake-driver\nwhen capture enabled"];
+    M4_9 [label="M4.9\nconfig: audio /\nvad / utterance"];
+
+    edge [color="#1D4ED8", penwidth=0.8, style=dashed];
+    M4_1 -> M4_3;
+    M4_2 -> M4_3 -> M4_7;
+    M4_4 -> M4_5 -> M4_6 -> M4_7;
+    M4_7 -> M4_8 [style=dotted];
+    M4_9 -> {M4_3 M4_4 M4_5 M4_6} [style=dotted];
+  }
+
+  // ===================================================================
+  // M5 — Streaming STT + speculation (PENDING — emerald)
+  // ===================================================================
+  subgraph cluster_M5 {
+    label="M5  Streaming STT + speculation  (≈ 1.5–3 weeks — pending)";
+    style="rounded,dashed"; color="#059669"; fontcolor="#065F46";
+    fillcolor="#D1FAE5"; fontsize=12; penwidth=1.4;
+
+    node [fillcolor="#10B981", fontcolor=white, style="filled,rounded,dashed"];
+    M5_1 [label="M5.1\nEngine choice\nA custom / B Speaches /\nC defer  (decision gate)",
+          fillcolor="#34D399", fontcolor="#064E3B", shape=diamond];
+    M5_2 [label="M5.2\nWhisperClient\nstreaming partials\n+ FinalTranscript"];
+    M5_3 [label="M5.3\nVAD → STT wiring\nSpeechStarted triggers\npush_audio chunks"];
+    M5_4 [label="M5.4\nFSM SpeculativeThinking\nconcurrent sub-state"];
+    M5_5 [label="M5.5\nSpeculation policy\nstable-prefix gate;\nreconcile match/mismatch"];
+    M5_6 [label="M5.6\nMultilingual flow\nlang → system prompt\n+ TTS voice"];
+    M5_7 [label="M5.7\nspeculation tests\n+ multilingual smoke"];
+
+    edge [color="#059669", penwidth=0.8, style=dashed];
+    M5_1 -> M5_2 -> M5_3;
+    M5_3 -> M5_4 -> M5_5;
+    M5_2 -> M5_6;
+    {M5_4 M5_5 M5_6} -> M5_7 [style=dotted, arrowhead=none];
+  }
+
+  // ===================================================================
+  // M6 — AEC / NS / AGC (PENDING — indigo)
+  // ===================================================================
+  subgraph cluster_M6 {
+    label="M6  AEC / NS / AGC  (≈ 1–2 weeks — pending; before M7)";
+    style="rounded,dashed"; color="#1E40AF"; fontcolor="#1E3A8A";
+    fillcolor="#E0E7FF"; fontsize=12; penwidth=1.4;
+
+    node [fillcolor="#2563EB", fontcolor=white, style="filled,rounded,dashed"];
+    M6_1 [label="M6.1\nLoopback tap\n(post playback resample)"];
+    M6_2 [label="M6.2\nWebRTC APM wrapper\nAEC + NS + AGC"];
+    M6_3 [label="M6.3\nIntegrate APM\npost-resample, pre-VAD"];
+    M6_4 [label="M6.4\nDelay alignment\n(MonotonicAudioClock)"];
+    M6_5 [label="M6.5\nERLE > 25 dB\nvalidation (1 kHz sine)"];
+    M6_6 [label="M6.6\nconfig: apm.*"];
+    M6_7 [label="M6.7\nVAD threshold\nre-baseline"];
+
+    edge [color="#1E40AF", penwidth=0.8, style=dashed];
+    M6_1 -> M6_2 -> M6_3 -> M6_4 -> M6_5;
+    M6_3 -> M6_7;
+    M6_6 -> M6_2 [style=dotted];
+  }
+
+  // ===================================================================
+  // M7 — Barge-In (PENDING — red)
+  // ===================================================================
+  subgraph cluster_M7 {
+    label="M7  Barge-in  (≈ 1 week — pending; needs AEC + partials)";
+    style="rounded,dashed"; color="#B91C1C"; fontcolor="#7F1D1D";
+    fillcolor="#FEE2E2"; fontsize=12; penwidth=1.4;
+
+    node [fillcolor="#DC2626", fontcolor=white, style="filled,rounded,dashed"];
+    M7_1 [label="M7.1\nBarge-in detector\nVAD on AEC-cleaned audio\nduring Speaking"];
+    M7_2 [label="M7.2\nCancellation cascade\nverification end-to-end"];
+    M7_3 [label="M7.3\nMemory persistence\nDiscarded < 1 sentence,\nelse Interrupted"];
+    M7_4 [label="M7.4\nbarge-in latency metric\nvoice_barge_in_latency_ms"];
+    M7_5 [label="M7.5\nValidation suite\nclean / noisy / TV / self"];
+    M7_6 [label="M7.6\nUX polish\n(no greeting, cool-down,\nmin_real_utterance_chars)"];
+    M7_7 [label="M7.7\nconfig: barge_in.*"];
+
+    edge [color="#B91C1C", penwidth=0.8, style=dashed];
+    M7_1 -> M7_2 -> M7_3;
+    M7_2 -> M7_4;
+    {M7_1 M7_2 M7_3 M7_4} -> M7_5 [style=dotted, arrowhead=none];
+    M7_1 -> M7_6;
+    M7_7 -> {M7_1 M7_6} [style=dotted];
+  }
+
+  // ===================================================================
+  // M8 — Production hardening (PENDING — green)
+  // ===================================================================
+  subgraph cluster_M8 {
+    label="M8  Production hardening  (≈ 2 weeks — pending; gates MVP)";
+    style="rounded,dashed"; color="#15803D"; fontcolor="#14532D";
+    fillcolor="#DCFCE7"; fontsize=12; penwidth=1.4;
+
+    node [fillcolor="#16A34A", fontcolor=white, style="filled,rounded,dashed"];
+    M8_1 [label="M8.1\n4-h soak harness\n+ CSV report"];
+    M8_2 [label="M8.2\nMetrics dashboard\nGrafana / static HTML"];
+    M8_3 [label="M8.3\nHot-reload\nPOST /reload"];
+    M8_4 [label="M8.4\nPrivacy commands\n/mute /wipe /new-session"];
+    M8_5 [label="M8.5\nOTLP wiring\n(opt-in; per-turn span tree)"];
+    M8_6 [label="M8.6\nPackaging\nCompose + systemd units"];
+    M8_7 [label="M8.7\nDocs + runbook"];
+    M8_8 [label="M8.8\nFinal sweep\nclang-tidy / ASan /\nUBSan / TSan"];
+
+    edge [color="#15803D", penwidth=0.8, style=dashed];
+    M8_1 -> M8_8;
+    {M8_2 M8_3 M8_4 M8_5 M8_6 M8_7} -> M8_8 [style=dotted];
+  }
+
+  // ===================================================================
+  // CROSS-MILESTONE DELIVERABLE EDGES (thick, labelled, colour =
+  // SOURCE milestone). Names match the "Depends on:" / "Blocks:" lines
+  // in each milestone plan and the cross-cutting components called out
+  // in §17 of project_design.md.
+  // ===================================================================
+
+  // ---- M0 → all (foundation) ----
+  edge [penwidth=1.6, color="#334155", style=solid, fontcolor="#334155"];
+  M0_6  -> M1_C3 [label="EventBus pub/sub"];
+  M0_7  -> M1_C3 [label="TurnContext +\ncancel token"];
+  M0_8  -> M1_C3 [label="FSM state +\nturn outcome obs"];
+  M0_9  -> M2_3  [label="Registry\nfor /status /metrics"];
+  M0_10 -> M2_3  [label="ControlServer\n(/status route)"];
+  M0_11 -> M3_6  [label="FakeDriver\n(M3 still uses it for\nLlmSentence stubs)"];
+  M0_8  -> M5_4  [label="FSM extended in\nSpeculativeThinking"];
+  M0_8  -> M7_2  [label="cancellation cascade\n(turn id bump)"];
+
+  // ---- M1 → downstream ----
+  edge [penwidth=1.6, color="#7C3AED", style=solid, fontcolor="#5B21B6"];
+  M1_C2 -> M2_1  [label="LlmClient\n→ probe /health"];
+  M1_C2 -> M2_4  [label="LlmClient\n→ keep-alive"];
+  M1_C3 -> M2_5  [label="Manager\n→ refuse on gate"];
+  M1_C3 -> M5_3  [label="Manager consumes\nFinalTranscript"];
+  M1_C3 -> M5_5  [label="Manager runs\nspeculation policy"];
+  M1_A4 -> M5_6  [label="MemoryThread.lang\ncolumn already there"];
+  M1_A3 -> M7_3  [label="TurnStatus enum\n(Interrupted/Discarded)"];
+  M1_C4 -> M7_3  [label="TurnWriter extended\nfor barge-in"];
+  M1_A5 -> M8_1  [label="Recovery sweep\nexercised by soak"];
+  M1_C6 -> M8_2  [label="JSON log sink\n→ dashboard input"];
+  M1_B3 -> M3_1  [label="piper service\nalready in compose"];
+  M1_B3 -> M5_2  [label="whisper service\nalready in compose"];
+
+  // ---- M2 → downstream ----
+  edge [penwidth=1.6, color="#0891B2", style=solid, fontcolor="#155E75"];
+  M2_3 -> M3_1  [label="TTS health-probed\nthrough Supervisor"];
+  M2_3 -> M5_2  [label="STT health-probed"];
+  M2_3 -> M8_2  [label="HealthChanged\n→ dashboard panel"];
+
+  // ---- M3 → downstream ----
+  edge [penwidth=1.6, color="#D97706", style=solid, fontcolor="#92400E"];
+  M3_4 -> M4_3  [label="PortAudio device\n+ duplex stream"];
+  M3_5 -> M4_7  [label="soxr resampler\n(reverse direction\n48 → 16 kHz)"];
+  M3_4 -> M6_1  [label="Loopback tap point\n(post-resample mix)"];
+  M3_3 -> M6_1  [label="PlaybackQueue\nis the AEC ref source"];
+  M3_3 -> M7_2  [label="Playback queue drain\non barge-in"];
+  M3_2 -> M5_6  [label="voice URL routing\n(consumes detected lang)"];
+  M3_6 -> M7_2  [label="TtsBridge invalidates\nin-flight TTS on cancel"];
+
+  // ---- M4 → downstream ----
+  edge [penwidth=1.6, color="#1D4ED8", style=solid, fontcolor="#1E3A8A"];
+  M4_1 -> M6_4  [label="MonotonicAudioClock\n= AEC time base"];
+  M4_3 -> M6_3  [label="capture stream\n+ APM injection point"];
+  M4_5 -> M5_3  [label="SpeechStarted /\nSpeechEnded triggers"];
+  M4_6 -> M5_3  [label="UtteranceReady\n(AudioSlice → STT)"];
+  M4_7 -> M6_7  [label="VAD pipeline that\nM6 re-baselines"];
+
+  // ---- M5 → downstream ----
+  edge [penwidth=1.6, color="#059669", style=solid, fontcolor="#065F46"];
+  M5_2 -> M7_1  [label="PartialTranscript\n→ barge-in detector"];
+  M5_5 -> M7_2  [label="speculation cancel uses\nsame cascade machinery"];
+  M5_5 -> M8_2  [label="speculation kept/restart\nmetrics → dashboard"];
+
+  // ---- M6 → downstream ----
+  edge [penwidth=1.6, color="#1E40AF", style=solid, fontcolor="#1E3A8A"];
+  M6_3 -> M7_1  [label="AEC-cleaned audio\nis the only safe\nbarge-in input"];
+  M6_4 -> M7_1  [label="AEC convergence gate\n(min ERLE)"];
+  M6_5 -> M8_1  [label="ERLE soak metric"];
+
+  // ---- M7 → downstream ----
+  edge [penwidth=1.6, color="#B91C1C", style=solid, fontcolor="#7F1D1D"];
+  M7_4 -> M8_2  [label="voice_barge_in_latency_ms\n→ dashboard"];
+  M7_5 -> M8_1  [label="barge-in soak fixtures"];
+
+  // ===================================================================
+  // LEGEND
+  // ===================================================================
+  subgraph cluster_legend {
+    label="legend  •  one colour per milestone  •  task ID = milestone.<step>";
+    style="rounded,filled"; color="#0F172A"; fillcolor="#F8FAFC"; fontcolor="#0F172A"; fontsize=11;
+
+    node [fontsize=10, penwidth=1.0];
+    L0 [label="M0 ✅ slate",  fillcolor="#64748B", fontcolor=white];
+    L1 [label="M1 ✅ violet", fillcolor="#7C3AED", fontcolor=white];
+    L2 [label="M2 cyan",      fillcolor="#0891B2", fontcolor=white, style="filled,rounded,dashed"];
+    L3 [label="M3 amber",     fillcolor="#F59E0B", fontcolor=white, style="filled,rounded,dashed"];
+    L4 [label="M4 blue",      fillcolor="#3B82F6", fontcolor=white, style="filled,rounded,dashed"];
+    L5 [label="M5 emerald",   fillcolor="#10B981", fontcolor=white, style="filled,rounded,dashed"];
+    L6 [label="M6 indigo",    fillcolor="#2563EB", fontcolor=white, style="filled,rounded,dashed"];
+    L7 [label="M7 red",       fillcolor="#DC2626", fontcolor=white, style="filled,rounded,dashed"];
+    L8 [label="M8 green",     fillcolor="#16A34A", fontcolor=white, style="filled,rounded,dashed"];
+
+    Le1 [label="thin = intra-milestone\norder", fillcolor="#F1F5F9", fontcolor="#475569", shape=note];
+    Le2 [label="thick + label =\ncross-milestone deliverable\n(coloured by source)",
+         fillcolor="#F1F5F9", fontcolor="#475569", shape=note];
+    Le3 [label="dashed border =\npending  •  bold border =\nlanded",
+         fillcolor="#F1F5F9", fontcolor="#475569", shape=note];
+
+    edge [style=invis];
+    L0 -> L1 -> L2 -> L3 -> L4 -> L5 -> L6 -> L7 -> L8 -> Le1 -> Le2 -> Le3;
+  }
+}

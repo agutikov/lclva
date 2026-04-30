@@ -4,6 +4,8 @@
 #include "event/bus.hpp"
 #include "http/server.hpp"
 #include "log/log.hpp"
+#include "memory/memory_thread.hpp"
+#include "memory/recovery.hpp"
 #include "metrics/registry.hpp"
 #include "pipeline/fake_driver.hpp"
 
@@ -103,6 +105,34 @@ int main(int argc, char** argv) {
     lclva::event::EventBus bus;
     auto registry = std::make_shared<lclva::metrics::Registry>();
     auto metric_subs = registry->subscribe(bus); // keep-alive
+
+    // Memory layer: open the database (or create it) and run the recovery
+    // sweep so any in-flight turns from a previous crash get cleaned up
+    // before we accept new traffic.
+    auto mem_or = lclva::memory::MemoryThread::open(
+        cfg.memory.db_path, cfg.memory.write_queue_capacity);
+    if (auto* err = std::get_if<lclva::memory::DbError>(&mem_or)) {
+        std::cerr << "memory: " << err->message << "\n";
+        return EXIT_FAILURE;
+    }
+    auto memory = std::move(std::get<std::unique_ptr<lclva::memory::MemoryThread>>(mem_or));
+
+    {
+        auto sweep = memory->read([](lclva::memory::Repository& repo) {
+            return lclva::memory::run_recovery(repo, repo.database());
+        });
+        if (auto* err = std::get_if<lclva::memory::DbError>(&sweep)) {
+            lclva::log::error("main",
+                fmt::format("recovery sweep failed: {}", err->message));
+            return EXIT_FAILURE;
+        }
+        const auto s = std::get<lclva::memory::RecoverySummary>(sweep);
+        lclva::log::info("main", fmt::format(
+            "recovery: closed {} sessions, marked {} turns interrupted, "
+            "{} stale of {} summaries",
+            s.sessions_closed, s.turns_marked_interrupted,
+            s.summaries_stale, s.summaries_total));
+    }
 
     lclva::dialogue::TurnFactory turns;
     lclva::dialogue::Fsm fsm(bus, turns);

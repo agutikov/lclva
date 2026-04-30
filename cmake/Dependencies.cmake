@@ -9,6 +9,8 @@ find_package(spdlog CONFIG REQUIRED)
 find_package(fmt CONFIG REQUIRED)
 find_package(doctest CONFIG REQUIRED)
 find_package(prometheus-cpp CONFIG REQUIRED COMPONENTS core pull)
+find_package(SQLite3 REQUIRED)
+find_package(CURL REQUIRED)
 find_package(Threads REQUIRED)
 
 # cpp-httplib is vendored as a single header in third_party/cpp-httplib.

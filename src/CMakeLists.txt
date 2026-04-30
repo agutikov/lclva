@@ -2,11 +2,16 @@
 add_library(lclva_core STATIC
     config/config.cpp
     dialogue/fsm.cpp
+    dialogue/sentence_splitter.cpp
     dialogue/turn.cpp
     event/bus.cpp
     event/event.cpp
     http/server.cpp
     log/log.cpp
+    memory/db.cpp
+    memory/memory_thread.cpp
+    memory/recovery.cpp
+    memory/repository.cpp
     metrics/registry.cpp
     pipeline/fake_driver.cpp
 )
@@ -20,6 +25,8 @@ target_link_libraries(lclva_core
         fmt::fmt
         prometheus-cpp::core
         prometheus-cpp::pull
+        SQLite::SQLite3
+        CURL::libcurl
         Threads::Threads
     PRIVATE
         lclva_httplib

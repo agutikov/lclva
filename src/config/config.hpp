@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -39,10 +40,60 @@ struct PipelineConfig {
     double fake_barge_in_probability = 0.0;
 };
 
+struct LlmConfig {
+    std::string base_url = "http://127.0.0.1:8081/v1";
+    std::string model = "qwen2.5-7b-instruct";
+    std::string unit = "lclva-llama.service";
+    double temperature = 0.7;
+    uint32_t max_tokens = 400;
+    uint32_t max_prompt_tokens = 3000;
+    uint32_t request_timeout_seconds = 60;
+    uint32_t keep_alive_interval_seconds = 60;
+};
+
+struct MemorySummaryConfig {
+    std::string trigger = "turns";    // turns | tokens | idle | hybrid
+    uint32_t turn_threshold = 15;
+    uint32_t token_threshold = 4000;
+    uint32_t idle_seconds = 120;
+    std::string language = "dominant"; // dominant | english | recent
+};
+
+struct MemoryFactsConfig {
+    std::string policy = "conservative"; // conservative | moderate | aggressive | manual_only
+    double confidence_threshold = 0.7;
+};
+
+struct MemoryConfig {
+    std::string db_path = "${XDG_DATA_HOME:-~/.local/share}/lclva/lclva.db";
+    uint32_t recent_turns_n = 10;
+    uint32_t write_queue_capacity = 256;
+    MemorySummaryConfig summary;
+    MemoryFactsConfig facts;
+};
+
+struct SentenceSplitterConfig {
+    uint32_t max_sentence_chars = 600; // forced flush threshold
+    bool detect_code_fences = true;
+};
+
+struct DialogueConfig {
+    uint32_t recent_turns_n = 10;
+    uint32_t max_assistant_sentences = 6;
+    uint32_t max_assistant_tokens = 400;
+    std::string fallback_language = "en";
+    // Map of lang code → system-prompt text. English is required.
+    std::map<std::string, std::string> system_prompts;
+    SentenceSplitterConfig sentence_splitter;
+};
+
 struct Config {
     LoggingConfig logging;
     ControlConfig control;
     PipelineConfig pipeline;
+    LlmConfig llm;
+    MemoryConfig memory;
+    DialogueConfig dialogue;
 };
 
 struct LoadError {

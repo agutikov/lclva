@@ -74,6 +74,44 @@ std::optional<LoadError> validate(const Config& cfg) {
     if (cfg.pipeline.fake_sentences_per_turn == 0) {
         return LoadError{"config: pipeline.fake_sentences_per_turn: must be > 0"};
     }
+    if (cfg.llm.temperature < 0.0 || cfg.llm.temperature > 2.0) {
+        return LoadError{"config: llm.temperature: must be in [0, 2]"};
+    }
+    if (cfg.llm.max_tokens == 0) {
+        return LoadError{"config: llm.max_tokens: must be > 0"};
+    }
+    if (cfg.llm.max_prompt_tokens == 0) {
+        return LoadError{"config: llm.max_prompt_tokens: must be > 0"};
+    }
+    if (cfg.memory.recent_turns_n == 0) {
+        return LoadError{"config: memory.recent_turns_n: must be > 0"};
+    }
+    static constexpr std::array kSummaryTriggers{
+        std::string_view{"turns"}, std::string_view{"tokens"},
+        std::string_view{"idle"},  std::string_view{"hybrid"},
+    };
+    if (!contains(cfg.memory.summary.trigger, kSummaryTriggers)) {
+        return LoadError{"config: memory.summary.trigger: must be one of turns|tokens|idle|hybrid"};
+    }
+    static constexpr std::array kFactsPolicies{
+        std::string_view{"conservative"}, std::string_view{"moderate"},
+        std::string_view{"aggressive"},   std::string_view{"manual_only"},
+    };
+    if (!contains(cfg.memory.facts.policy, kFactsPolicies)) {
+        return LoadError{"config: memory.facts.policy: must be conservative|moderate|aggressive|manual_only"};
+    }
+    if (cfg.dialogue.max_assistant_sentences == 0) {
+        return LoadError{"config: dialogue.max_assistant_sentences: must be > 0"};
+    }
+    // Only enforce fallback_language presence when *any* system_prompts are
+    // configured. An empty map is allowed for tests / minimal configs;
+    // dialogue.manager will error at runtime if it actually tries to look one up.
+    if (!cfg.dialogue.system_prompts.empty()
+        && !cfg.dialogue.system_prompts.contains(cfg.dialogue.fallback_language)) {
+        return LoadError{
+            "config: dialogue.system_prompts: must contain an entry for the fallback_language ('"
+            + cfg.dialogue.fallback_language + "')"};
+    }
     return std::nullopt;
 }
 

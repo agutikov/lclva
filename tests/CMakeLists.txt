@@ -2,8 +2,13 @@ add_executable(lclva_tests
     test_main.cpp
     test_bus.cpp
     test_config.cpp
+    test_db.cpp
     test_fsm.cpp
+    test_memory_thread.cpp
     test_queue.cpp
+    test_recovery.cpp
+    test_repository.cpp
+    test_sentence_splitter.cpp
 )
 
 target_link_libraries(lclva_tests

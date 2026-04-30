@@ -1,0 +1,215 @@
+// 01_components_tree.dot — package / component tree of the acva repository.
+//
+// Render: dot -Tpng 01_components_tree.dot -o 01_components_tree.png
+//         dot -Tsvg 01_components_tree.dot -o 01_components_tree.svg
+//
+// Reflects state at M0 + M1.A landed (90/90 tests passing).
+// Source of truth: the on-disk layout under /home/user/work/acva and
+// `src/CMakeLists.txt`. Tests-vs-subsystems alignment is shown by colour.
+
+digraph ComponentsTree {
+  rankdir=LR;
+  bgcolor="white";
+  pad=0.4;
+  splines=true;
+  ranksep=0.6;
+  nodesep=0.18;
+
+  node [style="filled,rounded", shape=box, fontname="Helvetica",
+        fontsize=10, penwidth=1.0, color="#0F172A"];
+  edge [color="#475569", penwidth=1.0, arrowsize=0.7];
+
+  // -------- root --------
+  Root [label="acva/", fillcolor="#0F172A", fontcolor=white, fontsize=14,
+        shape=folder, penwidth=1.6];
+
+  // -------- top-level files --------
+  CL  [label="CLAUDE.md",          fillcolor="#FEF3C7", fontcolor="#78350F", shape=note];
+  RM  [label="README.md",          fillcolor="#FEF3C7", fontcolor="#78350F", shape=note];
+  CMK [label="CMakeLists.txt\nCMakePresets.json", fillcolor="#E2E8F0", fontcolor="#0F172A"];
+  CMP [label="compose.yaml\n.env.example",        fillcolor="#E2E8F0", fontcolor="#0F172A"];
+  CC  [label="compile_commands.json\n→ build/dev/", fillcolor="#F1F5F9", fontcolor="#475569", shape=oval];
+
+  Root -> {CL RM CMK CMP CC};
+
+  // -------- src/ --------
+  Src [label="src/  (acva_core + acva)", fillcolor="#1E293B", fontcolor=white, shape=folder, fontsize=12];
+  Root -> Src;
+
+  Main [label="main.cpp\n(orchestrator entry)",   fillcolor="#0F172A", fontcolor=white];
+  Src  -> Main;
+
+  // subsystem clusters — each colour is reused across all 6 diagrams
+  subgraph cluster_config {
+    label="src/config/  •  YAML + validation";
+    style="rounded,filled"; color="#475569"; fontcolor="#475569"; fillcolor="#F8FAFC"; fontsize=11;
+    Cfg_h  [label="config.hpp",  fillcolor="#64748B", fontcolor=white];
+    Cfg_c  [label="config.cpp",  fillcolor="#64748B", fontcolor=white];
+  }
+
+  subgraph cluster_event {
+    label="src/event/  •  control bus + bounded queue";
+    style="rounded,filled"; color="#0EA5E9"; fontcolor="#0369A1"; fillcolor="#F0F9FF"; fontsize=11;
+    Ev_h   [label="event.hpp",   fillcolor="#0EA5E9", fontcolor=white];
+    Ev_c   [label="event.cpp",   fillcolor="#0EA5E9", fontcolor=white];
+    Bus_h  [label="bus.hpp",     fillcolor="#0284C7", fontcolor=white];
+    Bus_c  [label="bus.cpp",     fillcolor="#0284C7", fontcolor=white];
+    Q_h    [label="queue.hpp",   fillcolor="#0369A1", fontcolor=white];
+  }
+
+  subgraph cluster_log {
+    label="src/log/  •  spdlog + JSON sink (M1.s3)";
+    style="rounded,filled"; color="#A16207"; fontcolor="#78350F"; fillcolor="#FFFBEB"; fontsize=11;
+    Log_h  [label="log.hpp",      fillcolor="#CA8A04", fontcolor=white];
+    Log_c  [label="log.cpp",      fillcolor="#CA8A04", fontcolor=white];
+    Js_h   [label="json_sink.hpp",fillcolor="#A16207", fontcolor=white];
+    Js_c   [label="json_sink.cpp",fillcolor="#A16207", fontcolor=white];
+  }
+
+  subgraph cluster_metrics {
+    label="src/metrics/  •  prometheus-cpp registry";
+    style="rounded,filled"; color="#475569"; fontcolor="#1E293B"; fillcolor="#F1F5F9"; fontsize=11;
+    Mr_h [label="registry.hpp", fillcolor="#334155", fontcolor=white];
+    Mr_c [label="registry.cpp", fillcolor="#334155", fontcolor=white];
+  }
+
+  subgraph cluster_http {
+    label="src/http/  •  /metrics /status /health";
+    style="rounded,filled"; color="#0891B2"; fontcolor="#155E75"; fillcolor="#ECFEFF"; fontsize=11;
+    Hs_h [label="server.hpp", fillcolor="#0891B2", fontcolor=white];
+    Hs_c [label="server.cpp", fillcolor="#0891B2", fontcolor=white];
+  }
+
+  subgraph cluster_memory {
+    label="src/memory/  •  SQLite + dedicated writer thread";
+    style="rounded,filled"; color="#7C3AED"; fontcolor="#5B21B6"; fillcolor="#F5F3FF"; fontsize=11;
+    Db_h   [label="db.hpp",            fillcolor="#7C3AED", fontcolor=white];
+    Db_c   [label="db.cpp",            fillcolor="#7C3AED", fontcolor=white];
+    Mt_h   [label="memory_thread.hpp", fillcolor="#8B5CF6", fontcolor=white];
+    Mt_c   [label="memory_thread.cpp", fillcolor="#8B5CF6", fontcolor=white];
+    Rp_h   [label="repository.hpp",    fillcolor="#A78BFA", fontcolor="#1E1B4B"];
+    Rp_c   [label="repository.cpp",    fillcolor="#A78BFA", fontcolor="#1E1B4B"];
+    Rc_h   [label="recovery.hpp",      fillcolor="#6D28D9", fontcolor=white];
+    Rc_c   [label="recovery.cpp",      fillcolor="#6D28D9", fontcolor=white];
+    Sm_h   [label="summarizer.hpp",    fillcolor="#5B21B6", fontcolor=white];
+    Sm_c   [label="summarizer.cpp",    fillcolor="#5B21B6", fontcolor=white];
+    Sc_h   [label="schema.hpp",        fillcolor="#A78BFA", fontcolor="#1E1B4B"];
+  }
+
+  subgraph cluster_llm {
+    label="src/llm/  •  libcurl SSE + cpp-httplib probe";
+    style="rounded,filled"; color="#9333EA"; fontcolor="#6B21A8"; fillcolor="#FAF5FF"; fontsize=11;
+    Cl_h [label="client.hpp",          fillcolor="#9333EA", fontcolor=white];
+    Cl_c [label="client.cpp",          fillcolor="#9333EA", fontcolor=white];
+    Pb_h [label="prompt_builder.hpp",  fillcolor="#A855F7", fontcolor=white];
+    Pb_c [label="prompt_builder.cpp",  fillcolor="#A855F7", fontcolor=white];
+    Sse_h[label="sse_parser.hpp",      fillcolor="#7E22CE", fontcolor=white];
+    Sse_c[label="sse_parser.cpp",      fillcolor="#7E22CE", fontcolor=white];
+  }
+
+  subgraph cluster_dialogue {
+    label="src/dialogue/  •  FSM + Manager + writers";
+    style="rounded,filled"; color="#C026D3"; fontcolor="#86198F"; fillcolor="#FDF4FF"; fontsize=11;
+    Fs_h  [label="fsm.hpp",                fillcolor="#A21CAF", fontcolor=white];
+    Fs_c  [label="fsm.cpp",                fillcolor="#A21CAF", fontcolor=white];
+    Mg_h  [label="manager.hpp",            fillcolor="#C026D3", fontcolor=white];
+    Mg_c  [label="manager.cpp",            fillcolor="#C026D3", fontcolor=white];
+    Tn_h  [label="turn.hpp",               fillcolor="#D946EF", fontcolor=white];
+    Tn_c  [label="turn.cpp",               fillcolor="#D946EF", fontcolor=white];
+    Tw_h  [label="turn_writer.hpp",        fillcolor="#86198F", fontcolor=white];
+    Tw_c  [label="turn_writer.cpp",        fillcolor="#86198F", fontcolor=white];
+    Sp_h  [label="sentence_splitter.hpp",  fillcolor="#701A75", fontcolor=white];
+    Sp_c  [label="sentence_splitter.cpp",  fillcolor="#701A75", fontcolor=white];
+  }
+
+  subgraph cluster_pipeline {
+    label="src/pipeline/  •  M0 fake driver";
+    style="rounded,filled"; color="#F59E0B"; fontcolor="#92400E"; fillcolor="#FFFBEB"; fontsize=11;
+    Fd_h  [label="fake_driver.hpp", fillcolor="#F59E0B", fontcolor=white];
+    Fd_c  [label="fake_driver.cpp", fillcolor="#F59E0B", fontcolor=white];
+  }
+
+  Src -> {Cfg_h Ev_h Log_h Mr_h Hs_h Db_h Cl_h Fs_h Fd_h} [arrowhead=none, color="#94A3B8"];
+
+  // -------- tests/ --------
+  Tests [label="tests/  (doctest)", fillcolor="#16A34A", fontcolor=white, shape=folder, fontsize=12];
+  Root -> Tests;
+
+  TC [label="test_config.cpp",            fillcolor="#86EFAC", fontcolor="#14532D"];
+  TQ [label="test_queue.cpp\ntest_bus.cpp\ntest_json_sink.cpp",
+                                          fillcolor="#86EFAC", fontcolor="#14532D"];
+  TF [label="test_fsm.cpp\ntest_manager.cpp",
+                                          fillcolor="#86EFAC", fontcolor="#14532D"];
+  TS [label="test_sentence_splitter.cpp\ntest_sse_parser.cpp",
+                                          fillcolor="#86EFAC", fontcolor="#14532D"];
+  TL [label="test_llm_client.cpp\ntest_prompt_builder.cpp",
+                                          fillcolor="#86EFAC", fontcolor="#14532D"];
+  TM [label="test_db.cpp\ntest_repository.cpp\ntest_memory_thread.cpp\ntest_recovery.cpp\ntest_summarizer.cpp\ntest_turn_writer.cpp",
+                                          fillcolor="#86EFAC", fontcolor="#14532D"];
+  TX [label="test_main.cpp\n(doctest entry)", fillcolor="#22C55E", fontcolor=white];
+  Tests -> {TC TQ TF TS TL TM TX};
+
+  // -------- plans/ --------
+  Plans [label="plans/", fillcolor="#1E40AF", fontcolor=white, shape=folder, fontsize=12];
+  Root -> Plans;
+
+  Pd [label="project_design.md\n(source of truth)", fillcolor="#3B82F6", fontcolor=white, shape=note];
+  Oq [label="open_questions.md\n(§L = post-impl revisions)", fillcolor="#3B82F6", fontcolor=white, shape=note];
+  Plans -> {Pd Oq};
+
+  Mil [label="plans/milestones/", fillcolor="#1D4ED8", fontcolor=white, shape=folder];
+  Plans -> Mil;
+
+  M0 [label="m0_skeleton.md ✅",         fillcolor="#22C55E", fontcolor=white];
+  M1 [label="m1_llm_memory.md\n(A ✅, B/C in flight)", fillcolor="#FACC15", fontcolor="#78350F"];
+  M2 [label="m2_supervision.md",         fillcolor="#94A3B8", fontcolor="#0F172A"];
+  M3 [label="m3_tts_playback.md",        fillcolor="#94A3B8", fontcolor="#0F172A"];
+  M4 [label="m4_audio_vad.md",           fillcolor="#94A3B8", fontcolor="#0F172A"];
+  M5 [label="m5_streaming_stt.md",       fillcolor="#94A3B8", fontcolor="#0F172A"];
+  M6 [label="m6_aec.md",                 fillcolor="#94A3B8", fontcolor="#0F172A"];
+  M7 [label="m7_barge_in.md",            fillcolor="#94A3B8", fontcolor="#0F172A"];
+  M8 [label="m8_hardening.md",           fillcolor="#94A3B8", fontcolor="#0F172A"];
+  Mil -> {M0 M1 M2 M3 M4 M5 M6 M7 M8};
+
+  // -------- packaging/ --------
+  Pkg [label="packaging/", fillcolor="#0F766E", fontcolor=white, shape=folder, fontsize=12];
+  Root -> Pkg;
+
+  Cmp [label="packaging/compose/\n(default dev path)", fillcolor="#14B8A6", fontcolor=white, shape=folder];
+  Sys [label="packaging/systemd/\n(M8 alt prod path)", fillcolor="#0E7490", fontcolor=white, shape=folder];
+  Pkg -> {Cmp Sys};
+
+  Yml [label="docker-compose.yml\nfetch-assets.sh", fillcolor="#5EEAD4", fontcolor="#134E4A"];
+  Wh  [label="whisper/Dockerfile",                  fillcolor="#5EEAD4", fontcolor="#134E4A"];
+  Pi  [label="piper/Dockerfile",                    fillcolor="#5EEAD4", fontcolor="#134E4A"];
+  Cmp -> {Yml Wh Pi};
+
+  Su [label="acva.service\nacva-llama.service\nacva-whisper.service\nacva-piper.service\nacva.target",
+       fillcolor="#67E8F9", fontcolor="#155E75"];
+  Sys -> Su;
+
+  // -------- third_party / cmake / config -------
+  Tp  [label="third_party/cpp-httplib/\n(vendored single header)", fillcolor="#FDBA74", fontcolor="#7C2D12", shape=folder];
+  Cm  [label="cmake/\nDependencies.cmake\nWarnings.cmake",         fillcolor="#FED7AA", fontcolor="#7C2D12"];
+  Cf  [label="config/default.yaml\n(M0 + M1.A schema)",            fillcolor="#FCD34D", fontcolor="#78350F", shape=note];
+  Bd  [label="build/dev/  (CMake out-of-tree)",                    fillcolor="#E2E8F0", fontcolor="#0F172A", shape=folder];
+  Root -> {Tp Cm Cf Bd};
+
+  // legend
+  subgraph cluster_legend {
+    label="legend — colour family per subsystem (reused in diagrams 02–06)";
+    style="rounded,filled"; color="#0F172A"; fillcolor="#F8FAFC"; fontcolor="#0F172A"; fontsize=11;
+    rank=sink;
+    Lcfg [label="config",   fillcolor="#64748B", fontcolor=white];
+    Levt [label="event/bus",fillcolor="#0EA5E9", fontcolor=white];
+    Llog [label="log",      fillcolor="#CA8A04", fontcolor=white];
+    Lmet [label="metrics",  fillcolor="#334155", fontcolor=white];
+    Lhttp[label="http ctl", fillcolor="#0891B2", fontcolor=white];
+    Lmem [label="memory",   fillcolor="#7C3AED", fontcolor=white];
+    Lllm [label="llm",      fillcolor="#9333EA", fontcolor=white];
+    Ldlg [label="dialogue", fillcolor="#C026D3", fontcolor=white];
+    Lpip [label="pipeline", fillcolor="#F59E0B", fontcolor=white];
+    Ltst [label="tests",    fillcolor="#22C55E", fontcolor=white];
+    Lcfg -> Levt -> Llog -> Lmet -> Lhttp -> Lmem -> Lllm -> Ldlg -> Lpip -> Ltst [style=invis];
+  }
+}

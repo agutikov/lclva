@@ -1,0 +1,218 @@
+// 03_composition.dot — runtime object composition / ownership graph as
+// constructed by src/main.cpp. Solid edges = "owns" (unique_ptr / value /
+// thread). Open-diamond edges = "holds reference to" (passed by &/cref).
+// Diamonds at the source (UML-ish composition).
+//
+// Render: dot -Tsvg 03_composition.dot -o 03_composition.svg
+//
+// All optional objects (M1 stdin mode) are dashed; M0 fake driver is dotted.
+// State at M0 + M1.A landed.
+
+digraph Composition {
+  rankdir=TB;
+  bgcolor="white";
+  pad=0.4;
+  splines=spline;
+  ranksep=0.55;
+  nodesep=0.35;
+  compound=true;
+
+  node [style="filled,rounded", shape=box, fontname="Helvetica",
+        fontsize=11, penwidth=1.0, color="#0F172A"];
+  edge [color="#0F172A", arrowtail=diamond, dir=both, arrowhead=none,
+        arrowsize=0.8, penwidth=1.1];
+
+  // ===== process root =====
+  Proc [label="acva process\n(systemd or CLI)",
+        fillcolor="#0F172A", fontcolor=white, shape=tab, fontsize=12];
+
+  Main [label="main()\n• install_signal_handlers\n• g_signal_received atomic\n• stdin_reader thread (opt)",
+        fillcolor="#1E293B", fontcolor=white, fontsize=12, penwidth=1.6];
+  Proc -> Main;
+
+  // ===== top-level singletons created by main =====
+
+  // foundation
+  Cfg  [label="config::Config (value)\n• logging / control / pipeline\n• llm / memory / dialogue",
+        fillcolor="#64748B", fontcolor=white];
+
+  Bus  [label="event::EventBus\n• vector<Subscription>\n• atomic<published_>",
+        fillcolor="#0EA5E9", fontcolor=white];
+
+  Reg  [label="metrics::Registry\n(shared_ptr — observers reference it)",
+        fillcolor="#334155", fontcolor=white];
+
+  Mem  [label="memory::MemoryThread\n(unique_ptr)",
+        fillcolor="#7C3AED", fontcolor=white];
+
+  Tns  [label="dialogue::TurnFactory\n(value, atomic counter)",
+        fillcolor="#D946EF", fontcolor=white];
+
+  Fsm  [label="dialogue::Fsm\n(value)",
+        fillcolor="#A21CAF", fontcolor=white];
+
+  Ctl  [label="http::ControlServer\n(unique_ptr; pimpl)",
+        fillcolor="#0891B2", fontcolor=white];
+
+  Subs [label="vector<SubscriptionHandle>\n  metric_subs (keep-alive)",
+        fillcolor="#0284C7", fontcolor=white, shape=note];
+
+  // M0 optional
+  Fkd  [label="pipeline::FakeDriver\n(unique_ptr, optional)",
+        fillcolor="#F59E0B", fontcolor=white, style="filled,rounded,dotted"];
+
+  // M1 stdin-mode optional
+  Pb   [label="llm::PromptBuilder\n(unique_ptr, opt)",
+        fillcolor="#A855F7", fontcolor=white, style="filled,rounded,dashed"];
+  Lc   [label="llm::LlmClient\n(unique_ptr, opt)",
+        fillcolor="#9333EA", fontcolor=white, style="filled,rounded,dashed"];
+  Mgr  [label="dialogue::Manager\n(unique_ptr, opt)",
+        fillcolor="#C026D3", fontcolor=white, style="filled,rounded,dashed"];
+  Tw   [label="dialogue::TurnWriter\n(unique_ptr, opt)",
+        fillcolor="#86198F", fontcolor=white, style="filled,rounded,dashed"];
+  Sm   [label="memory::Summarizer\n(unique_ptr, opt)",
+        fillcolor="#5B21B6", fontcolor=white, style="filled,rounded,dashed"];
+  Sin  [label="stdin_reader\nstd::thread (opt)",
+        fillcolor="#1E40AF", fontcolor=white, style="filled,rounded,dashed"];
+
+  // composition (main owns)
+  Main -> Cfg;
+  Main -> Bus;
+  Main -> Reg;
+  Main -> Mem;
+  Main -> Tns;
+  Main -> Fsm;
+  Main -> Ctl;
+  Main -> Subs;
+  Main -> Fkd  [style=dotted];
+  Main -> Pb   [style=dashed];
+  Main -> Lc   [style=dashed];
+  Main -> Mgr  [style=dashed];
+  Main -> Tw   [style=dashed];
+  Main -> Sm   [style=dashed];
+  Main -> Sin  [style=dashed];
+
+  // ===== inner composition =====
+
+  // MemoryThread owns Database, Repository, queue, worker
+  Db   [label="memory::Database\n(sqlite3*; WAL)",       fillcolor="#7C3AED", fontcolor=white, shape=cylinder];
+  Rp   [label="memory::Repository",                       fillcolor="#A78BFA", fontcolor="#1E1B4B"];
+  MQ   [label="BoundedQueue<WriteJob>\nDropNewest, cap = 256",
+        fillcolor="#8B5CF6", fontcolor=white];
+  MW   [label="worker_ : std::thread\n(memory writer loop)",
+        fillcolor="#6D28D9", fontcolor=white];
+
+  Mem -> Db;
+  Mem -> Rp;
+  Mem -> MQ;
+  Mem -> MW;
+  Rp  -> Db [arrowtail=odiamond, dir=both, arrowhead=none, color="#7C3AED",
+             label="reference"];
+
+  // EventBus owns subscriptions; each owns its own queue + worker thread
+  Sub  [label="Subscription [N]\n• name\n• type_index target\n• handler",
+        fillcolor="#0EA5E9", fontcolor=white];
+  SubQ [label="BoundedQueue<Event>\nper subscription",
+        fillcolor="#38BDF8", fontcolor="#0C4A6E"];
+  SubW [label="worker_ : std::thread\nper subscription",
+        fillcolor="#0369A1", fontcolor=white];
+
+  Bus -> Sub;
+  Sub -> SubQ;
+  Sub -> SubW;
+
+  // Fsm internal state
+  TC   [label="TurnContext active_\n• TurnId\n• shared_ptr<CancellationToken>\n• started_at",
+        fillcolor="#D946EF", fontcolor=white];
+  FState[label="State / TurnOutcome\n• sentences_played_\n• turns_completed_/_interrupted_/_discarded_",
+         fillcolor="#86198F", fontcolor=white, shape=note];
+  FSub [label="SubscriptionHandle sub_\n(subscribe_all)",
+        fillcolor="#0EA5E9", fontcolor=white];
+  Obs  [label="outcome_observer_\n→ Registry::on_turn_outcome",
+        fillcolor="#334155", fontcolor=white, shape=note];
+
+  Fsm -> TC;
+  Fsm -> FState;
+  Fsm -> FSub;
+  Fsm -> Obs   [arrowtail=odiamond, dir=both, arrowhead=none, color="#334155"];
+
+  // Manager internal state
+  MgIo [label="io_ : std::thread\n• pending_ : optional<FinalTranscript>\n• stopping_ flag\n• condition_variable",
+        fillcolor="#C026D3", fontcolor=white];
+  MgAc [label="active_ : TurnContext\n(currently running I/O job)",
+        fillcolor="#A21CAF", fontcolor=white];
+  MgSp [label="SentenceSplitter\n(per-Manager, owned in run_one)",
+        fillcolor="#701A75", fontcolor=white];
+  MgSb [label="SubscriptionHandle sub_\n(FinalTranscript / Cancel)",
+        fillcolor="#0EA5E9", fontcolor=white];
+
+  Mgr -> MgIo;
+  Mgr -> MgAc;
+  Mgr -> MgSp;
+  Mgr -> MgSb;
+
+  // ControlServer internal
+  Httpd[label="cpp-httplib::Server\n(in pimpl Impl)",
+        fillcolor="#06B6D4", fontcolor=white];
+  Hthr [label="server_thread\nin pimpl",
+        fillcolor="#0891B2", fontcolor=white];
+
+  Ctl -> Httpd;
+  Ctl -> Hthr;
+
+  // TurnWriter internal
+  TwMap[label="in_flight_\nunordered_map<TurnId, AssistantState>",
+        fillcolor="#86198F", fontcolor=white, shape=note];
+  Tw -> TwMap;
+
+  // Summarizer internal
+  SmW  [label="worker_ : std::thread\n• job_pending_ flag\n• condition_variable",
+        fillcolor="#5B21B6", fontcolor=white];
+  Sm -> SmW;
+
+  // Registry internal
+  RegFam[label="prometheus families\nevents_published / turns_total /\nfsm_state / llm_first_token_ms /\nllm_tokens_per_sec / queue_drops",
+        fillcolor="#1E293B", fontcolor=white, shape=note];
+  Reg -> RegFam;
+
+  // ===== references (no ownership) =====
+  edge [arrowtail=odiamond, dir=both, arrowhead=normal,
+        color="#475569", style=dashed, penwidth=1.0];
+
+  Fsm  -> Bus  [label="bus_ &"];
+  Fsm  -> Tns  [label="turns_ &"];
+  Mgr  -> Cfg  [label="cfg_ &"];
+  Mgr  -> Bus;
+  Mgr  -> Pb   [label="prompt_builder_ &"];
+  Mgr  -> Lc   [label="client_ &"];
+  Mgr  -> Tns;
+  Tw   -> Bus;
+  Tw   -> Mem  [label="memory_ &"];
+  Sm   -> Cfg;
+  Sm   -> Bus;
+  Sm   -> Mem;
+  Sm   -> Lc   [label="LLM for summary"];
+  Pb   -> Cfg;
+  Pb   -> Mem  [label="reads facts/summary/\nrecent_turns"];
+  Lc   -> Cfg;
+  Lc   -> Bus;
+  Ctl  -> Reg  [label="shared_ptr"];
+  Ctl  -> Fsm  [label="snapshot for /status"];
+  Reg  -> Bus  [label="subscribe()\nreturns handles"];
+  Fkd  -> Bus  [label="publish events"];
+  Sin  -> Bus  [label="publish FinalTranscript"];
+
+  // legend
+  subgraph cluster_legend {
+    label="legend";
+    style="rounded,filled"; color="#0F172A"; fillcolor="#F8FAFC"; fontsize=10;
+    rank=sink;
+    Lown [label="A owns B",     fillcolor="#E2E8F0", fontcolor="#0F172A"];
+    Lref [label="A references B",fillcolor="#E2E8F0", fontcolor="#0F172A"];
+    Lopt [label="optional in stdin mode (M1.C)", fillcolor="#FEE2E2", fontcolor="#7F1D1D", style="filled,rounded,dashed"];
+    Lm0  [label="optional in M0 mode",            fillcolor="#FEF3C7", fontcolor="#78350F", style="filled,rounded,dotted"];
+    Lown -> Lref [label="◆—",  style=solid,  arrowtail=diamond, dir=back, arrowhead=none, color="#0F172A"];
+    Lref -> Lopt [label="◇— →", style=dashed, arrowtail=odiamond, dir=back, arrowhead=normal, color="#475569"];
+    Lopt -> Lm0  [style=invis];
+  }
+}

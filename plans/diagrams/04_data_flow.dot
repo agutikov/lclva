@@ -1,0 +1,262 @@
+// 04_data_flow.dot — runtime data flow through the orchestrator. Shows
+// where each event::Event variant originates, who consumes it, and how
+// the audio + text streams move between threads, the bus, and external
+// services. Future-milestone-only nodes are dashed; cancellation paths
+// are red.
+//
+// Render: dot -Tsvg 04_data_flow.dot -o 04_data_flow.svg
+//
+// Edge label = payload. Edge style:
+//   solid   = bus-mediated event (typed publish/subscribe)
+//   dashed  = direct call / future / SSE callback
+//   dotted  = post-MVP / not yet wired
+//   red     = cancellation / barge-in propagation
+
+digraph DataFlow {
+  rankdir=LR;
+  bgcolor="white";
+  pad=0.4;
+  splines=spline;
+  ranksep=0.85;
+  nodesep=0.40;
+  compound=true;
+
+  node [style="filled,rounded", shape=box, fontname="Helvetica",
+        fontsize=10, penwidth=1.0, color="#0F172A"];
+  edge [color="#475569", fontname="Helvetica", fontsize=9, arrowsize=0.8];
+
+  // ====================================================================
+  // INPUT SOURCES
+  // ====================================================================
+  subgraph cluster_in {
+    label="input sources";
+    style="rounded,filled"; color="#1D4ED8"; fontcolor="#1E3A8A";
+    fillcolor="#EFF6FF"; fontsize=11;
+
+    Mic    [label="🎤 Mic (M4)\nPortAudio capture\n48 kHz",
+            fillcolor="#2563EB", fontcolor=white, style="filled,rounded,dotted"];
+    Stdin  [label="stdin lines\n(M1 --stdin mode)",
+            fillcolor="#1E40AF", fontcolor=white];
+    Fake   [label="FakeDriver (M0)\nsynthetic turn events",
+            fillcolor="#F59E0B", fontcolor=white];
+  }
+
+  // ====================================================================
+  // AUDIO PRE-PROCESS (M4 + M6) — dotted, not yet implemented
+  // ====================================================================
+  subgraph cluster_audio {
+    label="audio pre-processing  (M4 / M6 — not yet wired)";
+    style="rounded,filled,dotted"; color="#1E40AF"; fontcolor="#1E3A8A";
+    fillcolor="#F8FAFC"; fontsize=11;
+
+    Ring   [label="SPSC ring buffer\n(audio cb → proc thread)\nlock-free, fixed-size frames",
+            fillcolor="#3B82F6", fontcolor=white, style="filled,rounded,dotted"];
+    Rs1    [label="Resample\n→ 16 kHz mono (soxr)",
+            fillcolor="#3B82F6", fontcolor=white, style="filled,rounded,dotted"];
+    APM    [label="WebRTC APM (M6)\nAEC / NS / AGC",
+            fillcolor="#3B82F6", fontcolor=white, style="filled,rounded,dotted"];
+    VAD    [label="Silero VAD (M4)\nonset / hangover / endpoint",
+            fillcolor="#3B82F6", fontcolor=white, style="filled,rounded,dotted"];
+    Utt    [label="Utterance buffer\nshared_ptr<AudioSlice>",
+            fillcolor="#3B82F6", fontcolor=white, style="filled,rounded,dotted"];
+  }
+
+  // ====================================================================
+  // EVENT BUS (the cross-cutting fabric)
+  // ====================================================================
+  Bus [label="event::EventBus\n(typed pub/sub, per-sub bounded queues)",
+       fillcolor="#0EA5E9", fontcolor=white, fontsize=12,
+       shape=octagon, penwidth=1.6];
+
+  // ====================================================================
+  // STT (M5) — dotted
+  // ====================================================================
+  Stt [label="whisper.cpp service\n(Compose, port 8082)\n• request/resp through M4\n• streaming partials from M5",
+       fillcolor="#10B981", fontcolor=white, shape=box3d];
+
+  // ====================================================================
+  // DIALOGUE LAYER
+  // ====================================================================
+  subgraph cluster_dlg {
+    label="dialogue layer  (M0 + M1)";
+    style="rounded,filled"; color="#86198F"; fontcolor="#86198F";
+    fillcolor="#FDF4FF"; fontsize=11;
+
+    Fsm   [label="Fsm\n• consumes everything\n• mints/bumps TurnContext\n• emits outcome → Registry",
+           fillcolor="#A21CAF", fontcolor=white];
+
+    Mgr   [label="Manager\n• subscriber thread\n• I/O thread:\n  build prompt → submit\n  → splitter → publish",
+           fillcolor="#C026D3", fontcolor=white];
+
+    Splt  [label="SentenceSplitter\n(per-turn, inside Manager)\nstreaming token-in/sentence-out",
+           fillcolor="#701A75", fontcolor=white];
+
+    Tw    [label="TurnWriter\n• user turn on FinalTranscript\n• assistant turn on LlmFinished",
+           fillcolor="#86198F", fontcolor=white];
+  }
+
+  // ====================================================================
+  // LLM CLIENT + SERVICE
+  // ====================================================================
+  subgraph cluster_llm {
+    label="LLM";
+    style="rounded,filled"; color="#6B21A8"; fontcolor="#6B21A8";
+    fillcolor="#FAF5FF"; fontsize=11;
+
+    Pb    [label="PromptBuilder\nsystem + facts + summary\n+ recent_turns + current",
+           fillcolor="#A855F7", fontcolor=white];
+
+    Lc    [label="LlmClient\nlibcurl SSE\n(write cb checks token)",
+           fillcolor="#9333EA", fontcolor=white];
+
+    Sse   [label="SseParser\ndelta extraction",
+           fillcolor="#7E22CE", fontcolor=white];
+
+    Llama [label="llama.cpp service\n(Compose, GPU, port 8081)\n/v1/chat/completions",
+           fillcolor="#7C3AED", fontcolor=white, shape=box3d];
+  }
+
+  // ====================================================================
+  // MEMORY
+  // ====================================================================
+  subgraph cluster_mem {
+    label="memory";
+    style="rounded,filled"; color="#5B21B6"; fontcolor="#5B21B6";
+    fillcolor="#F5F3FF"; fontsize=11;
+
+    Mt    [label="MemoryThread\nsingle writer, BoundedQueue\nsubmit/post/read",
+           fillcolor="#8B5CF6", fontcolor=white];
+    Repo  [label="Repository\nsessions / turns /\nsummaries / facts / settings",
+           fillcolor="#A78BFA", fontcolor="#1E1B4B"];
+    Db    [label="SQLite (WAL)\nacva.db",
+           fillcolor="#7C3AED", fontcolor=white, shape=cylinder];
+    Sum   [label="Summarizer\nrolling LLM summaries",
+           fillcolor="#5B21B6", fontcolor=white];
+    Rec   [label="Recovery sweep\n(startup, idempotent)",
+           fillcolor="#6D28D9", fontcolor=white];
+  }
+
+  // ====================================================================
+  // TTS + PLAYBACK (M3+) — dotted
+  // ====================================================================
+  subgraph cluster_tts {
+    label="TTS + playback  (M3 — not yet wired)";
+    style="rounded,filled,dotted"; color="#92400E"; fontcolor="#92400E";
+    fillcolor="#FFFBEB"; fontsize=11;
+
+    PiC   [label="PiperClient\nper-language URL routing",
+           fillcolor="#F59E0B", fontcolor=white, style="filled,rounded,dotted"];
+    Piper [label="Piper service(s)\n(Compose, ports 8083+)",
+           fillcolor="#EA580C", fontcolor=white, shape=box3d, style="filled,rounded,dotted"];
+    Pq    [label="Playback queue\nbounded, drop-on-cancel\nturn_id + seq filter",
+           fillcolor="#EA580C", fontcolor=white, style="filled,rounded,dotted"];
+    Rs2   [label="Resample → device rate (soxr)",
+           fillcolor="#EA580C", fontcolor=white, style="filled,rounded,dotted"];
+    Spk   [label="🔊 Speaker\n+ AEC loopback tap (M6)",
+           fillcolor="#EA580C", fontcolor=white, style="filled,rounded,dotted"];
+  }
+
+  // ====================================================================
+  // OBSERVABILITY
+  // ====================================================================
+  subgraph cluster_obs {
+    label="observability";
+    style="rounded,filled"; color="#1F2937"; fontcolor="#1F2937";
+    fillcolor="#F1F5F9"; fontsize=11;
+
+    Reg [label="metrics::Registry\nvoice_* families",
+         fillcolor="#334155", fontcolor=white];
+    Ctl [label="ControlServer\n/metrics /status /health",
+         fillcolor="#0891B2", fontcolor=white];
+    Log [label="log::JsonSink\nstderr (JSON-per-line)",
+         fillcolor="#CA8A04", fontcolor=white];
+    Otel[label="OTLP collector\n(M8, opt-in)",
+         fillcolor="#FBBF24", fontcolor="#78350F", style="filled,rounded,dotted",
+         shape=note];
+  }
+
+  // ====================================================================
+  // ============= EDGES =============
+  // ====================================================================
+
+  // ----- audio in (future) -----
+  edge [color="#1D4ED8", style=dotted];
+  Mic -> Ring -> Rs1 -> APM -> VAD -> Utt;
+  Utt -> Stt [label="POST /inference\n(audio bytes)"];
+  VAD -> Bus [label="SpeechStarted\nSpeechEnded"];
+
+  // ----- STT outputs (M5 streaming) -----
+  edge [color="#10B981", style=dashed];
+  Stt -> Bus [label="PartialTranscript (M5)\nFinalTranscript"];
+
+  // ----- M0 fake driver / M1 stdin -----
+  edge [color="#F59E0B", style=solid];
+  Fake  -> Bus [label="full synthetic turn:\nSpeechStarted/Ended,\nFinalTranscript, LlmStarted,\nLlmToken, LlmSentence, LlmFinished,\nTtsStarted, PlaybackStarted/Finished"];
+  edge [color="#1E40AF", style=solid];
+  Stdin -> Bus [label="FinalTranscript\n(from typed line)"];
+
+  // ----- bus → consumers (control plane) -----
+  edge [color="#0EA5E9", style=solid];
+  Bus -> Fsm [label="ALL events (subscribe_all)\n→ FSM transitions + outcome"];
+  Bus -> Mgr [label="FinalTranscript /\nCancelGeneration / UserInterrupted"];
+  Bus -> Tw  [label="FinalTranscript / LlmStarted /\nLlmSentence / LlmFinished"];
+  Bus -> Sum [label="LlmFinished\n(turn count → trigger)"];
+  Bus -> Reg [label="ALL events\n(metric labels)"];
+
+  // ----- Manager → LLM path -----
+  edge [color="#9333EA", style=dashed];
+  Mgr -> Pb  [label="build(session, lang,\ncurrent_user_text)"];
+  Pb  -> Mt  [label="MemoryThread::read\nfacts ≥ threshold,\nlatest summary,\nrecent_turns_n"];
+  Pb  -> Mgr [label="JSON request body"];
+  Mgr -> Lc  [label="submit(LlmRequest{ body, turn,\ncancel })"];
+  Lc  -> Llama [label="POST /v1/chat/completions\n(stream:true, SSE)"];
+  Llama -> Sse [label="SSE chunks\nframed lines"];
+  Sse -> Lc   [label="delta tokens"];
+  Lc  -> Mgr  [label="on_token(delta)"];
+  Mgr -> Splt [label="push(delta)"];
+  Splt -> Mgr [label="zero-or-more sentences"];
+  Mgr -> Bus  [label="LlmStarted /\nLlmSentence(turn,seq,text,lang) /\nLlmFinished(cancelled?)"];
+
+  // ----- Memory path -----
+  edge [color="#7C3AED", style=dashed];
+  Tw  -> Mt   [label="post(insert_turn / set_status)"];
+  Sum -> Mt   [label="read recent_turns / latest_summary;\npost insert_summary"];
+  Sum -> Lc   [label="submit summary prompt\n(blocking get on future)"];
+  Mt  -> Repo [label="serial dispatch"];
+  Repo -> Db  [label="prepared statements"];
+
+  // recovery
+  edge [color="#6D28D9", style=dashed];
+  Mt  -> Rec  [label="run_recovery on startup\n(close sessions,\nmark in_progress→interrupted,\nflag stale summaries)"];
+  Rec -> Repo [style=dashed];
+
+  // ----- TTS / playback (future) -----
+  edge [color="#EA580C", style=dotted];
+  Bus -> PiC  [label="LlmSentence (M3)"];
+  PiC -> Piper [label="POST /\n(text + lang voice URL)"];
+  Piper -> Pq [label="audio chunks\n(turn_id, seq)"];
+  Pq -> Rs2 -> Spk;
+  Spk -> APM  [label="loopback ref\n(post-resample)\n  M6", color="#DC2626"];
+
+  // ----- observability outputs -----
+  edge [color="#334155", style=dashed];
+  Reg -> Ctl  [label="prometheus exposition"];
+  Fsm -> Ctl  [label="snapshot()\n→ /status JSON"];
+  Ctl -> Otel [label="OTLP traces\n(M8, opt-in)", style=dotted];
+  edge [color="#CA8A04", style=dashed];
+  Mgr -> Log [label="event(\"llm_first_token\",...)"];
+  Lc  -> Log [label="event(\"llm_tokens_per_sec\",...)"];
+  Sum -> Log [label="event(\"summary_written\",...)"];
+  Tw  -> Log [label="event(\"turn_committed\",...)"];
+  Fsm -> Log [label="event(\"fsm_transition\",...)"];
+
+  // ----- cancellation cascade (red) -----
+  edge [color="#DC2626", style=bold, penwidth=1.5, fontcolor="#DC2626"];
+  Bus -> Fsm  [label="UserInterrupted\n→ bump turn id"];
+  Fsm -> Bus  [label="CancelGeneration\n(emitted by FSM)"];
+  Bus -> Mgr  [label="CancelGeneration\n→ token.cancel()"];
+  Lc  -> Llama[label="curl write cb returns 0\n→ CURLE_WRITE_ERROR\n→ stream aborts <100ms"];
+  Mgr -> Bus  [label="LlmFinished{cancelled=true}"];
+  Tw  -> Mt   [label="status: Interrupted /\nDiscarded (< 1 sentence)"];
+
+}

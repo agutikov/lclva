@@ -1,0 +1,234 @@
+// 06_business_logic.dot — business-logic / behavioural view of acva.
+// Captures *what the system does for the user*, not its file layout:
+//
+//   1. Session lifecycle (open / recovery on next boot / close)
+//   2. Per-turn pipeline as an FSM with concurrent speculative branch
+//   3. Persistence policy (committed / interrupted / discarded / not-stored)
+//   4. Prompt assembly recipe (memory layers feeding the LLM)
+//   5. Async summarization rule
+//   6. Cancellation cascade on barge-in
+//   7. Supervisor / pipeline-fail gating
+//
+// Render: dot -Tsvg 06_business_logic.dot -o 06_business_logic.svg
+//
+// All policies referenced in plans/project_design.md §6, §9, §10 (and the
+// consequences in plans/milestones/m1_llm_memory.md and m2_supervision.md).
+
+digraph BusinessLogic {
+  rankdir=TB;
+  bgcolor="white";
+  pad=0.4;
+  splines=spline;
+  ranksep=0.6;
+  nodesep=0.30;
+  compound=true;
+
+  node [style="filled,rounded", shape=box, fontname="Helvetica",
+        fontsize=10, penwidth=1.0, color="#0F172A"];
+  edge [color="#475569", fontname="Helvetica", fontsize=9, arrowsize=0.7];
+
+  // ====================================================================
+  // 1. SESSION LIFECYCLE
+  // ====================================================================
+  subgraph cluster_session {
+    label="① SESSION LIFECYCLE";
+    style="rounded,filled"; color="#1E40AF"; fontcolor="#1E3A8A";
+    fillcolor="#EFF6FF"; fontsize=12;
+
+    Boot   [label="boot\nload config + open SQLite",         fillcolor="#1E40AF", fontcolor=white];
+    Rec    [label="recovery sweep (idempotent)\n• close dangling sessions\n  ended_at = max(turns.ended_at)\n• in_progress turns → interrupted\n• summaries source_hash recheck → mark stale",
+             fillcolor="#6D28D9", fontcolor=white];
+    NewS   [label="insert_session(now, NULL)\nset_session(SessionId)\non Manager + TurnWriter + Summarizer",
+             fillcolor="#3B82F6", fontcolor=white];
+    Loop   [label="active session\nturns flow",              fillcolor="#2563EB", fontcolor=white];
+    Close  [label="SIGINT/SIGTERM → close\n(M8: explicit close_session)",
+             fillcolor="#1D4ED8", fontcolor=white];
+
+    Boot -> Rec -> NewS -> Loop -> Close;
+  }
+
+  // ====================================================================
+  // 2. TURN FSM (mirrors §6, with speculative branch dashed for M5)
+  // ====================================================================
+  subgraph cluster_fsm {
+    label="② DIALOGUE FSM  (TurnId minted at FinalTranscript;\nspeculation dashed = M5 only)";
+    style="rounded,filled"; color="#86198F"; fontcolor="#86198F";
+    fillcolor="#FDF4FF"; fontsize=12;
+
+    Idle    [label="Idle",                            fillcolor="#64748B", fontcolor=white];
+    Listen  [label="Listening\nVAD armed",            fillcolor="#2563EB", fontcolor=white];
+    User    [label="UserSpeaking\npartials streaming",fillcolor="#10B981", fontcolor=white];
+    Trans   [label="Transcribing\nawaiting final",    fillcolor="#34D399", fontcolor="#064E3B"];
+    Spec    [label="SpeculativeThinking (M5)\nLLM running on stable prefix",
+             fillcolor="#A855F7", fontcolor=white, style="filled,rounded,dashed"];
+    Think   [label="Thinking\nfinal reconciled",      fillcolor="#7C3AED", fontcolor=white];
+    Speak   [label="Speaking\nTTS → playback",         fillcolor="#F59E0B", fontcolor=white];
+    Done    [label="Completed\n→ TurnOutcome.Completed",fillcolor="#16A34A", fontcolor=white];
+    Inter   [label="Interrupted (barge-in)\n→ Discarded if <1 sentence,\nelse Interrupted",
+             fillcolor="#DC2626", fontcolor=white];
+
+    Idle    -> Listen  [label="start"];
+    Listen  -> User    [label="SpeechStarted"];
+    User    -> Trans   [label="SpeechEnded"];
+    User    -> Spec    [label="stable prefix +\nshort hangover (M5)", style=dashed, color="#A855F7"];
+    Trans   -> Think   [label="FinalTranscript"];
+    Spec    -> Think   [label="match → keep / mismatch → cancel + restart",
+                         style=dashed, color="#A855F7", fontcolor="#A855F7"];
+    Think   -> Speak   [label="first LlmSentence"];
+    Speak   -> Done    [label="LlmFinished &&\nplayback drained"];
+    Speak   -> Inter   [label="UserInterrupted", color="#DC2626", fontcolor="#DC2626"];
+    Inter   -> User    [label="cancel propagated", color="#DC2626", fontcolor="#DC2626"];
+    Done    -> Listen  [label="next turn"];
+  }
+
+  // ====================================================================
+  // 3. PROMPT ASSEMBLY (memory layers)
+  // ====================================================================
+  subgraph cluster_prompt {
+    label="③ PROMPT ASSEMBLY  •  PromptBuilder::build(session, lang, current)\n   (single MemoryThread::read round-trip)";
+    style="rounded,filled"; color="#5B21B6"; fontcolor="#5B21B6";
+    fillcolor="#F5F3FF"; fontsize=12;
+
+    P0 [label="① system policy\ncfg.dialogue.system_prompts[lang]\n(fallback_language if missing)",
+        fillcolor="#7C3AED", fontcolor=white];
+    P1 [label="② user preferences\nfrom settings table",
+        fillcolor="#7C3AED", fontcolor=white];
+    P2 [label="③ durable facts\nfacts WHERE confidence ≥\ncfg.memory.facts.confidence_threshold",
+        fillcolor="#8B5CF6", fontcolor=white];
+    P3 [label="④ cached session summary\n(latest summaries row, if any)",
+        fillcolor="#A78BFA", fontcolor="#1E1B4B"];
+    P4 [label="⑤ recent turns verbatim\nlast cfg.dialogue.recent_turns_n\nwhere status ∈ {committed, interrupted}",
+        fillcolor="#C4B5FD", fontcolor="#1E1B4B"];
+    P5 [label="⑥ current user turn\n(detected lang from STT)",
+        fillcolor="#DDD6FE", fontcolor="#312E81"];
+
+    Body [label="JSON body for\n/v1/chat/completions\n(stream:true)",
+          fillcolor="#9333EA", fontcolor=white, shape=note];
+
+    P0 -> P1 -> P2 -> P3 -> P4 -> P5 -> Body;
+  }
+
+  // ====================================================================
+  // 4. PERSISTENCE POLICY  (TurnWriter)
+  // ====================================================================
+  subgraph cluster_persist {
+    label="④ PERSISTENCE POLICY  (TurnWriter)";
+    style="rounded,filled"; color="#86198F"; fontcolor="#86198F";
+    fillcolor="#FDF4FF"; fontsize=12;
+
+    UFinal [label="user FinalTranscript",                fillcolor="#10B981", fontcolor=white, shape=oval];
+    UStored[label="insert_turn(role=user,\nstatus=Committed)",
+             fillcolor="#16A34A", fontcolor=white];
+    UFinal -> UStored;
+
+    AStart [label="LlmStarted\n→ create AssistantState\n(text=\"\", sentences=0)",
+             fillcolor="#A21CAF", fontcolor=white, shape=oval];
+    ASent  [label="LlmSentence\n→ AssistantState.text +=\nsentence; sentences++",
+             fillcolor="#C026D3", fontcolor=white];
+    AFin   [label="LlmFinished",
+             fillcolor="#86198F", fontcolor=white, shape=oval];
+
+    AOK    [label="cancelled = false\n→ insert_turn(role=assistant,\nstatus=Committed,\ntext=joined)",
+             fillcolor="#16A34A", fontcolor=white];
+    AInt   [label="cancelled = true,\nsentences ≥ 1\n→ status=Interrupted\n+ interrupted_at_sentence",
+             fillcolor="#EAB308", fontcolor="#422006"];
+    ADisc  [label="cancelled = true,\nsentences = 0\n→ no row written\n(Discarded)",
+             fillcolor="#DC2626", fontcolor=white];
+
+    AStart -> ASent -> AFin;
+    AFin -> AOK   [label="committed"];
+    AFin -> AInt  [label="interrupted"];
+    AFin -> ADisc [label="discarded"];
+  }
+
+  // ====================================================================
+  // 5. ROLLING SUMMARIZATION
+  // ====================================================================
+  subgraph cluster_sum {
+    label="⑤ ROLLING SUMMARIZATION  (Summarizer worker thread)";
+    style="rounded,filled"; color="#92400E"; fontcolor="#78350F";
+    fillcolor="#FEFCE8"; fontsize=12;
+
+    SCount [label="LlmFinished{cancelled=false}\n→ turns_since_summary++",
+             fillcolor="#FACC15", fontcolor="#422006", shape=oval];
+    STrig  [label="trigger?\nturns_since_summary ≥\ncfg.memory.summary.turn_threshold",
+             fillcolor="#EAB308", fontcolor=white, shape=diamond];
+    SBuild [label="MemoryThread::read\nrecent turns since last summary",
+             fillcolor="#CA8A04", fontcolor=white];
+    SLlm   [label="LlmClient::submit\n(separate prompt template,\nlower max_tokens)",
+             fillcolor="#A16207", fontcolor=white];
+    SHash  [label="compute_source_hash\n(stable across reruns)",
+             fillcolor="#854D0E", fontcolor=white];
+    SInsert[label="post insert_summary\n(session, range, text,\nlang, source_hash)",
+             fillcolor="#713F12", fontcolor=white];
+    SCoal  [label="coalesce: only one\nin-flight at a time\n(job_pending_ flag)",
+             fillcolor="#FDE68A", fontcolor="#422006", shape=note];
+
+    SCount -> STrig;
+    STrig  -> SBuild [label="yes"];
+    STrig  -> SCount [label="no", style=dashed];
+    SBuild -> SLlm -> SHash -> SInsert -> SCount;
+    STrig  -> SCoal [style=dotted, dir=both];
+  }
+
+  // ====================================================================
+  // 6. CANCELLATION CASCADE  (UserInterrupted + spec mismatch)
+  // ====================================================================
+  subgraph cluster_cancel {
+    label="⑥ CANCELLATION CASCADE  (barge-in M7 / spec mismatch M5)";
+    style="rounded,filled"; color="#7F1D1D"; fontcolor="#7F1D1D";
+    fillcolor="#FEF2F2"; fontsize=12;
+
+    Trig [label="UserInterrupted\nVAD on AEC-cleaned audio\nduring Speaking",
+          fillcolor="#DC2626", fontcolor=white, shape=oval];
+    C1   [label="① bump active TurnId\n→ token.cancel()",                 fillcolor="#EF4444", fontcolor=white];
+    C2   [label="② libcurl write cb returns 0\n→ CURLE_WRITE_ERROR\n→ stream aborts <100 ms", fillcolor="#EF4444", fontcolor=white];
+    C3   [label="③ mark TTS requests stale\n(rejected by turn_id at\nenqueue/dequeue)",        fillcolor="#EF4444", fontcolor=white];
+    C4   [label="④ drain playback queue\n(filter by turn_id, seq)",        fillcolor="#EF4444", fontcolor=white];
+    C5   [label="⑤ persist outcome\nDiscarded if 0 sentences\nelse Interrupted",                fillcolor="#7C3AED", fontcolor=white];
+    C6   [label="⑥ FSM → UserSpeaking\nresume listening loop",             fillcolor="#16A34A", fontcolor=white];
+
+    Trig -> C1 -> C2 -> C3 -> C4 -> C5 -> C6 [color="#DC2626", penwidth=1.6];
+  }
+
+  // ====================================================================
+  // 7. SUPERVISOR / PIPELINE GATING (M2)
+  // ====================================================================
+  subgraph cluster_sup {
+    label="⑦ SUPERVISOR & PIPELINE GATING  (M2)";
+    style="rounded,filled"; color="#155E75"; fontcolor="#155E75";
+    fillcolor="#ECFEFF"; fontsize=12;
+
+    SVS [label="per-service state machine\nProbing → Healthy ↔\nDegraded → Unhealthy",
+         fillcolor="#0891B2", fontcolor=white];
+    SVE [label="HealthChanged event on bus",
+         fillcolor="#0EA5E9", fontcolor=white, shape=oval];
+    SVR [label="restart owned by Compose\n(unless-stopped)\n— Supervisor only observes",
+         fillcolor="#67E8F9", fontcolor="#164E63", shape=note];
+    Gate[label="if cfg.supervisor.fail_pipeline_if_llm_down\n  AND llm Unhealthy ≥ pipeline_fail_grace_seconds\n→ Manager refuses new FinalTranscript turns\n  (errors are SILENT — never spoken)",
+          fillcolor="#0E7490", fontcolor=white];
+    Keep[label="LLM keep-alive\n1-token completion\nevery cfg.llm.keep_alive_interval_seconds\n(machinery shipped in M1; timer in M2)",
+          fillcolor="#06B6D4", fontcolor=white, shape=note];
+
+    SVS -> SVE -> Gate;
+    SVS -> SVR [style=dotted];
+    Gate -> Keep [style=dotted];
+  }
+
+  // ====================================================================
+  // CROSS-CLUSTER LINKS
+  // ====================================================================
+  edge [color="#0F172A", style=dashed, penwidth=1.2];
+  Loop -> Listen [label="each turn\nstarts here", lhead=cluster_fsm];
+  Trans -> Body  [label="Manager builds prompt\non FinalTranscript", lhead=cluster_prompt, ltail=cluster_fsm];
+  Body  -> Speak [label="Manager.submit → tokens →\nSentenceSplitter → LlmSentence", lhead=cluster_fsm, ltail=cluster_prompt];
+  Done  -> SCount [label="LlmFinished{ok}\n→ turn count tick", ltail=cluster_fsm, lhead=cluster_sum];
+  Speak -> Trig  [label="user speaks again\n(VAD on AEC-cleaned audio)",
+                  ltail=cluster_fsm, lhead=cluster_cancel, color="#DC2626"];
+  Inter -> C5    [color="#DC2626"];
+  AFin  -> Done  [label="contributes turns_completed_++", style=dotted, ltail=cluster_persist, lhead=cluster_fsm];
+  SInsert -> P3  [label="next prompt picks up\nfresh summary",
+                  ltail=cluster_sum, lhead=cluster_prompt, style=dotted];
+  Gate  -> Trans [label="when gated:\nManager skips submit,\nFSM stays in Listening",
+                  ltail=cluster_sup, lhead=cluster_fsm, color="#0E7490"];
+}

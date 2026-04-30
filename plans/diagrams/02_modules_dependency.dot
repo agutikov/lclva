@@ -1,0 +1,151 @@
+// 02_modules_dependency.dot — internal modules + external library
+// dependency graph for the acva orchestrator (acva_core static lib + main).
+//
+// Render: dot -Tsvg 02_modules_dependency.dot -o 02_modules_dependency.svg
+//
+// Edges show "A includes / depends on B". External libs are pulled in via
+// CMake `target_link_libraries(acva_core PUBLIC ...)` (see src/CMakeLists.txt).
+// Colours match diagram 01 so subsystems are visually identifiable.
+
+digraph ModulesDependency {
+  rankdir=BT;
+  bgcolor="white";
+  pad=0.4;
+  splines=spline;
+  ranksep=0.7;
+  nodesep=0.35;
+  compound=true;
+
+  node [style="filled,rounded", shape=box, fontname="Helvetica",
+        fontsize=11, penwidth=1.0, color="#0F172A"];
+  edge [color="#64748B", penwidth=1.0, arrowsize=0.8];
+
+  // ====================== external libs ======================
+  subgraph cluster_ext {
+    label="External / system libraries";
+    style="rounded,filled"; color="#92400E"; fontcolor="#78350F";
+    fillcolor="#FFFBEB"; fontsize=12;
+    Glaze    [label="glaze\n(JSON + YAML)",       fillcolor="#FBBF24", fontcolor="#78350F"];
+    Spdlog   [label="spdlog",                      fillcolor="#F59E0B", fontcolor=white];
+    Fmt      [label="fmt",                         fillcolor="#F59E0B", fontcolor=white];
+    Prom     [label="prometheus-cpp\ncore + pull", fillcolor="#EA580C", fontcolor=white];
+    Sqlite   [label="SQLite3\n(WAL)",              fillcolor="#DC2626", fontcolor=white, shape=cylinder];
+    Curl     [label="libcurl\n(SSE streaming)",    fillcolor="#B91C1C", fontcolor=white];
+    Httplib  [label="cpp-httplib\n(vendored hdr)", fillcolor="#9F1239", fontcolor=white];
+    Threads  [label="pthreads",                    fillcolor="#7C2D12", fontcolor=white];
+    Doctest  [label="doctest\n(tests only)",       fillcolor="#16A34A", fontcolor=white, style="filled,rounded,dashed"];
+  }
+
+  // ====================== internal subsystems ======================
+  subgraph cluster_int {
+    label="acva_core internal modules (src/)";
+    style="rounded,filled"; color="#0F172A"; fontcolor="#0F172A";
+    fillcolor="#F8FAFC"; fontsize=12;
+
+    // Foundation
+    Cfg  [label="config\n• Config struct\n• load_from_file/string\n• validate()",
+          fillcolor="#64748B", fontcolor=white];
+
+    // Event substrate
+    Evt  [label="event\n• Event variant\n• EventBus (subscribe/publish)\n• BoundedQueue<T>",
+          fillcolor="#0EA5E9", fontcolor=white];
+
+    // Cross-cutting
+    Log  [label="log\n• init()/info()/event()\n• JsonSink → stderr",
+          fillcolor="#CA8A04", fontcolor=white];
+    Met  [label="metrics\n• Registry\n• voice_* families\n• subscribe(bus)",
+          fillcolor="#334155", fontcolor=white];
+
+    // Storage
+    Mem  [label="memory\n• Database / Statement\n• Repository\n• MemoryThread (writer)\n• Recovery sweep\n• Summarizer",
+          fillcolor="#7C3AED", fontcolor=white];
+
+    // LLM
+    Llm  [label="llm\n• PromptBuilder\n• LlmClient (libcurl SSE)\n• SseParser",
+          fillcolor="#9333EA", fontcolor=white];
+
+    // Dialogue layer
+    Dlg  [label="dialogue\n• Fsm + TurnContext\n• Manager (I/O thread)\n• SentenceSplitter\n• TurnWriter",
+          fillcolor="#C026D3", fontcolor=white];
+
+    // Control plane
+    Hp   [label="http\n• ControlServer\n  /metrics /status /health",
+          fillcolor="#0891B2", fontcolor=white];
+
+    // Pipeline drivers
+    Pip  [label="pipeline\n• FakeDriver (M0)",
+          fillcolor="#F59E0B", fontcolor=white];
+  }
+
+  // ====================== entry point ======================
+  Main [label="src/main.cpp\nacva binary entry point",
+        fillcolor="#0F172A", fontcolor=white, fontsize=12, penwidth=2.0,
+        shape=box3d];
+
+  // ====================== internal edges ======================
+  // (subsystem includes → headers in another subsystem)
+
+  // log uses config + event::TurnId
+  Log -> Cfg;
+  Log -> Evt;
+
+  // metrics uses event types (TurnId, families) + bus
+  Met -> Evt;
+
+  // memory: queue (event/queue), uses log internally
+  Mem -> Evt   [label="BoundedQueue\nin MemoryThread"];
+  Mem -> Log   [style=dashed, color="#A16207"];
+
+  // llm: config + event types + dialogue::TurnContext + memory (PromptBuilder reads via MemoryThread)
+  Llm -> Cfg;
+  Llm -> Evt;
+  Llm -> Dlg   [label="TurnContext\nCancellationToken", style=dashed];
+  Llm -> Mem   [label="PromptBuilder\nreads facts/summary"];
+
+  // dialogue: bus, events, memory writes, llm client (Manager submits)
+  Dlg -> Cfg;
+  Dlg -> Evt;
+  Dlg -> Mem   [label="TurnWriter persists\nuser+assistant turns"];
+  Dlg -> Llm   [label="Manager calls\nLlmClient::submit"];
+
+  // memory::Summarizer also calls llm
+  Mem -> Llm   [label="Summarizer uses\nLlmClient", style=dashed, color="#7C3AED"];
+
+  // http control plane: config, metrics registry, FSM snapshot
+  Hp  -> Cfg;
+  Hp  -> Met   [label="serialize\n/metrics"];
+  Hp  -> Dlg   [label="Fsm::snapshot()\n→ /status"];
+
+  // pipeline driver pushes events
+  Pip -> Evt   [label="publish FakeDriver\nturn events"];
+
+  // ====================== main wires everything ======================
+  edge [color="#0F172A", penwidth=1.4, style=bold];
+  Main -> Cfg [label="parse YAML"];
+  Main -> Log;
+  Main -> Evt [label="EventBus"];
+  Main -> Met;
+  Main -> Mem [label="MemoryThread::open\n+ run_recovery"];
+  Main -> Llm;
+  Main -> Dlg [label="Fsm + Manager\n+ TurnWriter"];
+  Main -> Hp  [label="ControlServer"];
+  Main -> Pip [label="FakeDriver\n(if cfg.fake_driver_enabled)"];
+
+  // ====================== external link edges ======================
+  edge [color="#92400E", style=dotted, penwidth=1.2, arrowsize=0.7];
+  Cfg -> Glaze;
+  Log -> Spdlog;
+  Log -> Fmt;
+  Met -> Prom;
+  Mem -> Sqlite;
+  Llm -> Curl;
+  Llm -> Httplib  [label="health probe"];
+  Llm -> Glaze    [label="JSON body"];
+  Hp  -> Httplib;
+  Met -> Httplib  [label="cpp-httplib server\nin prometheus-cpp"];
+  Evt -> Threads;
+  Dlg -> Threads;
+  Mem -> Threads;
+  Pip -> Threads;
+
+}

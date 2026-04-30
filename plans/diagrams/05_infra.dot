@@ -1,0 +1,250 @@
+// 05_infra.dot — deployment / infrastructure view. Splits into five
+// concerns called out in the prompt:
+//   • config       — files + env that parameterise the system
+//   • runtime      — host process + container backends
+//   • control      — HTTP control plane + signals + supervisor probes
+//   • resources    — GPU, CPU, audio devices, model + voice volumes
+//   • telemetry    — logs, metrics, traces
+//
+// Render: dot -Tsvg 05_infra.dot -o 05_infra.svg
+//
+// Reflects the dev-default deployment from project_design.md §17 + L0:
+// upstream Compose images, host-resident orchestrator binary, no custom
+// Dockerfiles for llama (whisper + piper are built locally because no
+// upstream server image exists). systemd path is shown as the M8 alt.
+
+digraph Infra {
+  rankdir=LR;
+  bgcolor="white";
+  pad=0.4;
+  splines=spline;
+  ranksep=0.85;
+  nodesep=0.30;
+  compound=true;
+
+  node [style="filled,rounded", shape=box, fontname="Helvetica",
+        fontsize=10, penwidth=1.0, color="#0F172A"];
+  edge [color="#475569", fontname="Helvetica", fontsize=9, arrowsize=0.7];
+
+  // ===================================================================
+  // CONFIG
+  // ===================================================================
+  subgraph cluster_config {
+    label="CONFIG  •  declarative parameters loaded at start";
+    style="rounded,filled"; color="#A16207"; fontcolor="#78350F";
+    fillcolor="#FEFCE8"; fontsize=12;
+
+    Yaml [label="config/default.yaml\n• logging / control\n• pipeline / llm / memory\n• dialogue / system_prompts",
+          fillcolor="#FACC15", fontcolor="#78350F", shape=note];
+    Env  [label=".env\nACVA_MODELS_DIR\nACVA_VOICES_DIR\nACVA_LLM_MODEL\nACVA_WHISPER_MODEL\nACVA_PIPER_VOICE",
+          fillcolor="#EAB308", fontcolor="#422006", shape=note];
+    Cli  [label="CLI flags\n--config / --no-fake-driver / --stdin",
+          fillcolor="#FDE68A", fontcolor="#78350F", shape=note];
+    Composey [label="compose.yaml\n→ packaging/compose/\n  docker-compose.yml",
+              fillcolor="#CA8A04", fontcolor=white, shape=note];
+  }
+
+  // ===================================================================
+  // RUNTIME — host + containers
+  // ===================================================================
+  subgraph cluster_host {
+    label="HOST RUNTIME  •  Linux x86_64 (Manjaro/Arch primary)";
+    style="rounded,filled"; color="#0F172A"; fontcolor="#0F172A";
+    fillcolor="#F1F5F9"; fontsize=12;
+
+    Acva [label="acva  (CLI binary)\n• main.cpp event loop\n• EventBus + N subscriptions\n• MemoryThread (SQLite WAL)\n• Manager I/O thread\n• Summarizer worker\n• stdin reader thread\n• cpp-httplib control thread",
+          fillcolor="#0F172A", fontcolor=white, shape=box3d, fontsize=11, penwidth=1.6];
+
+    SystemdAcva [label="acva.service  (M8 alt prod)\nsystemd unit",
+                  fillcolor="#1E293B", fontcolor=white, style="filled,rounded,dashed"];
+
+    Sigs [label="signals\nSIGINT / SIGTERM / SIGHUP",
+          fillcolor="#475569", fontcolor=white, shape=oval];
+
+    Tty  [label="terminal / journald\nstderr capture",
+          fillcolor="#334155", fontcolor=white, shape=oval];
+  }
+
+  subgraph cluster_compose {
+    label="DOCKER COMPOSE STACK  •  name: acva  •  127.0.0.1 only  •  restart: unless-stopped";
+    style="rounded,filled"; color="#0E7490"; fontcolor="#0E7490";
+    fillcolor="#ECFEFF"; fontsize=12;
+
+    Llama [label="acva-llama\nghcr.io/ggml-org/\nllama.cpp:server-cuda\n--ctx-size 8192\n--n-gpu-layers 999\n--threads 4 --metrics",
+           fillcolor="#7C3AED", fontcolor=white, shape=box3d];
+
+    Whisper [label="acva-whisper\nacva/whisper.cpp:\nserver-v1.8.4\n(local build, ref v1.8.4)",
+             fillcolor="#10B981", fontcolor=white, shape=box3d];
+
+    Piper [label="acva-piper\nacva/piper:1.4.2\npython:3.12-slim +\npiper-tts 1.4.2",
+           fillcolor="#F59E0B", fontcolor=white, shape=box3d];
+
+    PiperEn [label="acva-piper-en (M3)\nport 8083",
+             fillcolor="#FCD34D", fontcolor="#78350F", style="filled,rounded,dashed"];
+    PiperRu [label="acva-piper-ru (M3)\nport 8084",
+             fillcolor="#FCD34D", fontcolor="#78350F", style="filled,rounded,dashed"];
+  }
+
+  subgraph cluster_systemd {
+    label="SYSTEMD ALT  •  M8 production path  •  acva.target";
+    style="rounded,filled,dashed"; color="#0891B2"; fontcolor="#0891B2";
+    fillcolor="#ECFEFF"; fontsize=11;
+
+    SLla [label="acva-llama.service",   fillcolor="#67E8F9", fontcolor="#155E75", style="filled,rounded,dashed"];
+    SWh  [label="acva-whisper.service", fillcolor="#67E8F9", fontcolor="#155E75", style="filled,rounded,dashed"];
+    SPi  [label="acva-piper.service",   fillcolor="#67E8F9", fontcolor="#155E75", style="filled,rounded,dashed"];
+    Sdb  [label="sd-bus\n(-DACVA_ENABLE_SDBUS=ON)\nActiveState / RestartUnit",
+          fillcolor="#22D3EE", fontcolor="#164E63", style="filled,rounded,dashed", shape=note];
+  }
+
+  // ===================================================================
+  // CONTROL  •  HTTP routes, signals, supervisor probes
+  // ===================================================================
+  subgraph cluster_ctrl {
+    label="CONTROL PLANE  •  http://127.0.0.1:9876";
+    style="rounded,filled"; color="#155E75"; fontcolor="#155E75";
+    fillcolor="#F0F9FF"; fontsize=12;
+
+    Met  [label="GET /metrics\nprometheus exposition",
+          fillcolor="#0891B2", fontcolor=white];
+    Stat [label="GET /status\nFSM snapshot JSON",
+          fillcolor="#0891B2", fontcolor=white];
+    Hlth [label="GET /health\n\"ok\\n\"",
+          fillcolor="#0891B2", fontcolor=white];
+
+    Future [label="POST /reload (M8)\nPOST /mute /unmute (M8)\nPOST /new-session (M8)\nPOST /wipe (M8)",
+             fillcolor="#67E8F9", fontcolor="#164E63", style="filled,rounded,dashed", shape=note];
+
+    Supe [label="Supervisor probes (M2)\nGET /health every 5 s\nstate machine:\nProbing → Healthy ↔\nDegraded → Unhealthy",
+          fillcolor="#0E7490", fontcolor=white];
+
+    Curl [label="external curl /\nOS hotkey binding\n(sway / hyprland / GNOME)",
+          fillcolor="#94A3B8", fontcolor="#0F172A", shape=oval];
+  }
+
+  // ===================================================================
+  // RESOURCES — GPU / CPU / disk / audio
+  // ===================================================================
+  subgraph cluster_res {
+    label="HARDWARE / FILESYSTEM RESOURCES";
+    style="rounded,filled"; color="#7F1D1D"; fontcolor="#7F1D1D";
+    fillcolor="#FEF2F2"; fontsize=12;
+
+    Gpu  [label="🟩 NVIDIA RTX 4060 8 GB\nexclusive use; nvidia runtime\nQwen2.5-7B Q4_K_M ≈ 4.5 GB",
+          fillcolor="#16A34A", fontcolor=white, shape=component];
+    Cpu  [label="x86_64 ≥ 8 cores\nWhisper on CPU\nPiper on CPU",
+          fillcolor="#DC2626", fontcolor=white, shape=component];
+
+    Models [label="${ACVA_MODELS_DIR}\n=~/.local/share/acva/models/\nqwen2.5-7b-instruct-q4_k_m-*.gguf\nggml-small.bin",
+            fillcolor="#F87171", fontcolor=white, shape=folder];
+    Voices [label="${ACVA_VOICES_DIR}\n=~/.local/share/acva/voices/\nen_US-amy-medium.onnx + .json",
+            fillcolor="#F87171", fontcolor=white, shape=folder];
+    Db    [label="acva.db (SQLite WAL)\nXDG_DATA_HOME default",
+           fillcolor="#7C3AED", fontcolor=white, shape=cylinder];
+    Audio [label="🎤🔊 Audio devices (M4+)\nALSA / PulseAudio / Pipewire\nvia PortAudio",
+           fillcolor="#2563EB", fontcolor=white, shape=component, style="filled,rounded,dotted"];
+  }
+
+  // ===================================================================
+  // TELEMETRY
+  // ===================================================================
+  subgraph cluster_tel {
+    label="TELEMETRY";
+    style="rounded,filled"; color="#1F2937"; fontcolor="#1F2937";
+    fillcolor="#F8FAFC"; fontsize=12;
+
+    Logs [label="JSON-per-line logs\nstderr → terminal / journald\nfields: ts, level,\ncomponent, event, turn_id",
+          fillcolor="#CA8A04", fontcolor=white, shape=note];
+    Prom [label="Prometheus scrape target\nvoice_llm_first_token_ms\nvoice_llm_tokens_per_sec\nvoice_turn_outcomes_total\nvoice_fsm_state\nvoice_queue_drops_total\nvoice_service_restarts_total",
+          fillcolor="#1F2937", fontcolor=white, shape=note];
+    Otel [label="OTLP collector\n(opt-in M8)\nper-turn span tree:\nstt_final → llm_start →\nfirst_token → first_audio",
+          fillcolor="#FBBF24", fontcolor="#78350F", shape=note,
+          style="filled,rounded,dashed"];
+    Llamamx [label="llama.cpp /metrics\n(prom format,\nbackend-side)",
+             fillcolor="#A855F7", fontcolor=white, shape=note];
+  }
+
+  // ===================================================================
+  // EDGES
+  // ===================================================================
+
+  // Config → things that read it
+  edge [color="#A16207", style=dashed];
+  Yaml -> Acva [label="load_from_file"];
+  Cli  -> Acva [label="argv parsing"];
+  Composey -> Llama;
+  Composey -> Whisper;
+  Composey -> Piper;
+  Env  -> Composey [label="${VAR} expansion"];
+  Env  -> Acva     [label="XDG_DATA_HOME (db_path)"];
+
+  // Host → containers (HTTP traffic)
+  edge [color="#9333EA", style=solid];
+  Acva -> Llama   [label="libcurl SSE\nPOST /v1/chat/completions\n127.0.0.1:8081"];
+  edge [color="#10B981", style=solid];
+  Acva -> Whisper [label="HTTP (M4 sync,\nM5 streaming)\n127.0.0.1:8082"];
+  edge [color="#F59E0B", style=solid];
+  Acva -> Piper   [label="HTTP POST /  (M3)\n127.0.0.1:8083"];
+  Acva -> PiperEn [style=dashed];
+  Acva -> PiperRu [style=dashed];
+
+  // Compose internal: healthchecks
+  edge [color="#0891B2", style=dotted];
+  Llama   -> Llama   [label="HEALTHCHECK\ncurl /health\n5s/2s/12r/30s"];
+  Whisper -> Whisper [label="HEALTHCHECK\ncurl /health\n5s/2s/12r/15s"];
+  Piper   -> Piper   [label="HEALTHCHECK\nTCP probe (no /health)\n5s/3s/12r/15s"];
+
+  // Resources mounts
+  edge [color="#7F1D1D", style=dashed];
+  Models -> Llama   [label="bind-mount\n/models:ro"];
+  Models -> Whisper [label="/models:ro"];
+  Voices -> Piper   [label="/voices:ro"];
+  Gpu    -> Llama   [label="--gpus=1\nnvidia runtime"];
+  Cpu    -> Whisper;
+  Cpu    -> Piper;
+  Cpu    -> Acva;
+  Acva   -> Db      [label="open + WAL +\nrecovery sweep"];
+  Acva   -> Audio   [label="PortAudio capture/\nplayback (M4)", style=dotted];
+
+  // Control plane
+  edge [color="#155E75", style=solid];
+  Acva -> Met;
+  Acva -> Stat;
+  Acva -> Hlth;
+  Acva -> Future [style=dashed];
+  Curl -> Met  [label="prometheus scrape"];
+  Curl -> Stat [label="ad-hoc"];
+  Curl -> Future [label="hotkey → mute (M8)", style=dashed];
+
+  // Supervisor probes (M2)
+  edge [color="#0E7490", style=solid];
+  Supe -> Llama   [label="GET /health\nevery 5s"];
+  Supe -> Whisper [label="GET /health"];
+  Supe -> Piper   [label="TCP probe"];
+  Supe -> Acva    [label="HealthChanged\non bus"];
+
+  // signals
+  edge [color="#475569", style=solid];
+  Sigs -> Acva [label="atomic sets\ng_signal_received"];
+
+  // systemd alt
+  edge [color="#0891B2", style=dashed];
+  SystemdAcva -> Acva [label="ExecStart=acva\n--config /etc/acva/...", style=dashed];
+  Sdb         -> SLla [style=dashed];
+  Sdb         -> SWh  [style=dashed];
+  Sdb         -> SPi  [style=dashed];
+  Acva        -> Sdb  [label="optional sd-bus client\nActiveState / RestartUnit", style=dashed, color="#0891B2"];
+
+  // telemetry
+  edge [color="#CA8A04", style=solid];
+  Acva    -> Logs  [label="JSON-per-line\nstderr"];
+  Acva    -> Tty   [style=dashed];
+  Logs    -> Tty   [label="captured by\njournald or shell"];
+  edge [color="#334155", style=solid];
+  Met     -> Prom  [label="exposition format"];
+  Llama   -> Llamamx [label="upstream\n--metrics flag", style=dashed, color="#9333EA"];
+  Acva    -> Otel  [label="OTLP HTTP\n(opt-in)", style=dashed, color="#FBBF24"];
+
+  // (no global rank=same hints — clusters carry the grouping;
+  //  Graphviz handles in-cluster layout on its own.)
+}

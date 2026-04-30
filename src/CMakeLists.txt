@@ -2,6 +2,7 @@
 add_library(lclva_core STATIC
     config/config.cpp
     dialogue/fsm.cpp
+    dialogue/manager.cpp
     dialogue/sentence_splitter.cpp
     dialogue/turn.cpp
     event/bus.cpp

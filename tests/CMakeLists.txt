@@ -5,6 +5,7 @@ add_executable(lclva_tests
     test_db.cpp
     test_fsm.cpp
     test_llm_client.cpp
+    test_manager.cpp
     test_memory_thread.cpp
     test_prompt_builder.cpp
     test_queue.cpp

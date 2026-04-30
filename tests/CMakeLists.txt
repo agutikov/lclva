@@ -13,6 +13,7 @@ add_executable(lclva_tests
     test_recovery.cpp
     test_repository.cpp
     test_sentence_splitter.cpp
+    test_turn_writer.cpp
 )
 
 target_link_libraries(lclva_tests

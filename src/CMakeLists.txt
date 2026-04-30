@@ -5,6 +5,7 @@ add_library(lclva_core STATIC
     dialogue/manager.cpp
     dialogue/sentence_splitter.cpp
     dialogue/turn.cpp
+    dialogue/turn_writer.cpp
     event/bus.cpp
     event/event.cpp
     http/server.cpp

@@ -10,15 +10,15 @@
 #include <filesystem>
 #include <thread>
 
-namespace dlg = lclva::dialogue;
-namespace ev  = lclva::event;
-namespace mem = lclva::memory;
+namespace dlg = acva::dialogue;
+namespace ev  = acva::event;
+namespace mem = acva::memory;
 namespace fs  = std::filesystem;
 
 namespace {
 
 fs::path tmp_db(const char* name) {
-    auto p = fs::temp_directory_path() / (std::string("lclva-tw-") + name + ".db");
+    auto p = fs::temp_directory_path() / (std::string("acva-tw-") + name + ".db");
     fs::remove(p);
     fs::remove(fs::path(p.string() + "-wal"));
     fs::remove(fs::path(p.string() + "-shm"));

@@ -8,15 +8,15 @@
 #include <filesystem>
 #include <variant>
 
-namespace cfg = lclva::config;
-namespace llm = lclva::llm;
-namespace mem = lclva::memory;
+namespace cfg = acva::config;
+namespace llm = acva::llm;
+namespace mem = acva::memory;
 namespace fs  = std::filesystem;
 
 namespace {
 
 fs::path tmp_db(const char* name) {
-    auto p = fs::temp_directory_path() / (std::string("lclva-prompt-") + name + ".db");
+    auto p = fs::temp_directory_path() / (std::string("acva-prompt-") + name + ".db");
     fs::remove(p);
     fs::remove(fs::path(p.string() + "-wal"));
     fs::remove(fs::path(p.string() + "-shm"));

@@ -4,7 +4,7 @@
 
 #include <algorithm>
 
-namespace lclva::memory {
+namespace acva::memory {
 
 std::string_view to_string(TurnRole r) noexcept {
     return r == TurnRole::User ? "user" : "assistant";
@@ -348,4 +348,4 @@ Result<std::optional<std::string>> Repository::get_setting(std::string_view key)
     return std::optional<std::string>{stmt.column_text(0)};
 }
 
-} // namespace lclva::memory
+} // namespace acva::memory

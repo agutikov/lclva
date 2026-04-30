@@ -12,12 +12,12 @@
 #include <optional>
 #include <thread>
 
-namespace lclva::llm {
+namespace acva::llm {
 class LlmClient;
 class PromptBuilder;
-} // namespace lclva::llm
+} // namespace acva::llm
 
-namespace lclva::dialogue {
+namespace acva::dialogue {
 
 // DialogueManager — wires FinalTranscript → LLM → LlmSentence events.
 //
@@ -93,4 +93,4 @@ private:
     TurnContext active_;
 };
 
-} // namespace lclva::dialogue
+} // namespace acva::dialogue

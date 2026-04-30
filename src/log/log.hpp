@@ -12,7 +12,7 @@
 #include <string_view>
 #include <utility>
 
-namespace lclva::log {
+namespace acva::log {
 
 // Initialize the global logger from config. Must be called once at startup.
 // Subsequent calls re-init in place (intended for hot reload of log level).
@@ -66,4 +66,4 @@ void event(std::string_view component,
            event::TurnId turn,
            std::initializer_list<std::pair<std::string_view, std::string>> kv);
 
-} // namespace lclva::log
+} // namespace acva::log

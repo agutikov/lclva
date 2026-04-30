@@ -15,7 +15,7 @@
 #include <string_view>
 #include <vector>
 
-namespace lclva::llm {
+namespace acva::llm {
 
 namespace {
 
@@ -230,4 +230,4 @@ void LlmClient::keep_alive() {
     (void)cli.Post("/v1/chat/completions", body, "application/json");
 }
 
-} // namespace lclva::llm
+} // namespace acva::llm

@@ -8,7 +8,7 @@
 #include <cstring>
 #include <utility>
 
-namespace lclva::metrics {
+namespace acva::metrics {
 
 namespace {
 
@@ -164,4 +164,4 @@ std::vector<event::SubscriptionHandle> Registry::subscribe(event::EventBus& bus)
     return handles;
 }
 
-} // namespace lclva::metrics
+} // namespace acva::metrics

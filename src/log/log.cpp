@@ -10,11 +10,11 @@
 #include <stdexcept>
 #include <string>
 
-namespace lclva::log {
+namespace acva::log {
 
 namespace {
 
-constexpr const char* kLoggerName = "lclva";
+constexpr const char* kLoggerName = "acva";
 
 // Pattern used by the JSON sink: emit only the formatted user payload.
 // All structural framing (ts, level, component) is added by the sink
@@ -104,7 +104,7 @@ void escape_json_string(std::string& out, std::string_view s) {
 
 void event(std::string_view component,
            std::string_view event_name,
-           lclva::event::TurnId turn,
+           acva::event::TurnId turn,
            std::initializer_list<std::pair<std::string_view, std::string>> kv) {
     // The sink expects the payload to start with "[<component>] ", so we
     // build the message exactly that way and follow it with the marker.
@@ -118,7 +118,7 @@ void event(std::string_view component,
     payload.append("\"event\":");
     escape_json_string(payload, event_name);
 
-    if (turn != lclva::event::kNoTurn) {
+    if (turn != acva::event::kNoTurn) {
         payload.append(",\"turn_id\":");
         payload.append(std::to_string(turn));
     }
@@ -138,7 +138,7 @@ std::shared_ptr<spdlog::logger> logger() {
         // so we don't crash; init() will replace it.
         auto fallback = spdlog::default_logger();
         if (!fallback) {
-            fallback = spdlog::stderr_color_mt("lclva-fallback");
+            fallback = spdlog::stderr_color_mt("acva-fallback");
             fallback->set_pattern(kJsonPattern);
         }
         return fallback;
@@ -146,4 +146,4 @@ std::shared_ptr<spdlog::logger> logger() {
     return g_logger;
 }
 
-} // namespace lclva::log
+} // namespace acva::log

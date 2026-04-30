@@ -9,9 +9,9 @@
 #include <memory>
 #include <string>
 
-namespace lclva::event { class EventBus; }
+namespace acva::event { class EventBus; }
 
-namespace lclva::llm {
+namespace acva::llm {
 
 // Outcome of a single LlmClient::submit() invocation. The DialogueManager
 // translates this into an event::LlmFinished bus event.
@@ -78,4 +78,4 @@ private:
     event::EventBus& bus_;
 };
 
-} // namespace lclva::llm
+} // namespace acva::llm

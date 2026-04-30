@@ -1,0 +1,7 @@
+[Unit]
+Description=acva voice stack (orchestrator + backends)
+Wants=acva-llama.service acva-whisper.service acva-piper.service acva.service
+After=acva-llama.service acva-whisper.service acva-piper.service
+
+[Install]
+WantedBy=default.target

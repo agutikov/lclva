@@ -7,7 +7,7 @@
 #include <random>
 #include <utility>
 
-namespace lclva::pipeline {
+namespace acva::pipeline {
 
 namespace {
 
@@ -212,4 +212,4 @@ void FakeDriver::run_one_turn_with_barge_in(event::TurnId turn) {
     });
 }
 
-} // namespace lclva::pipeline
+} // namespace acva::pipeline

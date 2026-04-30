@@ -2,7 +2,7 @@
 
 #include <utility>
 
-namespace lclva::event {
+namespace acva::event {
 
 // ===== Subscription =====
 
@@ -127,4 +127,4 @@ std::size_t EventBus::subscriber_count() const {
     return subs_.size();
 }
 
-} // namespace lclva::event
+} // namespace acva::event

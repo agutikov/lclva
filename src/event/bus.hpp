@@ -15,7 +15,7 @@
 #include <utility>
 #include <vector>
 
-namespace lclva::event {
+namespace acva::event {
 
 // One subscription. Owned by the bus; the public Handle is a non-owning
 // reference returned to the caller for unsubscribing.
@@ -127,4 +127,4 @@ private:
     std::atomic<std::uint64_t> published_{0};
 };
 
-} // namespace lclva::event
+} // namespace acva::event

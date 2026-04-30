@@ -2,7 +2,7 @@
 
 #include <utility>
 
-namespace lclva::dialogue {
+namespace acva::dialogue {
 
 namespace {
 
@@ -248,4 +248,4 @@ bool SentenceSplitter::buffer_ends_with_decimal() const {
     return is_digit(buf_[buf_.size() - 2]);
 }
 
-} // namespace lclva::dialogue
+} // namespace acva::dialogue

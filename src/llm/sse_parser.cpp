@@ -1,6 +1,6 @@
 #include "llm/sse_parser.hpp"
 
-namespace lclva::llm {
+namespace acva::llm {
 
 namespace {
 
@@ -80,4 +80,4 @@ void SseParser::emit_event(std::string_view event_text) {
     }
 }
 
-} // namespace lclva::llm
+} // namespace acva::llm

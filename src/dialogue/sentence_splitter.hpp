@@ -8,7 +8,7 @@
 #include <unordered_set>
 #include <vector>
 
-namespace lclva::dialogue {
+namespace acva::dialogue {
 
 // SentenceSplitter: streaming token-in / sentence-out.
 //
@@ -85,4 +85,4 @@ private:
     std::unordered_set<std::string> abbreviations_;
 };
 
-} // namespace lclva::dialogue
+} // namespace acva::dialogue

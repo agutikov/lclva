@@ -95,7 +95,7 @@ Capture via:
 - `false-positive-tv.wav` — TTS playing; background TV news (someone else speaking). Expected: NO cancellation; `voice_barge_in_false_fires_total` does not increment.
 - `false-positive-self.wav` — TTS playing; AEC-cleaned. Expected: NO cancellation.
 
-**Test driver:** `tests/test_barge_in_validation.cpp` (gated by `LCLVA_REAL_AUDIO=1`). Replays the WAV through the playback engine and the mic, observes barge-in detector behavior, asserts on cancellation latency and false-fire counts.
+**Test driver:** `tests/test_barge_in_validation.cpp` (gated by `ACVA_REAL_AUDIO=1`). Replays the WAV through the playback engine and the mic, observes barge-in detector behavior, asserts on cancellation latency and false-fire counts.
 
 ## Step 6 — UX polish
 

@@ -16,10 +16,10 @@
 #include <thread>
 #include <vector>
 
-namespace cfg = lclva::config;
-namespace ev  = lclva::event;
-namespace llm = lclva::llm;
-namespace mem = lclva::memory;
+namespace cfg = acva::config;
+namespace ev  = acva::event;
+namespace llm = acva::llm;
+namespace mem = acva::memory;
 namespace fs  = std::filesystem;
 
 namespace {
@@ -93,7 +93,7 @@ cfg::Config make_config(const std::string& base_url, std::uint32_t turn_threshol
 }
 
 fs::path tmp_db(const char* name) {
-    auto p = fs::temp_directory_path() / (std::string("lclva-sum-") + name + ".db");
+    auto p = fs::temp_directory_path() / (std::string("acva-sum-") + name + ".db");
     fs::remove(p);
     fs::remove(fs::path(p.string() + "-wal"));
     fs::remove(fs::path(p.string() + "-shm"));

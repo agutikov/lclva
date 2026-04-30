@@ -28,7 +28,7 @@ The orchestrator now hears the user — but doesn't yet know what they said (M5)
 find_package(onnxruntime CONFIG REQUIRED)
 ```
 
-The ONNX model file ships separately; downloaded via `scripts/download-silero-vad.sh` to `${XDG_DATA_HOME}/lclva/models/silero_vad.onnx`.
+The ONNX model file ships separately; downloaded via `scripts/download-silero-vad.sh` to `${XDG_DATA_HOME}/acva/models/silero_vad.onnx`.
 
 ## Step 1 — MonotonicAudioClock
 
@@ -221,7 +221,7 @@ audio:
 
 vad:
   provider: silero
-  model_path: "${XDG_DATA_HOME:-~/.local/share}/lclva/models/silero_vad.onnx"
+  model_path: "${XDG_DATA_HOME:-~/.local/share}/acva/models/silero_vad.onnx"
   onset_threshold: 0.5
   offset_threshold: 0.35
   min_speech_ms: 200

@@ -12,10 +12,10 @@
 #include <thread>
 #include <vector>
 
-namespace cfg = lclva::config;
-namespace dlg = lclva::dialogue;
-namespace ev  = lclva::event;
-namespace llm = lclva::llm;
+namespace cfg = acva::config;
+namespace dlg = acva::dialogue;
+namespace ev  = acva::event;
+namespace llm = acva::llm;
 
 namespace {
 

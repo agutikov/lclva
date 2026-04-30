@@ -1,0 +1,18 @@
+[Unit]
+Description=acva — Autonomous Conversational Voice Agent
+After=acva-llama.service acva-whisper.service acva-piper.service
+Wants=acva-llama.service acva-whisper.service acva-piper.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/acva --config %h/.config/acva/config.yaml
+Restart=on-failure
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+# Real-time scheduling for the audio thread (optional, but reduces underruns).
+LimitRTPRIO=20
+LimitMEMLOCK=infinity
+
+[Install]
+WantedBy=default.target

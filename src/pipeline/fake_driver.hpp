@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <thread>
 
-namespace lclva::pipeline {
+namespace acva::pipeline {
 
 struct FakeDriverOptions {
     // Inter-turn pause.
@@ -60,4 +60,4 @@ private:
     std::atomic<std::uint64_t> turns_emitted_{0};
 };
 
-} // namespace lclva::pipeline
+} // namespace acva::pipeline

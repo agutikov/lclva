@@ -1,4 +1,4 @@
-# lclva default configuration
+# acva default configuration
 #
 # This is the M0 minimal config. As milestones land, more sections appear:
 #   M1: llm, memory, dialogue
@@ -14,7 +14,7 @@
 logging:
   level: info        # trace | debug | info | warn | error | critical | off
   sink: stderr       # stderr | journal | file
-  # file_path: /var/log/lclva.log    # required when sink=file
+  # file_path: /var/log/acva.log    # required when sink=file
 
 control:
   bind: "127.0.0.1"
@@ -29,7 +29,7 @@ pipeline:
 llm:
   base_url: "http://127.0.0.1:8081/v1"
   model: "qwen2.5-7b-instruct"
-  unit: "lclva-llama.service"
+  unit: "acva-llama.service"
   temperature: 0.7
   max_tokens: 400
   max_prompt_tokens: 3000
@@ -39,7 +39,7 @@ llm:
 memory:
   # Resolved relative to CWD if not absolute. Production deployments should
   # set an absolute path under XDG_DATA_HOME.
-  db_path: "lclva.db"
+  db_path: "acva.db"
   recent_turns_n: 10
   write_queue_capacity: 256
   summary:

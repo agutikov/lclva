@@ -10,7 +10,7 @@
 #include <string>
 #include <string_view>
 
-namespace lclva::config {
+namespace acva::config {
 
 namespace {
 
@@ -136,4 +136,4 @@ LoadResult load_from_file(const std::filesystem::path& path) {
     return load_from_string(text);
 }
 
-} // namespace lclva::config
+} // namespace acva::config

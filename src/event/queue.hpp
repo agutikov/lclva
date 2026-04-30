@@ -9,7 +9,7 @@
 #include <optional>
 #include <utility>
 
-namespace lclva::event {
+namespace acva::event {
 
 enum class OverflowPolicy {
     // Realtime-style: full queue drops the oldest item and accepts the new one.
@@ -164,4 +164,4 @@ private:
     std::atomic<std::uint64_t> drops_{0};
 };
 
-} // namespace lclva::event
+} // namespace acva::event

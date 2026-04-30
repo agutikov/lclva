@@ -10,7 +10,7 @@
 #include <utility>
 #include <variant>
 
-namespace lclva::dialogue {
+namespace acva::dialogue {
 
 Manager::Manager(const config::Config& cfg,
                  event::EventBus& bus,
@@ -181,4 +181,4 @@ void Manager::run_one(const event::FinalTranscript& e) {
     }
 }
 
-} // namespace lclva::dialogue
+} // namespace acva::dialogue

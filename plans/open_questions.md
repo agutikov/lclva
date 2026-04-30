@@ -224,11 +224,11 @@ Schedule shifted from ~12–14 weeks to **~14–16 weeks** because of M5 expansi
 
 **H3. Crash dump policy?** *(resolved)*
 - Decision: **rely on systemd-coredump**.
-- Consequence: no custom signal handler. systemd journal will reference the dump. Document `coredumpctl list lclva` for users.
+- Consequence: no custom signal handler. systemd journal will reference the dump. Document `coredumpctl list acva` for users.
 
 **H4. Distribution model?** *(resolved — implied by H5)*
 - Decision: **service-set with systemd units**, not a single self-launching binary.
-- Consequence: package installs `lclva` orchestrator binary + systemd unit files for `lclva.service`, `lclva-llama.service`, `lclva-whisper.service`, `lclva-piper.service`. User-level units (`systemd --user`) are the default; system-wide units are supported.
+- Consequence: package installs `acva` orchestrator binary + systemd unit files for `acva.service`, `acva-llama.service`, `acva-whisper.service`, `acva-piper.service`. User-level units (`systemd --user`) are the default; system-wide units are supported.
 
 **H5. External services launched by whom?** *(resolved)*
 - Decision: **systemd**. Orchestrator manages units (start/stop/restart/status), does not fork child processes.
@@ -261,7 +261,7 @@ Schedule shifted from ~12–14 weeks to **~14–16 weeks** because of M5 expansi
 
 **I4. Conversation export?** *(resolved)*
 - Decision: **text export via CLI**, markdown by default, JSON optional.
-- CLI: `lclva export --session <id> [--format markdown|json]`.
+- CLI: `acva export --session <id> [--format markdown|json]`.
 
 ---
 
@@ -304,9 +304,9 @@ Decisions that surfaced during M0/M1 implementation, post-interview. These super
 
 **L0. Backend deployment for dev — Compose vs systemd.** *(resolved)*
 - Decision: **Docker Compose for the dev path; systemd as an alternative production path (M8).**
-- `lclva` itself runs as a host CLI binary throughout MVP — including production via the systemd path, where it gets its own `lclva.service` unit.
+- `acva` itself runs as a host CLI binary throughout MVP — including production via the systemd path, where it gets its own `acva.service` unit.
 - Compose runs three services using **upstream images verbatim** (`ghcr.io/ggml-org/llama.cpp:server-cuda`, `ghcr.io/ggml-org/whisper.cpp:server`, `python:3.12-slim` + `pip install piper-tts`). No custom Dockerfiles in M1.
-- Models live on the host under `~/.local/share/lclva/{models,voices}/` and are bind-mounted into containers read-only.
+- Models live on the host under `~/.local/share/acva/{models,voices}/` and are bind-mounted into containers read-only.
 - Consequences:
   - M2 simplifies dramatically (HTTP probes only; Compose owns process lifecycle). Estimate dropped from ~1 week to ~3 days.
   - M3 loses the Piper-wrapper subproject (~2 days saved). Per-language voices now mean per-language Compose services.

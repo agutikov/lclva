@@ -7,7 +7,7 @@
 #include <utility>
 #include <variant>
 
-namespace lclva::dialogue {
+namespace acva::dialogue {
 
 std::string_view to_string(State s) noexcept {
     switch (s) {
@@ -280,4 +280,4 @@ void Fsm::handle_user_interrupted(const event::UserInterrupted& e) {
     transition(State::Listening, "resume_listening");
 }
 
-} // namespace lclva::dialogue
+} // namespace acva::dialogue

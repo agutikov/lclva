@@ -4,10 +4,10 @@
 
 #include <variant>
 
-using lclva::config::Config;
-using lclva::config::LoadError;
-using lclva::config::load_from_string;
-using lclva::config::validate;
+using acva::config::Config;
+using acva::config::LoadError;
+using acva::config::load_from_string;
+using acva::config::validate;
 
 TEST_CASE("config: minimal valid YAML parses with all defaults") {
     auto r = load_from_string("logging: {}\ncontrol: {}\n");
@@ -24,7 +24,7 @@ TEST_CASE("config: parses overrides") {
 logging:
   level: debug
   sink: file
-  file_path: /tmp/lclva.log
+  file_path: /tmp/acva.log
 control:
   bind: 0.0.0.0
   port: 12345
@@ -35,7 +35,7 @@ control:
     CHECK(cfg.logging.level == "debug");
     CHECK(cfg.logging.sink == "file");
     REQUIRE(cfg.logging.file_path.has_value());
-    CHECK(*cfg.logging.file_path == "/tmp/lclva.log");
+    CHECK(*cfg.logging.file_path == "/tmp/acva.log");
     CHECK(cfg.control.bind == "0.0.0.0");
     CHECK(cfg.control.port == 12345);
 }

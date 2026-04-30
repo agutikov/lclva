@@ -1,6 +1,6 @@
 #include "event/event.hpp"
 
-namespace lclva::event {
+namespace acva::event {
 
 const char* event_name(const Event& e) noexcept {
     return std::visit([]<class T>(const T&) -> const char* {
@@ -37,4 +37,4 @@ TurnId event_turn(const Event& e) noexcept {
     }, e);
 }
 
-} // namespace lclva::event
+} // namespace acva::event

@@ -1,10 +1,10 @@
-# lclva
+# acva
 
-**Long Conversation Local Voice Agent.** A local, production-grade C++ voice assistant designed for multi-hour conversations on a single workstation. All inference runs locally; no audio or transcripts leave the machine.
+**Autonomous Conversational Voice Agent.** A local, production-grade C++ voice assistant designed for multi-hour conversations on a single workstation. All inference runs locally; no audio or transcripts leave the machine.
 
 ## Status
 
-In progress. **M0 and M1 complete.** Skeleton runtime, memory layer, sentence splitter, Docker Compose stack, libcurl SSE LLM client, dialogue manager, turn writer, summarizer stub, and JSON-per-line logging are all landed. 90 unit tests passing. The `lclva --stdin` binary drives a real LLM end-to-end against the Compose stack. Next: **M2 — service supervision** (HTTP `/health` probes, dialogue gating). See `plans/milestones/` for per-milestone detail.
+In progress. **M0 and M1 complete.** Skeleton runtime, memory layer, sentence splitter, Docker Compose stack, libcurl SSE LLM client, dialogue manager, turn writer, summarizer stub, and JSON-per-line logging are all landed. 90 unit tests passing. The `acva --stdin` binary drives a real LLM end-to-end against the Compose stack. Next: **M2 — service supervision** (HTTP `/health` probes, dialogue gating). See `plans/milestones/` for per-milestone detail.
 
 ## Goal
 
@@ -73,7 +73,7 @@ packaging/
   compose/                docker-compose.yml + local Dockerfiles for whisper/piper + fetch-assets.sh
   systemd/                per-user systemd units (alternative production path)
 compose.yaml              top-level compose shim that include:s packaging/compose/docker-compose.yml
-.env.example              env override template (LCLVA_MODELS_DIR, LCLVA_LLM_MODEL, ...)
+.env.example              env override template (ACVA_MODELS_DIR, ACVA_LLM_MODEL, ...)
 CMakeLists.txt, CMakePresets.json
 CLAUDE.md                 guidance for Claude Code in this repo
 README.md
@@ -269,7 +269,7 @@ systemd units that wrap each service ship in `packaging/systemd/` once that dire
 
 ## Quickstart with Docker Compose (dev — recommended)
 
-Default for development. Backends run as Compose containers; `lclva` runs on the host as a CLI binary. A top-level `compose.yaml` re-includes `packaging/compose/docker-compose.yml`, so all `docker compose ...` commands work from the repository root.
+Default for development. Backends run as Compose containers; `acva` runs on the host as a CLI binary. A top-level `compose.yaml` re-includes `packaging/compose/docker-compose.yml`, so all `docker compose ...` commands work from the repository root.
 
 llama.cpp uses the upstream `ghcr.io/ggml-org/llama.cpp:server-cuda` image verbatim. Whisper and Piper are built locally from minimal Dockerfiles under `packaging/compose/{whisper,piper}/` because upstream does not publish HTTP-server images for either project. Both Dockerfiles are short (≤ 30 lines) and pin to release tags / package versions.
 
@@ -285,7 +285,7 @@ llama.cpp uses the upstream `ghcr.io/ggml-org/llama.cpp:server-cuda` image verba
     sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
     ```
 - User in the `docker` group (or rootless Docker).
-- Models and voices present on the host under `~/.local/share/lclva/{models,voices}/`. The `fetch-assets.sh` helper below downloads the defaults.
+- Models and voices present on the host under `~/.local/share/acva/{models,voices}/`. The `fetch-assets.sh` helper below downloads the defaults.
 
 ### 2. Download the default model assets
 
@@ -301,7 +301,7 @@ Idempotent and resumable (curl `--continue-at -`). Default footprint ≈ 5.2 GB:
 | `ggml-small.bin` | ~466 MB | ggerganov/whisper.cpp on HuggingFace |
 | `en_US-amy-medium.onnx` (+ `.json`) | ~63 MB | rhasspy/piper-voices on HuggingFace |
 
-Override the destination dirs with `LCLVA_MODELS_DIR` / `LCLVA_VOICES_DIR` (the same env vars compose reads).
+Override the destination dirs with `ACVA_MODELS_DIR` / `ACVA_VOICES_DIR` (the same env vars compose reads).
 
 ### 3. Bring up the backends
 
@@ -313,8 +313,8 @@ docker compose ps               # all 3 services 'healthy' within ~60 s once ima
 This starts:
 
 - `llama` on `127.0.0.1:8081` — `ghcr.io/ggml-org/llama.cpp:server-cuda` (CUDA build, GPU passthrough)
-- `whisper` on `127.0.0.1:8082` — `lclva/whisper.cpp:server-v1.8.4` (built locally from `packaging/compose/whisper/Dockerfile`)
-- `piper` on `127.0.0.1:8083` — `lclva/piper:1.4.2` (built locally from `packaging/compose/piper/Dockerfile`; one voice per service, per-language deployments add more services on adjacent ports)
+- `whisper` on `127.0.0.1:8082` — `acva/whisper.cpp:server-v1.8.4` (built locally from `packaging/compose/whisper/Dockerfile`)
+- `piper` on `127.0.0.1:8083` — `acva/piper:1.4.2` (built locally from `packaging/compose/piper/Dockerfile`; one voice per service, per-language deployments add more services on adjacent ports)
 
 Health check each backend:
 
@@ -330,13 +330,13 @@ To override host paths or model file selection, copy `.env.example` to `.env` at
 
 ```sh
 cmake --preset dev && cmake --build --preset dev
-./build/dev/lclva --config config/default.yaml
+./build/dev/acva --config config/default.yaml
 # Control plane:
 curl -sS http://127.0.0.1:9876/status
 curl -sS http://127.0.0.1:9876/metrics
 ```
 
-Until M1 slice 2 lands, lclva runs in M0 fake-driver mode — it doesn't yet use the Compose backends. Once slice 2 is in, the orchestrator connects to llama / whisper / piper at the URLs in `config/default.yaml`.
+Until M1 slice 2 lands, acva runs in M0 fake-driver mode — it doesn't yet use the Compose backends. Once slice 2 is in, the orchestrator connects to llama / whisper / piper at the URLs in `config/default.yaml`.
 
 ### 5. Stop / clean
 
@@ -362,7 +362,7 @@ For unattended / production-style deployments, replace steps 3–6 with the syst
 
 ## Setting up the runtime services with systemd (production-style alternative)
 
-Use this path for unattended workstation deployments where you want services to survive logout, get journald aggregation, and don't want a Docker daemon running. This is also the path that exercises the optional sd-bus extension to the supervisor (gated by `-DLCLVA_ENABLE_SDBUS=ON` from M8 onward).
+Use this path for unattended workstation deployments where you want services to survive logout, get journald aggregation, and don't want a Docker daemon running. This is also the path that exercises the optional sd-bus extension to the supervisor (gated by `-DACVA_ENABLE_SDBUS=ON` from M8 onward).
 
 We default to **per-user systemd** (`systemctl --user`). It needs no privileges, doesn't pollute the system unit namespace. System-wide units are supported for shared workstations; the layout is identical except for the install path and `--user` becoming root.
 
@@ -374,37 +374,37 @@ Convention used below — adjust as you like:
 ~/.local/opt/llama.cpp/build/bin/llama-server     # built by you
 ~/.local/opt/whisper-server/                      # ours; M5 deliverable
 ~/.local/opt/piper/piper                          # release tarball
-~/.local/share/lclva/models/qwen2.5-7b-instruct-q4_k_m.gguf
-~/.local/share/lclva/models/ggml-small.bin        # whisper
-~/.local/share/lclva/voices/en_US-amy-medium.onnx
-~/.local/share/lclva/voices/en_US-amy-medium.onnx.json
+~/.local/share/acva/models/qwen2.5-7b-instruct-q4_k_m.gguf
+~/.local/share/acva/models/ggml-small.bin        # whisper
+~/.local/share/acva/voices/en_US-amy-medium.onnx
+~/.local/share/acva/voices/en_US-amy-medium.onnx.json
 ```
 
 Create the dirs:
 ```sh
-mkdir -p ~/.local/opt ~/.local/share/lclva/{models,voices,db}
+mkdir -p ~/.local/opt ~/.local/share/acva/{models,voices,db}
 ```
 
 Download the models (sizes from the README dependency table):
 
 ```sh
 # Qwen2.5-7B-Instruct GGUF Q4_K_M (~4.5 GB)
-curl -L -o ~/.local/share/lclva/models/qwen2.5-7b-instruct-q4_k_m.gguf \
+curl -L -o ~/.local/share/acva/models/qwen2.5-7b-instruct-q4_k_m.gguf \
   https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf
 
 # Whisper small multilingual (~244 MB)
-curl -L -o ~/.local/share/lclva/models/ggml-small.bin \
+curl -L -o ~/.local/share/acva/models/ggml-small.bin \
   https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin
 
 # Silero VAD (~2 MB)
-curl -L -o ~/.local/share/lclva/models/silero_vad.onnx \
+curl -L -o ~/.local/share/acva/models/silero_vad.onnx \
   https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx
 
 # A Piper voice (~30 MB) — repeat per language you want
-mkdir -p ~/.local/share/lclva/voices
-curl -L -o ~/.local/share/lclva/voices/en_US-amy-medium.onnx \
+mkdir -p ~/.local/share/acva/voices
+curl -L -o ~/.local/share/acva/voices/en_US-amy-medium.onnx \
   https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx
-curl -L -o ~/.local/share/lclva/voices/en_US-amy-medium.onnx.json \
+curl -L -o ~/.local/share/acva/voices/en_US-amy-medium.onnx.json \
   https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json
 ```
 
@@ -414,17 +414,17 @@ Five unit files ship in [`packaging/systemd/`](packaging/systemd/) — see that 
 
 | File | Role |
 |---|---|
-| `lclva-llama.service`   | LLM backend (llama.cpp) on `127.0.0.1:8081` |
-| `lclva-whisper.service` | STT backend (whisper.cpp) on `127.0.0.1:8082` |
-| `lclva-piper.service`   | TTS backend (Piper) on `127.0.0.1:8083` |
-| `lclva.service`         | Orchestrator (control plane on `127.0.0.1:9876`) |
-| `lclva.target`          | Convenience target — brings up all four in order |
+| `acva-llama.service`   | LLM backend (llama.cpp) on `127.0.0.1:8081` |
+| `acva-whisper.service` | STT backend (whisper.cpp) on `127.0.0.1:8082` |
+| `acva-piper.service`   | TTS backend (Piper) on `127.0.0.1:8083` |
+| `acva.service`         | Orchestrator (control plane on `127.0.0.1:9876`) |
+| `acva.target`          | Convenience target — brings up all four in order |
 
 Copy them into the user-systemd directory:
 
 ```sh
 mkdir -p ~/.config/systemd/user
-cp packaging/systemd/lclva-*.service packaging/systemd/lclva.target ~/.config/systemd/user/
+cp packaging/systemd/acva-*.service packaging/systemd/acva.target ~/.config/systemd/user/
 ```
 
 The units use `%h` (systemd specifier expanding to your home directory) and assume the layout from step 1. If your binaries or models live elsewhere, edit each `ExecStart=` line accordingly before continuing.
@@ -440,10 +440,10 @@ A few quick notes that wouldn't fit into comments inside the unit files:
 systemctl --user daemon-reload
 
 # Enable to start on login (optional — skip if you prefer manual control).
-systemctl --user enable lclva-llama.service lclva-whisper.service lclva-piper.service lclva.service
+systemctl --user enable acva-llama.service acva-whisper.service acva-piper.service acva.service
 
 # Bring the whole stack up.
-systemctl --user start lclva.target
+systemctl --user start acva.target
 ```
 
 If you don't run a graphical session and want services to keep running after logout, enable lingering once:
@@ -456,7 +456,7 @@ sudo loginctl enable-linger "$USER"
 
 ```sh
 # All four units active?
-systemctl --user status lclva.target
+systemctl --user status acva.target
 
 # Health checks on each backend.
 curl -sS http://127.0.0.1:8081/health     # llama.cpp
@@ -476,37 +476,37 @@ systemd captures stdout/stderr from each unit into journald. View them:
 
 ```sh
 # Live tail of the orchestrator.
-journalctl --user -fu lclva.service
+journalctl --user -fu acva.service
 
 # Last 500 lines of llama.cpp.
-journalctl --user -n 500 -u lclva-llama.service
+journalctl --user -n 500 -u acva-llama.service
 
 # Across all units.
-journalctl --user -fu lclva-llama -fu lclva-whisper -fu lclva-piper -fu lclva
+journalctl --user -fu acva-llama -fu acva-whisper -fu acva-piper -fu acva
 ```
 
 ### 6. Stopping / restarting
 
 ```sh
 # Stop everything.
-systemctl --user stop lclva.target
+systemctl --user stop acva.target
 
 # Restart just the LLM (e.g., after a model swap).
-systemctl --user restart lclva-llama.service
+systemctl --user restart acva-llama.service
 
 # Disable everything from auto-starting on login.
-systemctl --user disable lclva.target lclva.service \
-  lclva-llama.service lclva-whisper.service lclva-piper.service
+systemctl --user disable acva.target acva.service \
+  acva-llama.service acva-whisper.service acva-piper.service
 ```
 
 ### Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `lclva-llama.service` enters `failed` immediately | `llama-server` couldn't load the model (path / OOM / GPU not visible) | `journalctl --user -u lclva-llama -n 100` shows the underlying error. Common fixes: check model path, lower `--n-gpu-layers`, free VRAM. |
-| `lclva.service` exits with "control server: failed to bind" | Port already in use | Another `lclva` is running, or the port is taken. `ss -tlnp \| grep 9876` to confirm. |
-| Orchestrator's `/status` shows `state=unconfigured` for `llm` | Supervisor can't reach `lclva-llama.service` over sd-bus | Check `cfg.llm.unit` matches the unit filename. `busctl --user list \| grep systemd1`. |
-| Audio crackles or no sound | systemd unit can't access the sound server | If you launched lclva from an SSH session without a graphical login, PulseAudio/PipeWire may not be reachable. Either use linger + autospawn, or run lclva interactively from a desktop session. |
+| `acva-llama.service` enters `failed` immediately | `llama-server` couldn't load the model (path / OOM / GPU not visible) | `journalctl --user -u acva-llama -n 100` shows the underlying error. Common fixes: check model path, lower `--n-gpu-layers`, free VRAM. |
+| `acva.service` exits with "control server: failed to bind" | Port already in use | Another `acva` is running, or the port is taken. `ss -tlnp \| grep 9876` to confirm. |
+| Orchestrator's `/status` shows `state=unconfigured` for `llm` | Supervisor can't reach `acva-llama.service` over sd-bus | Check `cfg.llm.unit` matches the unit filename. `busctl --user list \| grep systemd1`. |
+| Audio crackles or no sound | systemd unit can't access the sound server | If you launched acva from an SSH session without a graphical login, PulseAudio/PipeWire may not be reachable. Either use linger + autospawn, or run acva interactively from a desktop session. |
 | Logs say "permission denied: /dev/snd" | Missing audio group membership | `sudo usermod -aG audio "$USER"` and re-login. |
 | `--n-gpu-layers` ignored | NVIDIA driver / CUDA not loaded for the user session | `nvidia-smi` from the same login that runs the unit. May need `Environment=CUDA_VISIBLE_DEVICES=0` in the unit. |
 
@@ -514,10 +514,10 @@ systemctl --user disable lclva.target lclva.service \
 
 If you want services to run regardless of user session — useful for a headless server:
 
-1. Move binaries to `/opt/lclva/` (or similar root-owned path).
+1. Move binaries to `/opt/acva/` (or similar root-owned path).
 2. Place units in `/etc/systemd/system/` instead of `~/.config/systemd/user/`.
-3. Add a dedicated `lclva` system user; `User=lclva` in each unit.
-4. `sudo systemctl daemon-reload && sudo systemctl enable --now lclva.target`.
+3. Add a dedicated `acva` system user; `User=acva` in each unit.
+4. `sudo systemctl daemon-reload && sudo systemctl enable --now acva.target`.
 5. In `cfg.supervisor.bus_kind`, set `system` instead of `user`.
 
 The orchestrator's sd-bus client picks up `bus_kind` and connects to the appropriate bus. Everything else is the same.

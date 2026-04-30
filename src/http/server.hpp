@@ -6,7 +6,7 @@
 
 #include <memory>
 
-namespace lclva::http {
+namespace acva::http {
 
 // Tiny HTTP control plane built on cpp-httplib.
 //
@@ -41,4 +41,4 @@ private:
     int bound_port_ = 0;
 };
 
-} // namespace lclva::http
+} // namespace acva::http

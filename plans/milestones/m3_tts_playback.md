@@ -91,7 +91,7 @@ tts:
   request_timeout_seconds: 10
 ```
 
-When the user adds a language: drop a `piper-<lang>` service into `docker-compose.yml`, drop the voice file into `~/.local/share/lclva/voices/`, add a row to `cfg.tts.voices`. We ship `scripts/download-piper-voices.sh` for grabbing default voices.
+When the user adds a language: drop a `piper-<lang>` service into `docker-compose.yml`, drop the voice file into `~/.local/share/acva/voices/`, add a row to `cfg.tts.voices`. We ship `scripts/download-piper-voices.sh` for grabbing default voices.
 
 There is no in-process voice memory budget anymore (it's now per-service RAM, governed by Compose). For workstations where this is too much, drop unused languages from compose.
 
@@ -211,7 +211,7 @@ audio:
   buffer_frames: 480         # 10 ms @ 48 kHz
 
 tts:
-  unit: "lclva-piper.service"
+  unit: "acva-piper.service"
   base_url: "http://127.0.0.1:8082"
   voices: { en: ..., ru: ..., de: ... }
   voice_memory_budget_mb: 500

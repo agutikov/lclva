@@ -8,7 +8,7 @@
 #include <utility>
 #include <variant>
 
-namespace lclva::dialogue {
+namespace acva::dialogue {
 
 TurnWriter::TurnWriter(event::EventBus& bus, memory::MemoryThread& memory)
     : bus_(bus), memory_(memory) {}
@@ -128,4 +128,4 @@ void TurnWriter::handle_finished(const event::LlmFinished& e) {
     });
 }
 
-} // namespace lclva::dialogue
+} // namespace acva::dialogue

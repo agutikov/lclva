@@ -10,8 +10,8 @@
 #include <thread>
 
 using namespace std::chrono_literals;
-namespace ev = lclva::event;
-namespace dl = lclva::dialogue;
+namespace ev = acva::event;
+namespace dl = acva::dialogue;
 
 namespace {
 
@@ -41,12 +41,12 @@ bool wait_for_pred(const dl::Fsm& fsm, std::chrono::milliseconds timeout, Pred p
 void run_full_turn(ev::EventBus& bus, dl::Fsm& fsm, std::uint32_t sentences) {
     bus.publish(ev::SpeechStarted{ .turn = 0 });
     auto deadline = std::chrono::steady_clock::now() + 200ms;
-    while (fsm.snapshot().active_turn == lclva::dialogue::kNoTurn
+    while (fsm.snapshot().active_turn == acva::dialogue::kNoTurn
            && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(1ms);
     }
     const auto turn = fsm.snapshot().active_turn;
-    REQUIRE(turn != lclva::dialogue::kNoTurn);
+    REQUIRE(turn != acva::dialogue::kNoTurn);
     bus.publish(ev::SpeechEnded{ .turn = turn });
     bus.publish(ev::FinalTranscript{ .turn = turn, .text = "hello", .lang = "en" });
     for (std::uint32_t s = 1; s <= sentences; ++s) {
@@ -173,7 +173,7 @@ TEST_CASE("fsm: stale playback events from old turns are ignored") {
     bus.publish(ev::FinalTranscript{ .turn = 0, .text = "x", .lang = "en" });
     REQUIRE(wait_state(fsm, dl::State::Thinking, 200ms));
     auto turn1 = fsm.snapshot().active_turn;
-    REQUIRE(turn1 != lclva::dialogue::kNoTurn);
+    REQUIRE(turn1 != acva::dialogue::kNoTurn);
 
     // A late playback chunk for a non-existent old turn must be ignored.
     bus.publish(ev::PlaybackFinished{ .turn = turn1 + 99, .seq = 99 });

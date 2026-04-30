@@ -9,7 +9,7 @@
 #include <mutex>
 #include <string_view>
 
-namespace lclva::dialogue {
+namespace acva::dialogue {
 
 // Dialogue FSM states. Mirrors project_design.md §6.
 //
@@ -115,4 +115,4 @@ private:
     std::function<void(const char*)> outcome_observer_;
 };
 
-} // namespace lclva::dialogue
+} // namespace acva::dialogue

@@ -9,9 +9,9 @@
 #include <string>
 #include <unordered_map>
 
-namespace lclva::memory { class MemoryThread; }
+namespace acva::memory { class MemoryThread; }
 
-namespace lclva::dialogue {
+namespace acva::dialogue {
 
 // TurnWriter — persists user and assistant turns to SQLite via the
 // memory thread.
@@ -79,4 +79,4 @@ private:
     std::unordered_map<event::TurnId, AssistantState> in_flight_;
 };
 
-} // namespace lclva::dialogue
+} // namespace acva::dialogue

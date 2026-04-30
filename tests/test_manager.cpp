@@ -18,11 +18,11 @@
 #include <thread>
 #include <vector>
 
-namespace cfg = lclva::config;
-namespace dlg = lclva::dialogue;
-namespace ev  = lclva::event;
-namespace llm = lclva::llm;
-namespace mem = lclva::memory;
+namespace cfg = acva::config;
+namespace dlg = acva::dialogue;
+namespace ev  = acva::event;
+namespace llm = acva::llm;
+namespace mem = acva::memory;
 namespace fs  = std::filesystem;
 
 namespace {
@@ -149,7 +149,7 @@ bool wait_for(Pred p, std::chrono::milliseconds budget = std::chrono::millisecon
 }
 
 std::unique_ptr<mem::MemoryThread> open_mt() {
-    auto path = fs::temp_directory_path() / "lclva-mgr-test.db";
+    auto path = fs::temp_directory_path() / "acva-mgr-test.db";
     fs::remove(path);
     auto r = mem::MemoryThread::open(path, 16);
     REQUIRE(std::holds_alternative<std::unique_ptr<mem::MemoryThread>>(r));

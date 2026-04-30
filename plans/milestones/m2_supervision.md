@@ -205,7 +205,7 @@ tts:
 
 ## systemd alternative (production deployment)
 
-Everything above describes the *dev* path running against Compose-managed containers. For a production deployment without Docker — e.g., a dedicated workstation running lclva long-term as `lclva.service` — the systemd path is still supported.
+Everything above describes the *dev* path running against Compose-managed containers. For a production deployment without Docker — e.g., a dedicated workstation running acva long-term as `acva.service` — the systemd path is still supported.
 
 In that mode:
 

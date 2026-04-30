@@ -4,7 +4,7 @@ Guidance for Claude Code when working in this repository.
 
 ## Project
 
-**lclva** — Long Conversation Local Voice Agent. A local, production-grade C++ voice assistant for multi-hour conversations on a single workstation (RTX 4060). All inference is local; model backends (llama.cpp, whisper.cpp, Piper) run as **Docker Compose containers** in dev (with systemd as an alternative production path); the C++ orchestrator runs as a host CLI binary and owns control plane, audio I/O, state, memory, and observability.
+**acva** — Autonomous Conversational Voice Agent. A local, production-grade C++ voice assistant for multi-hour conversations on a single workstation (RTX 4060). All inference is local; model backends (llama.cpp, whisper.cpp, Piper) run as **Docker Compose containers** in dev (with systemd as an alternative production path); the C++ orchestrator runs as a host CLI binary and owns control plane, audio I/O, state, memory, and observability.
 
 Target hardware: Linux x86_64, RTX 4060 8 GB. Speakers + AEC is the primary UX (not headphones).
 Multilingual STT/TTS/LLM with auto language detection per turn.
@@ -12,7 +12,7 @@ Streaming partial STT with speculative LLM start (M5 — three options on the ta
 
 ## Status
 
-**M0 + M1 complete.** 90/90 tests passing. The compose stack reaches all-three-healthy on the dev workstation; `lclva --stdin` drives a real LLM end-to-end via the in-tree `PromptBuilder` → `LlmClient` (libcurl SSE) → `DialogueManager` → `SentenceSplitter` → `LlmSentence` events → `TurnWriter` → SQLite chain. JSON-per-line logs land on stderr; `voice_llm_first_token_ms` and `voice_llm_tokens_per_sec` histograms emit non-zero on `/metrics`. Next: **M2 — service supervision** (HTTP `/health` probes, dialogue gating, restart-loop coordination with Compose's `restart: unless-stopped`).
+**M0 + M1 complete.** 90/90 tests passing. The compose stack reaches all-three-healthy on the dev workstation; `acva --stdin` drives a real LLM end-to-end via the in-tree `PromptBuilder` → `LlmClient` (libcurl SSE) → `DialogueManager` → `SentenceSplitter` → `LlmSentence` events → `TurnWriter` → SQLite chain. JSON-per-line logs land on stderr; `voice_llm_first_token_ms` and `voice_llm_tokens_per_sec` histograms emit non-zero on `/metrics`. Next: **M2 — service supervision** (HTTP `/health` probes, dialogue gating, restart-loop coordination with Compose's `restart: unless-stopped`).
 
 ## Repository Layout
 
@@ -45,7 +45,7 @@ compile_commands.json    — symlink to build/dev/compile_commands.json (for cla
 
 ## Architectural Pillars (Do Not Violate Without Discussion)
 
-1. **Process isolation for model backends.** llama.cpp, whisper.cpp, Piper run as separate processes the orchestrator does **not** fork. In dev (default since M1.B): Docker Compose containers using upstream images verbatim (`ghcr.io/ggml-org/llama.cpp:server-cuda` etc.). In production (M8 alternative): systemd units with optional sd-bus client (gated by `-DLCLVA_ENABLE_SDBUS=ON` + `cfg.supervisor.bus_kind`). The orchestrator never `popen`s or `fork()`s a backend. Don't propose embedding model runtimes until post-M8.
+1. **Process isolation for model backends.** llama.cpp, whisper.cpp, Piper run as separate processes the orchestrator does **not** fork. In dev (default since M1.B): Docker Compose containers using upstream images verbatim (`ghcr.io/ggml-org/llama.cpp:server-cuda` etc.). In production (M8 alternative): systemd units with optional sd-bus client (gated by `-DACVA_ENABLE_SDBUS=ON` + `cfg.supervisor.bus_kind`). The orchestrator never `popen`s or `fork()`s a backend. Don't propose embedding model runtimes until post-M8.
 2. **Realtime audio path is sacred.** Audio callback never blocks, never allocates, never does I/O or HTTP. SPSC ring buffer is the only mechanism crossing the audio thread boundary.
 3. **Cancellation is structural.** Every long-running operation carries a turn ID + cancellation token. TTS audio chunks carry sequence numbers; stale chunks are rejected at enqueue and dequeue. Speculative LLM runs use the same machinery.
 4. **Backpressure everywhere.** Every async boundary uses bounded queues with explicit overflow policy.
@@ -67,7 +67,7 @@ compile_commands.json    — symlink to build/dev/compile_commands.json (for cla
 - glaze for JSON + YAML (config + IPC payloads).
 - spdlog (structured-text in M0/M1.A; JSON sink in M1.s3), prometheus-cpp, opentelemetry-cpp (OTLP, opt-in M8).
 - Docker Compose for dev backend deployment; **no custom Dockerfiles** in M1.B.
-- systemd + libsystemd (sd-bus) — optional production path, gated by `-DLCLVA_ENABLE_SDBUS=ON`. Not a default M2 dependency.
+- systemd + libsystemd (sd-bus) — optional production path, gated by `-DACVA_ENABLE_SDBUS=ON`. Not a default M2 dependency.
 - doctest for tests.
 - CMake + presets.
 
@@ -119,19 +119,19 @@ Run (dev path, with backends in Compose):
 ```sh
 cd packaging/compose && docker compose up -d   # M1.B; not yet scaffolded
 cd ../..
-./build/dev/lclva --config config/default.yaml
+./build/dev/acva --config config/default.yaml
 ```
 
 Run (without backends, M0 fake-driver mode):
 
 ```sh
-./build/dev/lclva --config config/default.yaml      # fake_driver_enabled: true is the default
+./build/dev/acva --config config/default.yaml      # fake_driver_enabled: true is the default
 # in another terminal:
 curl http://127.0.0.1:9876/status
 curl http://127.0.0.1:9876/metrics
 ```
 
-The `lclva` binary itself always runs on the host as a CLI process — it's intentionally never put inside Compose so the realtime audio path stays direct. Production-style packaging as `lclva.service` is M8 work.
+The `acva` binary itself always runs on the host as a CLI process — it's intentionally never put inside Compose so the realtime audio path stays direct. Production-style packaging as `acva.service` is M8 work.
 
 ## Claude-Specific Working Notes
 

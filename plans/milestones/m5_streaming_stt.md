@@ -51,7 +51,7 @@ Drop-in OpenAI-compatible Realtime / streaming transcription server. Backend is 
     image: ghcr.io/speaches-ai/speaches:latest-cpu   # or :latest-cuda
     ports: ["127.0.0.1:8082:8000"]
     volumes:
-      - ${LCLVA_MODELS_DIR:-${HOME}/.local/share/lclva/models}/speaches:/data
+      - ${ACVA_MODELS_DIR:-${HOME}/.local/share/acva/models}/speaches:/data
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
   ```
@@ -213,7 +213,7 @@ Touch points:
 | `test_whisper_client.cpp` | fake server emits known SSE; assert callbacks fire correctly |
 | `test_speculation.cpp` | gate fires under stable conditions, rejects under instability; reconcile match/mismatch logic |
 | `test_fsm.cpp` (extends M0) | new transitions: speculation start/keep/restart |
-| Multilingual smoke (gated) | `LCLVA_REAL_WHISPER=1` against Common Voice clips in en/ru/de/es/fr |
+| Multilingual smoke (gated) | `ACVA_REAL_WHISPER=1` against Common Voice clips in en/ru/de/es/fr |
 | End-to-end | speak in English; observe partials → final → speculation kept; speak with mid-sentence revision; observe restart |
 
 ## Acceptance

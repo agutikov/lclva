@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.25)
-project(lclva
+project(acva
     VERSION 0.0.1
-    DESCRIPTION "Long Conversation Local Voice Agent"
+    DESCRIPTION "Autonomous Conversational Voice Agent"
     LANGUAGES CXX
 )
 
@@ -18,15 +18,15 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "" FORCE)
 endif()
 
-option(LCLVA_BUILD_TESTS "Build unit tests" ON)
-option(LCLVA_WERROR "Treat warnings as errors" ON)
+option(ACVA_BUILD_TESTS "Build unit tests" ON)
+option(ACVA_WERROR "Treat warnings as errors" ON)
 
 include(cmake/Dependencies.cmake)
 include(cmake/Warnings.cmake)
 
 add_subdirectory(src)
 
-if(LCLVA_BUILD_TESTS)
+if(ACVA_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()

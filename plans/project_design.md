@@ -86,7 +86,7 @@ digraph Topology {
   edge [fontname="Helvetica", fontsize=9, color="#475569"];
 
   subgraph cluster_orch {
-    label="lclva.service (orchestrator)"; style="rounded,filled";
+    label="acva.service (orchestrator)"; style="rounded,filled";
     color="#1E3A8A"; fontcolor="#1E3A8A"; fillcolor="#EFF6FF"; fontsize=12;
     AudioIO    [shape=box,      fillcolor="#3B82F6", fontcolor=white, label="Audio I/O"];
     APMVAD     [shape=box,      fillcolor="#3B82F6", fontcolor=white, label="APM + VAD"];
@@ -96,9 +96,9 @@ digraph Topology {
     Control    [shape=box,      fillcolor="#64748B", fontcolor=white, label="HTTP control\n/metrics /status\n/mute /reload"];
   }
 
-  Llama   [shape=box3d, fillcolor="#7C3AED", fontcolor=white, label="lclva-llama.service\nllama.cpp\nQwen2.5-7B Q4_K_M"];
-  Whisper [shape=box3d, fillcolor="#10B981", fontcolor=white, label="lclva-whisper.service\nwhisper.cpp\nstreaming, multilingual"];
-  Piper   [shape=box3d, fillcolor="#F59E0B", fontcolor=white, label="lclva-piper.service\nPiper\nper-language voices"];
+  Llama   [shape=box3d, fillcolor="#7C3AED", fontcolor=white, label="acva-llama.service\nllama.cpp\nQwen2.5-7B Q4_K_M"];
+  Whisper [shape=box3d, fillcolor="#10B981", fontcolor=white, label="acva-whisper.service\nwhisper.cpp\nstreaming, multilingual"];
+  Piper   [shape=box3d, fillcolor="#F59E0B", fontcolor=white, label="acva-piper.service\nPiper\nper-language voices"];
 
   Mic     [shape=invtriangle, fillcolor="#2563EB", fontcolor=white, label="🎤"];
   Spk     [shape=triangle,    fillcolor="#EA580C", fontcolor=white, label="🔊"];
@@ -253,8 +253,8 @@ The Supervisor is application-level: it runs HTTP `/health` probes against each 
 
 **Two deployment paths, same Supervisor logic.**
 
-- **Dev (default since M1.B): Docker Compose.** Backend containers' `restart: unless-stopped` policy handles process lifecycle. `lclva` itself runs as a host CLI binary; the Supervisor inside it only observes via HTTP probes. No sd-bus dependency.
-- **Production (alternative, M8): systemd.** Optional sd-bus client extension (`-DLCLVA_ENABLE_SDBUS=ON`) lets the Supervisor read `ActiveState`/`SubState` and issue `RestartUnit` calls. Same state machine, more inputs.
+- **Dev (default since M1.B): Docker Compose.** Backend containers' `restart: unless-stopped` policy handles process lifecycle. `acva` itself runs as a host CLI binary; the Supervisor inside it only observes via HTTP probes. No sd-bus dependency.
+- **Production (alternative, M8): systemd.** Optional sd-bus client extension (`-DACVA_ENABLE_SDBUS=ON`) lets the Supervisor read `ActiveState`/`SubState` and issue `RestartUnit` calls. Same state machine, more inputs.
 
 State machine in dev mode: `NotConfigured → Probing → Healthy ↔ Degraded → Unhealthy`. There is no `Restarting` or `Disabled` state in this mode — Compose owns those transitions silently. In systemd mode, those states reappear when `cfg.supervisor.bus_kind != "none"`.
 
@@ -262,7 +262,7 @@ State machine in dev mode: `NotConfigured → Probing → Healthy ↔ Degraded �
 - Pipeline-level fail conditions (see §10): if the LLM stays Unhealthy for `pipeline_fail_grace_seconds`, Dialogue Manager refuses new turns until recovery.
 - LLM keep-alive: 1-token completion every `cfg.llm.keep_alive_interval_seconds` while the FSM is `Listening`.
 
-Logs from backends in dev: `docker compose logs -f`. Logs from `lclva` itself: stdout (when run as CLI) or journald (when packaged as `lclva.service` in production mode).
+Logs from backends in dev: `docker compose logs -f`. Logs from `acva` itself: stdout (when run as CLI) or journald (when packaged as `acva.service` in production mode).
 
 ### 4.13 Event Bus
 
@@ -705,7 +705,7 @@ service restarts: ≤ 2 (incidental), pipeline never enters failed state
   - `GET  /metrics` — Prometheus exposition
 - **Mute hotkey**: not implemented in-process. User binds an OS hotkey to `curl -X POST localhost:PORT/mute` via their compositor (sway, hyprland, GNOME, KWin, i3, etc.). Documented in README.
 - **Error UX**: errors are **never spoken**. Logs and `/status` are the only channels for error reporting. Rationale: voice interruptions for errors are jarring; users monitor logs/status when something feels off. (Configurable for development: `ux.speak_errors: false` default; can be enabled via debug flag.)
-- **Conversation export**: CLI subcommand `lclva export --session <id> [--format markdown|json]` reads SQLite and produces a transcript file. Audio export only when E1 (audio recording) is enabled.
+- **Conversation export**: CLI subcommand `acva export --session <id> [--format markdown|json]` reads SQLite and produces a transcript file. Audio export only when E1 (audio recording) is enabled.
 
 ---
 

@@ -6,7 +6,7 @@
 
 #include <utility>
 
-namespace lclva::memory {
+namespace acva::memory {
 
 // (Helper removed — currently every call site builds its own DbError. Kept
 // here as a template for the future when prepare/step paths grow richer
@@ -215,4 +215,4 @@ void Database::Transaction::rollback() noexcept {
     active_ = false;
 }
 
-} // namespace lclva::memory
+} // namespace acva::memory

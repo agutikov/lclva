@@ -1,4 +1,4 @@
-# lclva — model backend stack for dev.
+# acva — model backend stack for dev.
 #
 # This file follows plans/milestones/m1_llm_memory.md §B verbatim:
 #   - upstream images, no custom Dockerfiles
@@ -8,10 +8,10 @@
 #     `/health` probes (cfg.supervisor) are independent and gate the
 #     dialogue path
 #
-# The orchestrator (`lclva`) itself runs on the host, NOT in compose, so
+# The orchestrator (`acva`) itself runs on the host, NOT in compose, so
 # the realtime audio path stays direct.
 
-name: lclva
+name: acva
 
 services:
   # ---------------------------------------------------------------------
@@ -19,11 +19,11 @@ services:
   # ---------------------------------------------------------------------
   llama:
     image: ghcr.io/ggml-org/llama.cpp:server-cuda
-    container_name: lclva-llama
+    container_name: acva-llama
     ports:
       - "127.0.0.1:8081:8081"
     volumes:
-      - ${LCLVA_MODELS_DIR:-${HOME}/.local/share/lclva/models}:/models:ro
+      - ${ACVA_MODELS_DIR:-${HOME}/.local/share/acva/models}:/models:ro
     deploy:
       resources:
         reservations:
@@ -44,7 +44,7 @@ services:
       - "--port"
       - "8081"
       - "--model"
-      - "/models/${LCLVA_LLM_MODEL:-qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf}"
+      - "/models/${ACVA_LLM_MODEL:-qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf}"
       - "--alias"
       - "qwen2.5-7b-instruct"
       - "--ctx-size"
@@ -67,12 +67,12 @@ services:
       context: ./whisper
       args:
         WHISPER_REF: v1.8.4
-    image: lclva/whisper.cpp:server-v1.8.4
-    container_name: lclva-whisper
+    image: acva/whisper.cpp:server-v1.8.4
+    container_name: acva-whisper
     ports:
       - "127.0.0.1:8082:8082"
     volumes:
-      - ${LCLVA_MODELS_DIR:-${HOME}/.local/share/lclva/models}:/models:ro
+      - ${ACVA_MODELS_DIR:-${HOME}/.local/share/acva/models}:/models:ro
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8082/health"]
       interval: 5s
@@ -86,7 +86,7 @@ services:
       - "--port"
       - "8082"
       - "--model"
-      - "/models/${LCLVA_WHISPER_MODEL:-ggml-small.bin}"
+      - "/models/${ACVA_WHISPER_MODEL:-ggml-small.bin}"
 
   # ---------------------------------------------------------------------
   # Piper — TTS. Built locally because the rhasspy project does not yet
@@ -98,12 +98,12 @@ services:
       context: ./piper
       args:
         PIPER_VERSION: 1.4.2
-    image: lclva/piper:1.4.2
-    container_name: lclva-piper
+    image: acva/piper:1.4.2
+    container_name: acva-piper
     ports:
       - "127.0.0.1:8083:8083"
     volumes:
-      - ${LCLVA_VOICES_DIR:-${HOME}/.local/share/lclva/voices}:/voices:ro
+      - ${ACVA_VOICES_DIR:-${HOME}/.local/share/acva/voices}:/voices:ro
     # piper.http_server only accepts `POST /` with a JSON body — no GET `/`
     # or `/health` route. Use a plain TCP probe to confirm the server is
     # bound and accepting connections.
@@ -124,4 +124,4 @@ services:
       - "--port"
       - "8083"
       - "--model"
-      - "/voices/${LCLVA_PIPER_VOICE:-en_US-amy-medium.onnx}"
+      - "/voices/${ACVA_PIPER_VOICE:-en_US-amy-medium.onnx}"

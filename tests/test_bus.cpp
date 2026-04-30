@@ -8,11 +8,11 @@
 #include <thread>
 
 using namespace std::chrono_literals;
-using lclva::event::EventBus;
-using lclva::event::SubscribeOptions;
-using lclva::event::OverflowPolicy;
+using acva::event::EventBus;
+using acva::event::SubscribeOptions;
+using acva::event::OverflowPolicy;
 
-namespace ev = lclva::event;
+namespace ev = acva::event;
 
 namespace {
 

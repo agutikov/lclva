@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-namespace lclva::memory {
+namespace acva::memory {
 
 struct RecoverySummary {
     std::uint64_t sessions_closed = 0;
@@ -34,4 +34,4 @@ struct RecoverySummary {
                                                 TurnId range_start,
                                                 TurnId range_end);
 
-} // namespace lclva::memory
+} // namespace acva::memory

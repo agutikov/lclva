@@ -7,13 +7,13 @@
 #include <filesystem>
 #include <variant>
 
-namespace mem = lclva::memory;
+namespace mem = acva::memory;
 namespace fs = std::filesystem;
 
 namespace {
 
 fs::path tmp_db(const char* name) {
-    auto p = fs::temp_directory_path() / (std::string("lclva-recov-") + name + ".db");
+    auto p = fs::temp_directory_path() / (std::string("acva-recov-") + name + ".db");
     fs::remove(p);
     fs::remove(fs::path(p.string() + "-wal"));
     fs::remove(fs::path(p.string() + "-shm"));

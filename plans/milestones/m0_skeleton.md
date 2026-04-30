@@ -37,7 +37,7 @@ Stand up the orchestrator process with bus, FSM, observability, and a fake pipel
 ## Acceptance — met
 
 - `ctest` runs 24/24 green.
-- `./build/dev/lclva --config config/default.yaml` starts, drives synthetic turns through the FSM, responds on `/metrics` and `/status`, and exits cleanly on SIGINT.
+- `./build/dev/acva --config config/default.yaml` starts, drives synthetic turns through the FSM, responds on `/metrics` and `/status`, and exits cleanly on SIGINT.
 - With `fake_barge_in_probability: 1.0`, observed 5/5 turns end with outcome `interrupted`; FSM correctly bumps turn id and rejects stale events.
 
 ## Lessons folded forward

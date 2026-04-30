@@ -9,9 +9,9 @@
 #include <string>
 #include <unistd.h>
 
-namespace lcfg = lclva::config;
-namespace llog = lclva::log;
-namespace lev  = lclva::event;
+namespace lcfg = acva::config;
+namespace llog = acva::log;
+namespace lev  = acva::event;
 
 namespace {
 

@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <sstream>
 
-namespace lclva::memory {
+namespace acva::memory {
 
 namespace {
 
@@ -103,4 +103,4 @@ Result<RecoverySummary> run_recovery(Repository& repo, Database& db) {
     return out;
 }
 
-} // namespace lclva::memory
+} // namespace acva::memory

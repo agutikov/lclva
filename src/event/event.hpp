@@ -6,7 +6,7 @@
 #include <string>
 #include <variant>
 
-namespace lclva::event {
+namespace acva::event {
 
 // TurnId is also defined in dialogue/turn.hpp; kept as a typedef here so
 // event types do not transitively pull dialogue headers. Single source of
@@ -169,4 +169,4 @@ using Event = std::variant<
 // without a turn (Pause/Resume/HealthChanged/ErrorEvent).
 [[nodiscard]] TurnId event_turn(const Event& e) noexcept;
 
-} // namespace lclva::event
+} // namespace acva::event

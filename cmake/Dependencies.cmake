@@ -1,4 +1,4 @@
-# All dependencies for lclva.
+# All dependencies for acva.
 #
 # At M0 we only need: glaze (config), spdlog (logging), doctest (tests).
 # Other deps (Boost.Asio, libcurl, PortAudio, soxr, etc.) get added in their
@@ -17,8 +17,8 @@ find_package(Threads REQUIRED)
 # Used for the HTTP control plane — civetweb symbols inside prometheus-cpp
 # aren't exported, so we run our own HTTP server. Marked SYSTEM so the
 # project's strict warning flags don't apply to this third-party header.
-add_library(lclva_httplib INTERFACE)
-target_include_directories(lclva_httplib SYSTEM INTERFACE
+add_library(acva_httplib INTERFACE)
+target_include_directories(acva_httplib SYSTEM INTERFACE
     ${CMAKE_SOURCE_DIR}/third_party/cpp-httplib)
-target_compile_definitions(lclva_httplib INTERFACE
+target_compile_definitions(acva_httplib INTERFACE
     CPPHTTPLIB_THREAD_POOL_COUNT=4)

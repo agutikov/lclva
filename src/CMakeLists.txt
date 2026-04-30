@@ -1,5 +1,5 @@
 # Core library — everything except main(). Tests link against this.
-add_library(lclva_core STATIC
+add_library(acva_core STATIC
     config/config.cpp
     dialogue/fsm.cpp
     dialogue/manager.cpp
@@ -23,9 +23,9 @@ add_library(lclva_core STATIC
     pipeline/fake_driver.cpp
 )
 
-target_include_directories(lclva_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(acva_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
-target_link_libraries(lclva_core
+target_link_libraries(acva_core
     PUBLIC
         glaze::glaze
         spdlog::spdlog
@@ -36,19 +36,19 @@ target_link_libraries(lclva_core
         CURL::libcurl
         Threads::Threads
     PRIVATE
-        lclva_httplib
-        lclva_warnings
+        acva_httplib
+        acva_warnings
 )
 
 # Main executable
-add_executable(lclva main.cpp)
+add_executable(acva main.cpp)
 
-target_link_libraries(lclva
+target_link_libraries(acva
     PRIVATE
-        lclva_core
-        lclva_warnings
+        acva_core
+        acva_warnings
 )
 
-set_target_properties(lclva PROPERTIES
+set_target_properties(acva PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )

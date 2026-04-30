@@ -54,7 +54,7 @@ Two options:
 - **A.** Grafana dashboard JSON, points at a local Prometheus instance.
 - **B.** Static HTML + Chart.js page served at `/dashboard`.
 
-Recommend A for proper operability — standard tooling, can plug into other workstation Prometheus setups. Ship the dashboard JSON in `packaging/grafana/lclva.json`. Document the Prometheus config snippet to scrape `lclva.service` in the README.
+Recommend A for proper operability — standard tooling, can plug into other workstation Prometheus setups. Ship the dashboard JSON in `packaging/grafana/acva.json`. Document the Prometheus config snippet to scrape `acva.service` in the README.
 
 Dashboard sections:
 - **Latency** — VAD → final, final → first_token, first_token → first_audio, end-to-end.
@@ -122,15 +122,15 @@ Two deployment paths ship side-by-side; both have been informally validated sinc
   - `.env.example` documented.
 - `scripts/dev-up.sh` — `cd packaging/compose && docker compose up -d`, plus a model-availability check.
 - `scripts/dev-down.sh` — symmetric.
-- The orchestrator continues to run as a host CLI (`./build/release/lclva --config ...`).
+- The orchestrator continues to run as a host CLI (`./build/release/acva --config ...`).
 
 ### Production path: systemd units (alternative)
 
-- `packaging/systemd/lclva.service`, `lclva-llama.service`, `lclva-whisper.service`, `lclva-piper.service`, `lclva.target` — finalized; were placeholders since M2.
+- `packaging/systemd/acva.service`, `acva-llama.service`, `acva-whisper.service`, `acva-piper.service`, `acva.target` — finalized; were placeholders since M2.
 - `scripts/install-systemd.sh` — copies units to `~/.config/systemd/user/`, runs `systemctl --user daemon-reload`. The script defers binary install to the user (or a downstream package).
 - `scripts/uninstall-systemd.sh` — symmetric.
-- Switching to this path requires `cfg.supervisor.bus_kind: user` and recompilation with `-DLCLVA_ENABLE_SDBUS=ON` (gates the optional sd-bus client described in m2_supervision.md's "systemd alternative" section).
-- `packaging/man/lclva.1` — man page (terse), independent of deployment path.
+- Switching to this path requires `cfg.supervisor.bus_kind: user` and recompilation with `-DACVA_ENABLE_SDBUS=ON` (gates the optional sd-bus client described in m2_supervision.md's "systemd alternative" section).
+- `packaging/man/acva.1` — man page (terse), independent of deployment path.
 
 ### Optional (stretch)
 
@@ -166,8 +166,8 @@ The big one is the soak test (Step 1). On top of that:
 3. **Wipe works.** `POST /wipe?all=true` empties the database and audio dir; new turns create a fresh session.
 4. **OTLP traces visible** in a local otelcol when enabled; no impact when disabled.
 5. **Both deployment paths work** end-to-end on a clean Manjaro and a clean Ubuntu 24.04 VM:
-   - Docker Compose: `docker compose up -d && ./scripts/dev-up.sh` brings up backends; `./build/release/lclva` connects on the host.
-   - systemd: `./scripts/install-systemd.sh && systemctl --user start lclva.target` brings up the full stack as units; `systemctl --user status` shows all four `active (running)`.
+   - Docker Compose: `docker compose up -d && ./scripts/dev-up.sh` brings up backends; `./build/release/acva` connects on the host.
+   - systemd: `./scripts/install-systemd.sh && systemctl --user start acva.target` brings up the full stack as units; `systemctl --user status` shows all four `active (running)`.
 6. **Documentation complete.** A new contributor can read README + architecture.md and understand the system.
 
 ## Risks specific to M8

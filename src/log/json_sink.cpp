@@ -9,7 +9,7 @@
 #include <string>
 #include <string_view>
 
-namespace lclva::log {
+namespace acva::log {
 
 namespace {
 
@@ -124,4 +124,4 @@ void JsonSink::flush_() {
     std::fflush(out_);
 }
 
-} // namespace lclva::log
+} // namespace acva::log

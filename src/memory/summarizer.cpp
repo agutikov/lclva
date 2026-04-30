@@ -13,7 +13,7 @@
 #include <utility>
 #include <variant>
 
-namespace lclva::memory {
+namespace acva::memory {
 
 namespace {
 
@@ -233,4 +233,4 @@ bool Summarizer::run_one_summary() {
     return fut.get();
 }
 
-} // namespace lclva::memory
+} // namespace acva::memory

@@ -9,7 +9,7 @@
 #include <string_view>
 #include <vector>
 
-namespace lclva::memory {
+namespace acva::memory {
 
 using SessionId = std::int64_t;
 using TurnId    = std::int64_t;
@@ -128,4 +128,4 @@ private:
     Database& db_;
 };
 
-} // namespace lclva::memory
+} // namespace acva::memory

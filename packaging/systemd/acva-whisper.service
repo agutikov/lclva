@@ -1,5 +1,5 @@
 [Unit]
-Description=lclva — whisper.cpp (STT backend)
+Description=acva — whisper.cpp (STT backend)
 After=network.target
 
 [Service]
@@ -10,7 +10,7 @@ Type=simple
 ExecStart=%h/.local/opt/whisper.cpp/build/bin/whisper-server \
   --host 127.0.0.1 \
   --port 8082 \
-  --model %h/.local/share/lclva/models/ggml-small.bin \
+  --model %h/.local/share/acva/models/ggml-small.bin \
   --threads 6 \
   --processors 1
 Restart=on-failure

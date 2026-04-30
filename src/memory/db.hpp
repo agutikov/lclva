@@ -10,7 +10,7 @@
 struct sqlite3;
 struct sqlite3_stmt;
 
-namespace lclva::memory {
+namespace acva::memory {
 
 struct DbError {
     std::string message;
@@ -114,4 +114,4 @@ private:
     sqlite3* db_ = nullptr;
 };
 
-} // namespace lclva::memory
+} // namespace acva::memory

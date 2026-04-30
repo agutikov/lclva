@@ -6,7 +6,7 @@
 #include <mutex>
 #include <string_view>
 
-namespace lclva::log {
+namespace acva::log {
 
 // JSON-line sink for spdlog. One JSON object per call, separated by '\n'.
 //
@@ -39,4 +39,4 @@ private:
 // `event()` helper in log.hpp can compose with it; not for user code.
 inline constexpr std::string_view kEventMarker = "\x01EVT\x01";
 
-} // namespace lclva::log
+} // namespace acva::log

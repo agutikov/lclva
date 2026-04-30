@@ -11,10 +11,10 @@
 #include <mutex>
 #include <thread>
 
-namespace lclva::llm { class LlmClient; }
-namespace lclva::memory { class MemoryThread; }
+namespace acva::llm { class LlmClient; }
+namespace acva::memory { class MemoryThread; }
 
-namespace lclva::memory {
+namespace acva::memory {
 
 // Summarizer — keeps a rolling summary of the conversation in the
 // `summaries` table.
@@ -79,4 +79,4 @@ private:
     bool stopping_ = false;
 };
 
-} // namespace lclva::memory
+} // namespace acva::memory

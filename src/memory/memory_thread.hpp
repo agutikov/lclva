@@ -14,7 +14,7 @@
 #include <thread>
 #include <type_traits>
 
-namespace lclva::memory {
+namespace acva::memory {
 
 // MemoryThread: owns the SQLite Database and runs all reads/writes on a
 // single dedicated thread. Callers post lambdas that receive a Repository
@@ -108,4 +108,4 @@ private:
     std::thread worker_;
 };
 
-} // namespace lclva::memory
+} // namespace acva::memory

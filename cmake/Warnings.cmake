@@ -1,6 +1,6 @@
-add_library(lclva_warnings INTERFACE)
+add_library(acva_warnings INTERFACE)
 
-target_compile_options(lclva_warnings INTERFACE
+target_compile_options(acva_warnings INTERFACE
     -Wall
     -Wextra
     -Wpedantic
@@ -17,6 +17,6 @@ target_compile_options(lclva_warnings INTERFACE
     -Wimplicit-fallthrough
 )
 
-if(LCLVA_WERROR)
-    target_compile_options(lclva_warnings INTERFACE -Werror)
+if(ACVA_WERROR)
+    target_compile_options(acva_warnings INTERFACE -Werror)
 endif()

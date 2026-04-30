@@ -1,4 +1,4 @@
-add_executable(lclva_tests
+add_executable(acva_tests
     test_main.cpp
     test_bus.cpp
     test_config.cpp
@@ -18,12 +18,12 @@ add_executable(lclva_tests
     test_turn_writer.cpp
 )
 
-target_link_libraries(lclva_tests
+target_link_libraries(acva_tests
     PRIVATE
-        lclva_core
-        lclva_httplib
+        acva_core
+        acva_httplib
         doctest::doctest
-        lclva_warnings
+        acva_warnings
 )
 
 include(${doctest_DIR}/doctest.cmake OPTIONAL RESULT_VARIABLE _doctest_cmake_found)
@@ -31,7 +31,7 @@ if(NOT _doctest_cmake_found)
     # Fallback: register the entire binary as one ctest entry. Per-test
     # discovery requires the doctest cmake helper which lives next to the
     # config file.
-    add_test(NAME lclva_tests COMMAND lclva_tests)
+    add_test(NAME acva_tests COMMAND acva_tests)
 else()
-    doctest_discover_tests(lclva_tests)
+    doctest_discover_tests(acva_tests)
 endif()

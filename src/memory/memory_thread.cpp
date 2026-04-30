@@ -6,7 +6,7 @@
 
 #include <utility>
 
-namespace lclva::memory {
+namespace acva::memory {
 
 Result<std::unique_ptr<MemoryThread>>
 MemoryThread::open(const std::filesystem::path& path, std::size_t queue_capacity) {
@@ -57,4 +57,4 @@ void MemoryThread::run() {
     }
 }
 
-} // namespace lclva::memory
+} // namespace acva::memory

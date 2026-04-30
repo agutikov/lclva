@@ -6,9 +6,9 @@
 #include <cstddef>
 #include <string>
 
-namespace lclva::memory { class MemoryThread; }
+namespace acva::memory { class MemoryThread; }
 
-namespace lclva::llm {
+namespace acva::llm {
 
 struct PromptInputs {
     // 0 means "no session yet" — facts/summary/recent-turns reads are
@@ -49,4 +49,4 @@ private:
     std::size_t last_token_estimate_ = 0;
 };
 
-} // namespace lclva::llm
+} // namespace acva::llm

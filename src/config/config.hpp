@@ -8,7 +8,7 @@
 #include <string_view>
 #include <variant>
 
-namespace lclva::config {
+namespace acva::config {
 
 enum class LogSink {
     stderr_,
@@ -43,7 +43,7 @@ struct PipelineConfig {
 struct LlmConfig {
     std::string base_url = "http://127.0.0.1:8081/v1";
     std::string model = "qwen2.5-7b-instruct";
-    std::string unit = "lclva-llama.service";
+    std::string unit = "acva-llama.service";
     double temperature = 0.7;
     uint32_t max_tokens = 400;
     uint32_t max_prompt_tokens = 3000;
@@ -65,7 +65,7 @@ struct MemoryFactsConfig {
 };
 
 struct MemoryConfig {
-    std::string db_path = "${XDG_DATA_HOME:-~/.local/share}/lclva/lclva.db";
+    std::string db_path = "${XDG_DATA_HOME:-~/.local/share}/acva/acva.db";
     uint32_t recent_turns_n = 10;
     uint32_t write_queue_capacity = 256;
     MemorySummaryConfig summary;
@@ -112,4 +112,4 @@ using LoadResult = std::variant<Config, LoadError>;
 
 [[nodiscard]] LogSink parse_log_sink(std::string_view s);
 
-} // namespace lclva::config
+} // namespace acva::config

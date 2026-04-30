@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <memory>
 
-namespace lclva::dialogue {
+namespace acva::dialogue {
 
 using event::TurnId;
 using event::kNoTurn;
@@ -53,4 +53,4 @@ private:
     std::atomic<TurnId> next_{1};
 };
 
-} // namespace lclva::dialogue
+} // namespace acva::dialogue

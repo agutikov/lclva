@@ -19,7 +19,7 @@ Drive a real LLM end-to-end against a console transcript: text in → tokens str
 
 ## Deployment shape
 
-For dev (M1 onward), the **model backends run as Docker Compose containers on the host network**; **`lclva` runs on the host as a CLI** so debugging / step-through / log inspection is direct. The systemd unit files in `packaging/systemd/` remain valid for production-style deployment but are no longer the default path.
+For dev (M1 onward), the **model backends run as Docker Compose containers on the host network**; **`acva` runs on the host as a CLI** so debugging / step-through / log inspection is direct. The systemd unit files in `packaging/systemd/` remain valid for production-style deployment but are no longer the default path.
 
 This decision is captured in `plans/open_questions.md` as a follow-up to H4/H5; the design doc's §4.12 (Supervisor) and §16 (tech stack) are revised accordingly.
 
@@ -36,7 +36,7 @@ What's in the tree as of this writing.
 | SQLite3 | memory layer | `find_package(SQLite3 REQUIRED)` → `SQLite::SQLite3` |
 | libcurl (dev) | reserved for LLM SSE (slice 2) | `find_package(CURL REQUIRED)` → `CURL::libcurl` |
 
-Both linked through `lclva_core` so tests pick them up.
+Both linked through `acva_core` so tests pick them up.
 
 ## A.1 Configuration extension ✅
 
@@ -122,7 +122,7 @@ The M0 fake driver still runs; sentences travel as events but aren't yet routed 
 
 # Part B — Environment setup (Docker Compose, upstream images) ✅ landed
 
-What you do **before** starting slice 2. The output is a `docker-compose.yml` that brings up llama.cpp / whisper.cpp / piper, all reachable on `127.0.0.1` ports that match the lclva config.
+What you do **before** starting slice 2. The output is a `docker-compose.yml` that brings up llama.cpp / whisper.cpp / piper, all reachable on `127.0.0.1` ports that match the acva config.
 
 **Update from earlier draft:** all three backends ship official-or-upstream HTTP servers. We do *not* write or build custom Dockerfiles in M1. We use upstream images verbatim. The custom whisper-streaming wrapper is M5's concern (and may itself be skipped — see m5_streaming_stt.md).
 
@@ -130,7 +130,7 @@ What you do **before** starting slice 2. The output is a `docker-compose.yml` th
 
 - A two-line `compose.yaml` at the project root re-includes `packaging/compose/docker-compose.yml` so `docker compose up` works from the repo root without `-f`. Definitions stay under `packaging/compose/` per the layout principle; the root shim is just discovery. `.env.example` lives at the project root alongside it (Compose's default `.env` lookup dir), and `.env` is gitignored.
 
-- The compose `command` for each service is wired to the env-override variables, not just the host paths. `LCLVA_LLM_MODEL`, `LCLVA_WHISPER_MODEL`, and `LCLVA_PIPER_VOICE` all flow through. The plan listed only `LCLVA_LLM_MODEL` in `.env.example` but didn't actually expand it inside `command:` — which would have made the override a dead variable.
+- The compose `command` for each service is wired to the env-override variables, not just the host paths. `ACVA_LLM_MODEL`, `ACVA_WHISPER_MODEL`, and `ACVA_PIPER_VOICE` all flow through. The plan listed only `ACVA_LLM_MODEL` in `.env.example` but didn't actually expand it inside `command:` — which would have made the override a dead variable.
 - `--alias qwen2.5-7b-instruct` is added to the llama command so the OpenAI-compatible endpoint reports the same model name that `llm.model` carries in `config/default.yaml`. Saves a moment of confusion when staring at request/response bodies.
 - `start_period:` is set per service (30 s llama / 15 s whisper / 60 s piper) because piper does a `pip install` on first boot and the default 0-second grace would mark it `unhealthy` before the install finishes.
 
@@ -144,7 +144,7 @@ End-to-end smoke (B.7 acceptance) still has to be run on the dev machine — it 
   - Debian/Ubuntu: follow upstream NVIDIA Container Toolkit install guide.
   - Verify: `docker run --rm --gpus all nvidia/cuda:12.6.0-base-ubuntu22.04 nvidia-smi` prints the GPU table.
 - User must be in the `docker` group (or use rootless Docker).
-- Model files already downloaded on the host under `~/.local/share/lclva/models/` and voices under `~/.local/share/lclva/voices/` (see README §"Setting up the runtime services").
+- Model files already downloaded on the host under `~/.local/share/acva/models/` and voices under `~/.local/share/acva/voices/` (see README §"Setting up the runtime services").
 
 ## B.2 File layout
 
@@ -166,7 +166,7 @@ llama.cpp uses the upstream `ghcr.io/ggml-org/llama.cpp:server-cuda` image verba
 ## B.3 docker-compose.yml shape
 
 ```yaml
-name: lclva
+name: acva
 
 services:
   # llama.cpp — official ggml-org image with CUDA build of llama-server.
@@ -175,7 +175,7 @@ services:
     ports:
       - "127.0.0.1:8081:8081"
     volumes:
-      - ${LCLVA_MODELS_DIR:-${HOME}/.local/share/lclva/models}:/models:ro
+      - ${ACVA_MODELS_DIR:-${HOME}/.local/share/acva/models}:/models:ro
     deploy:
       resources:
         reservations:
@@ -202,7 +202,7 @@ services:
     ports:
       - "127.0.0.1:8082:8082"
     volumes:
-      - ${LCLVA_MODELS_DIR:-${HOME}/.local/share/lclva/models}:/models:ro
+      - ${ACVA_MODELS_DIR:-${HOME}/.local/share/acva/models}:/models:ro
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8082/health"]
       interval: 5s
@@ -219,7 +219,7 @@ services:
     ports:
       - "127.0.0.1:8083:8083"
     volumes:
-      - ${LCLVA_VOICES_DIR:-${HOME}/.local/share/lclva/voices}:/voices:ro
+      - ${ACVA_VOICES_DIR:-${HOME}/.local/share/acva/voices}:/voices:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8083/').read()"]
       interval: 5s
@@ -251,12 +251,12 @@ Replace `image:` accordingly.
 ## B.4 .env.example
 
 ```ini
-# Override model/voice paths (default: ~/.local/share/lclva/...)
-# LCLVA_MODELS_DIR=/path/to/models
-# LCLVA_VOICES_DIR=/path/to/voices
+# Override model/voice paths (default: ~/.local/share/acva/...)
+# ACVA_MODELS_DIR=/path/to/models
+# ACVA_VOICES_DIR=/path/to/voices
 
 # Switch the LLM model file without editing docker-compose.yml:
-# LCLVA_LLM_MODEL=qwen2.5-7b-instruct-q4_k_m.gguf
+# ACVA_LLM_MODEL=qwen2.5-7b-instruct-q4_k_m.gguf
 ```
 
 ## B.5 Operating the stack
@@ -279,7 +279,7 @@ Switching the LLM model is a host-side file swap + `docker compose restart llama
 
 ## B.6 Health checks the orchestrator relies on
 
-`lclva` polls each backend's `/health` endpoint per `cfg.supervisor.probe_interval_*_ms`. Compose's `healthcheck:` is independent — it dictates whether Compose marks the container ready/unhealthy and whether `restart: unless-stopped` kicks in. Both layers exist on purpose: Compose handles process lifecycle; the orchestrator handles application-level state and dialogue gating.
+`acva` polls each backend's `/health` endpoint per `cfg.supervisor.probe_interval_*_ms`. Compose's `healthcheck:` is independent — it dictates whether Compose marks the container ready/unhealthy and whether `restart: unless-stopped` kicks in. Both layers exist on purpose: Compose handles process lifecycle; the orchestrator handles application-level state and dialogue gating.
 
 ## B.7 Verifying B is done
 
@@ -422,7 +422,7 @@ Existing `info(component, message)` call sites stay unchanged.
 
 ## Acceptance for M1 (full)
 
-1. With `docker compose up` running, `./build/dev/lclva --config config/dev.yaml` accepts text input on stdin, streams an answer logged as `LlmSentence` events, and writes both turns to SQLite with `status='committed'`.
+1. With `docker compose up` running, `./build/dev/acva --config config/dev.yaml` accepts text input on stdin, streams an answer logged as `LlmSentence` events, and writes both turns to SQLite with `status='committed'`.
 2. Killing the orchestrator mid-turn and restarting it: recovery sweep marks the in-flight turn `interrupted`, the next session opens cleanly, prior session's `ended_at` set.
 3. `tests/test_sentence_splitter.cpp` golden corpus passes. ✅ (slice 1)
 4. SSE cancellation: setting the turn's cancellation token mid-stream causes the LLM client to abort and emit `LlmFinished{ cancelled=true }` within 100 ms.

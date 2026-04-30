@@ -1,5 +1,5 @@
 [Unit]
-Description=lclva — llama.cpp (LLM backend)
+Description=acva — llama.cpp (LLM backend)
 After=network.target
 
 [Service]
@@ -7,7 +7,7 @@ Type=simple
 ExecStart=%h/.local/opt/llama.cpp/build/bin/llama-server \
   --host 127.0.0.1 \
   --port 8081 \
-  --model %h/.local/share/lclva/models/qwen2.5-7b-instruct-q4_k_m.gguf \
+  --model %h/.local/share/acva/models/qwen2.5-7b-instruct-q4_k_m.gguf \
   --ctx-size 8192 \
   --n-gpu-layers 999 \
   --threads 4 \

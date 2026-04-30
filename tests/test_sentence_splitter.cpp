@@ -5,12 +5,12 @@
 
 #include <vector>
 
-namespace dl = lclva::dialogue;
+namespace dl = acva::dialogue;
 
 namespace {
 
 dl::SentenceSplitter make() {
-    return dl::SentenceSplitter(lclva::config::SentenceSplitterConfig{});
+    return dl::SentenceSplitter(acva::config::SentenceSplitterConfig{});
 }
 
 std::vector<std::string> split_all(std::string_view text) {
@@ -91,7 +91,7 @@ TEST_CASE("splitter: streaming push emits as soon as boundary seen") {
 }
 
 TEST_CASE("splitter: forced flush on max_sentence_chars without punctuation") {
-    lclva::config::SentenceSplitterConfig cfg;
+    acva::config::SentenceSplitterConfig cfg;
     cfg.max_sentence_chars = 50;
     dl::SentenceSplitter sp(cfg);
     std::vector<std::string> out;

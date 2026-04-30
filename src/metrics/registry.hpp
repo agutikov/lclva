@@ -15,7 +15,7 @@
 #include <string>
 #include <unordered_map>
 
-namespace lclva::metrics {
+namespace acva::metrics {
 
 // Wraps prometheus::Registry and the metric families we use across the
 // orchestrator. Constructed once at startup and shared (by reference) by all
@@ -78,4 +78,4 @@ private:
     std::unordered_map<event::TurnId, TurnTimer> timers_;
 };
 
-} // namespace lclva::metrics
+} // namespace acva::metrics

@@ -5,14 +5,14 @@
 # Idempotent: re-runs skip files that already exist with the expected
 # size. Resumable on partial downloads (curl --continue-at -).
 #
-# Override the destination roots with LCLVA_MODELS_DIR / LCLVA_VOICES_DIR
+# Override the destination roots with ACVA_MODELS_DIR / ACVA_VOICES_DIR
 # (same env vars compose reads). Total disk footprint of the defaults
 # below: ~5.2 GB.
 
 set -euo pipefail
 
-MODELS_DIR="${LCLVA_MODELS_DIR:-${HOME}/.local/share/lclva/models}"
-VOICES_DIR="${LCLVA_VOICES_DIR:-${HOME}/.local/share/lclva/voices}"
+MODELS_DIR="${ACVA_MODELS_DIR:-${HOME}/.local/share/acva/models}"
+VOICES_DIR="${ACVA_VOICES_DIR:-${HOME}/.local/share/acva/voices}"
 
 mkdir -p "${MODELS_DIR}" "${VOICES_DIR}"
 

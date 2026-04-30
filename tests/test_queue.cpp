@@ -6,8 +6,8 @@
 #include <chrono>
 #include <thread>
 
-using lclva::event::BoundedQueue;
-using lclva::event::OverflowPolicy;
+using acva::event::BoundedQueue;
+using acva::event::OverflowPolicy;
 
 TEST_CASE("queue: push/pop ordering") {
     BoundedQueue<int> q(8, OverflowPolicy::Block);

@@ -17,8 +17,8 @@
       "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
-        "LCLVA_BUILD_TESTS": "ON",
-        "LCLVA_WERROR": "ON"
+        "ACVA_BUILD_TESTS": "ON",
+        "ACVA_WERROR": "ON"
       }
     },
     {
@@ -27,8 +27,8 @@
       "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "LCLVA_BUILD_TESTS": "ON",
-        "LCLVA_WERROR": "ON"
+        "ACVA_BUILD_TESTS": "ON",
+        "ACVA_WERROR": "ON"
       }
     },
     {
@@ -37,8 +37,8 @@
       "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "LCLVA_BUILD_TESTS": "OFF",
-        "LCLVA_WERROR": "OFF"
+        "ACVA_BUILD_TESTS": "OFF",
+        "ACVA_WERROR": "OFF"
       }
     }
   ],

@@ -12,7 +12,7 @@
 #include <variant>
 #include <vector>
 
-namespace lclva::llm {
+namespace acva::llm {
 
 namespace {
 
@@ -143,4 +143,4 @@ std::string PromptBuilder::build(const PromptInputs& in) {
     return body;
 }
 
-} // namespace lclva::llm
+} // namespace acva::llm

@@ -1,6 +1,6 @@
 #pragma once
 
-namespace lclva::memory {
+namespace acva::memory {
 
 // Schema v1. Mirrors project_design.md §9.1. Idempotent: every CREATE uses
 // IF NOT EXISTS; every CREATE INDEX is also IF NOT EXISTS.
@@ -61,4 +61,4 @@ CREATE INDEX IF NOT EXISTS idx_summaries_session ON summaries(session_id, range_
 CREATE INDEX IF NOT EXISTS idx_facts_key         ON facts(key);
 )sql";
 
-} // namespace lclva::memory
+} // namespace acva::memory

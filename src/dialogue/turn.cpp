@@ -1,6 +1,6 @@
 #include "dialogue/turn.hpp"
 
-namespace lclva::dialogue {
+namespace acva::dialogue {
 
 TurnContext TurnFactory::mint() {
     TurnContext ctx;
@@ -10,4 +10,4 @@ TurnContext TurnFactory::mint() {
     return ctx;
 }
 
-} // namespace lclva::dialogue
+} // namespace acva::dialogue

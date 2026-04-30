@@ -1,7 +1,7 @@
 # Top-level shim so `docker compose ...` works from the project root.
 # The real definitions live in packaging/compose/docker-compose.yml; this
 # file only re-includes them. Variable interpolation
-# (LCLVA_MODELS_DIR, LCLVA_LLM_MODEL, ...) reads from `.env` at the
+# (ACVA_MODELS_DIR, ACVA_LLM_MODEL, ...) reads from `.env` at the
 # project root by default — copy `.env.example` to `.env` to override.
 
 include:

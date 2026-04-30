@@ -4,7 +4,7 @@
 #include <string>
 #include <string_view>
 
-namespace lclva::llm {
+namespace acva::llm {
 
 // SseParser — accumulates raw bytes from an SSE stream and emits one
 // payload per `data: ...\n\n` block. Designed for the OpenAI chat
@@ -63,4 +63,4 @@ private:
     CommentCallback on_comment_;
 };
 
-} // namespace lclva::llm
+} // namespace acva::llm

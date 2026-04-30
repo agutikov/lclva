@@ -10,6 +10,7 @@ add_executable(lclva_tests
     test_prompt_builder.cpp
     test_queue.cpp
     test_sse_parser.cpp
+    test_summarizer.cpp
     test_recovery.cpp
     test_repository.cpp
     test_sentence_splitter.cpp

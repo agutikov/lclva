@@ -17,6 +17,7 @@ add_library(lclva_core STATIC
     memory/memory_thread.cpp
     memory/recovery.cpp
     memory/repository.cpp
+    memory/summarizer.cpp
     metrics/registry.cpp
     pipeline/fake_driver.cpp
 )

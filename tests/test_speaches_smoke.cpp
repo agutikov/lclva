@@ -78,7 +78,12 @@ httplib::Client make_client() {
 }
 
 constexpr const char* kVoiceModel = "speaches-ai/piper-en_US-amy-medium";
-constexpr const char* kTinyStt    = "Systran/faster-whisper-tiny";
+// Production STT model — same as `config/default.yaml`,
+// `scripts/download-speaches-models.sh`, and `acva demo stt`.
+// Tests must match the production model so a flake here means a
+// real production problem, not a "the smoke uses tiny but you ship
+// large-v3-turbo" mismatch.
+constexpr const char* kSttModel   = "deepdml/faster-whisper-large-v3-turbo-ct2";
 constexpr const char* kSentence   = "Hello from acva. This is a smoke test.";
 
 } // namespace
@@ -126,7 +131,7 @@ TEST_CASE("Speaches smoke: STT round-trip on the TTS output"
 
     httplib::MultipartFormDataItems items{
         {"file",  wav,      "speech.wav", "audio/wav"},
-        {"model", kTinyStt, "",           ""},
+        {"model", kSttModel, "",           ""},
     };
     auto res = c.Post("/v1/audio/transcriptions", items);
     REQUIRE(res);
@@ -186,7 +191,7 @@ TEST_CASE("Speaches smoke: OpenAiSttClient end-to-end"
 
     acva::config::SttConfig cfg;
     cfg.base_url = speaches_url() + "/v1";
-    cfg.model    = kTinyStt;
+    cfg.model    = kSttModel;
     cfg.request_timeout_seconds = 30;
 
     acva::stt::OpenAiSttClient stt(cfg);

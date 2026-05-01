@@ -48,6 +48,7 @@ add_executable(acva_unit_tests
     test_queue.cpp
     test_sse_parser.cpp
     test_summarizer.cpp
+    test_realtime_envelope.cpp
     test_recovery.cpp
     test_repository.cpp
     test_resampler.cpp

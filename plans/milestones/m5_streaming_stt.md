@@ -144,44 +144,70 @@ Use upstream `whisper.cpp:server` (request/response) all the way through MVP. Dr
 
 The text below assumes Option A or B (streaming exists). If Option C is chosen, skip the speculation policy section and the FSM concurrent-state changes; M5 reduces to "wire whisper-server through with multilingual support."
 
-## Step 2 — Whisper client
+## Step 2 — Streaming STT client
+
+> **Architecture revised post-spike (2026-05-02).** The original sketch
+> below modeled per-utterance backend connections (one SSE stream per
+> utterance). The realtime spike pinned the actual contract: Speaches
+> `/v1/realtime` is a **long-lived WebRTC session** in which utterances
+> are delineated by `input_audio_buffer.commit` events on a single
+> shared data channel. Re-negotiating SDP per utterance would burn
+> ~500 ms per turn for no gain. See `open_questions.md` L4.
+
+The client is split into two source-level pieces and lands in two
+sub-slices.
+
+### Step 2.a — Session lifecycle (✅ landed 2026-05-02)
 
 **Files:**
-- `src/stt/whisper_client.hpp`
-- `src/stt/whisper_client.cpp`
+- `src/stt/realtime_envelope.{hpp,cpp}` — Speaches' `partial_message`
+  / `full_message` envelope reassembler + base64 decoder. Pure logic,
+  no network, 9 unit tests in `tests/test_realtime_envelope.cpp`.
+- `src/stt/realtime_stt_client.{hpp,cpp}` — `RealtimeSttClient` owns
+  one long-lived `rtc::PeerConnection`. `start(timeout)` blocks
+  through ICE+SDP+DTLS+`session.updated`, returning true when the
+  state reaches `Ready`. `stop()` is idempotent and safe from any
+  thread. Compile-time gated on `ACVA_HAVE_LIBDATACHANNEL`; the stub
+  fallback returns false from `start()`.
+- Live integration in `tests/test_speaches_realtime_smoke.cpp`:
+  asserts the client reaches `Ready` within 15 s against the Compose
+  Speaches container.
 
-```cpp
-struct UtteranceSession {
-    std::string utterance_id;
-    dialogue::TurnId turn;
-    std::shared_ptr<dialogue::CancellationToken> cancel;
-};
+States: `Idle → Connecting → Configuring → Ready` (success path);
+any error transitions to `Failed`; `stop()` transitions to `Closed`.
 
-struct UtteranceCallbacks {
-    std::function<void(event::PartialTranscript)> on_partial;
-    std::function<void(event::FinalTranscript)>   on_final;
-    std::function<void(std::string err)>          on_error;
-};
+`session.update` payload sent on bring-up: `modalities: ["text"]`,
+`tools: []`, `input_audio_transcription.model: <cfg.stt.model>`. The
+`turn_detection` field is **deliberately omitted** because Speaches'
+`PartialSession` schema rejects `null` and has no "disable" variant
+(see `open_questions.md` L5).
 
-class WhisperClient {
-public:
-    WhisperClient(const Config& cfg);
-    ~WhisperClient();
+### Step 2.b — Per-utterance audio + transcripts (next slice)
 
-    // Begin a new utterance. Spins up an SSE consumer for the partial stream.
-    void begin(UtteranceSession session, UtteranceCallbacks cb);
+**Files (planned):**
+- Extend `realtime_stt_client.{hpp,cpp}` with:
+  ```cpp
+  void begin_utterance(dialogue::TurnId turn,
+                       std::shared_ptr<dialogue::CancellationToken> cancel,
+                       UtteranceCallbacks cb);
+  void push_audio(std::span<const std::int16_t> samples_16k);
+  void end_utterance();
+  ```
+- Audio path: 16 kHz int16 PCM in → resample to 48 kHz (Opus rate) →
+  Opus encoder (libopus, ships separately on Manjaro) → RTP packets
+  on the existing audio track.
+- Event subscriptions: parse the `oai-events` data channel for
+  `conversation.item.input_audio_transcription.delta` →
+  `PartialTranscript`, `…transcription.completed` → `FinalTranscript`.
+- `begin_utterance` resets the input buffer (`input_audio_buffer.clear`);
+  `end_utterance` commits it (`input_audio_buffer.commit`) and waits
+  for the matching `transcription.completed` event.
 
-    // Push a chunk of 16 kHz mono PCM. Async — returns immediately.
-    void push_audio(std::string_view utterance_id, std::span<const std::int16_t> samples);
-
-    // Signal end-of-utterance. Server emits final event soon after.
-    void end(std::string_view utterance_id);
-
-    bool probe();
-};
-```
-
-I/O thread architecture: one libcurl easy-handle per active utterance for the SSE stream; `push_audio` posts via cpp-httplib. Reentrant — multiple utterances can be in flight (rare but possible during barge-in races).
+I/O threading: libdatachannel callbacks run on its internal thread
+and serialize per channel; `RealtimeSttClient` synchronizes state
+transitions with a single mutex + condition variable. `push_audio` is
+called from the M4 audio-pipeline worker; it enqueues encoded packets
+onto the audio track and returns immediately.
 
 ## Step 3 — Wire VAD → Whisper
 

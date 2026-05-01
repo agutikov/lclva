@@ -43,6 +43,8 @@ add_library(acva_core STATIC
     playback/engine.cpp
     playback/queue.cpp
     stt/openai_stt_client.cpp
+    stt/realtime_envelope.cpp
+    stt/realtime_stt_client.cpp
     supervisor/keep_alive.cpp
     supervisor/probe.cpp
     supervisor/service.cpp
@@ -75,6 +77,14 @@ target_link_libraries(acva_core
 if(ACVA_HAVE_ONNXRUNTIME)
     target_link_libraries(acva_core PRIVATE onnxruntime::onnxruntime)
     target_compile_definitions(acva_core PRIVATE ACVA_HAVE_ONNXRUNTIME=1)
+endif()
+
+# M5 — link libdatachannel when present and define the gate macro so
+# stt/realtime_stt_client.cpp picks the real implementation. Without
+# it the file compiles to a stub whose start() returns false.
+if(ACVA_HAVE_LIBDATACHANNEL)
+    target_link_libraries(acva_core PRIVATE LibDataChannel::LibDataChannel)
+    target_compile_definitions(acva_core PRIVATE ACVA_HAVE_LIBDATACHANNEL=1)
 endif()
 
 # Main executable

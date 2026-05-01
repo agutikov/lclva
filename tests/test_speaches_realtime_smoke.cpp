@@ -17,6 +17,9 @@
 //     in tests/CMakeLists.txt; if you can compile this file at all, the
 //     library is present).
 
+#include "config/config.hpp"
+#include "stt/realtime_stt_client.hpp"
+
 #include <doctest/doctest.h>
 #include <httplib.h>
 
@@ -69,7 +72,12 @@ bool speaches_reachable() {
     return r && r->status == 200;
 }
 
-constexpr const char* kRealtimeModel = "Systran/faster-whisper-tiny";
+// Same production STT model as config/default.yaml,
+// download-speaches-models.sh, and `acva demo stt`. Sharing one
+// model across all integration tests keeps the GPU footprint
+// minimal — Speaches loads it once and keeps it warm for the rest
+// of the run.
+constexpr const char* kRealtimeModel = "deepdml/faster-whisper-large-v3-turbo-ct2";
 
 } // namespace
 
@@ -220,4 +228,24 @@ TEST_CASE("Speaches realtime spike: SDP offer/answer + data channel opens"
     }
 
     pc->close();
+}
+
+TEST_CASE("RealtimeSttClient: start() reaches Ready against live Speaches"
+           * doctest::skip(!speaches_reachable())) {
+    acva::config::SttConfig cfg;
+    cfg.base_url = speaches_url() + "/v1";
+    cfg.model    = kRealtimeModel;
+    cfg.request_timeout_seconds = 30;
+
+    acva::stt::RealtimeSttClient client(cfg);
+    REQUIRE(client.state() == acva::stt::RealtimeSttClient::State::Idle);
+
+    const bool ok = client.start(std::chrono::seconds(15));
+    INFO("final state="
+         << static_cast<int>(client.state()));
+    CHECK(ok);
+    CHECK(client.state() == acva::stt::RealtimeSttClient::State::Ready);
+
+    client.stop();
+    CHECK(client.state() == acva::stt::RealtimeSttClient::State::Closed);
 }

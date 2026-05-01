@@ -22,6 +22,8 @@ Potential improvements ???
 
 all-in-one C++ app ???
 
+fast restart to apply params - save context with timestamp, restart, load context and continue
+
 ?? Interleaving with players (music, browser, etc)
 
 multi-user conversation
@@ -34,6 +36,14 @@ and multi-model runtime
 different database, vector database, graph database
 
 llama.cpp vs ollama
+
+reasoning
+temperature
+person state from memory to promt
+style post processing
+
+
+
 
 
 Installations:

@@ -111,7 +111,7 @@ int run_chat(const config::Config& orig_cfg) {
             playback_turn.store(e.turn, std::memory_order_release);
         });
 
-    playback::PlaybackEngine engine(cfg.audio, queue, bus,
+    playback::PlaybackEngine engine(cfg.audio, cfg.playback, queue, bus,
                                       [&]{ return playback_turn.load(std::memory_order_acquire); });
     dialogue::TtsBridge      bridge(cfg, bus,
         [&](tts::TtsRequest r, tts::TtsCallbacks cb) {

@@ -1,14 +1,19 @@
 
 
 
+
+Sound filters cheep way to make voice more natural
+
+SSML
+
+
 cmdline memory crud (before webui)
 
 
-choose the Licence
 
 Followups:
 - tools integration
-- web ui
+- web ui - plans/web_ui_architecture.md
 - docs, readme for advanced users plus arch overview, internals in docs
 - MacOS Metal
 - Windows

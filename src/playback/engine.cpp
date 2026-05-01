@@ -49,15 +49,20 @@ struct PlaybackEngine::Impl {
 };
 
 PlaybackEngine::PlaybackEngine(const config::AudioConfig& audio_cfg,
+                                 const config::PlaybackConfig& playback_cfg,
                                  PlaybackQueue& queue,
                                  event::EventBus& bus,
                                  ActiveTurnFn active_turn)
     : impl_(std::make_unique<Impl>()),
       cfg_(audio_cfg),
+      playback_cfg_(playback_cfg),
       queue_(queue),
       bus_(bus),
       active_turn_(std::move(active_turn)),
-      frames_per_buffer_(cfg_.buffer_frames) {}
+      frames_per_buffer_(cfg_.buffer_frames),
+      prefill_target_samples_(
+          static_cast<std::size_t>(playback_cfg_.prefill_ms)
+          * static_cast<std::size_t>(cfg_.sample_rate_hz) / 1000U) {}
 
 PlaybackEngine::~PlaybackEngine() {
     stop();
@@ -95,6 +100,27 @@ void PlaybackEngine::render_into(std::int16_t* out, std::size_t frames) {
                 impl_->pos = 0;
             }
             const auto active = active_turn_ ? active_turn_() : event::kNoTurn;
+
+            // Per-turn prefill gate. When active_turn changes we
+            // require `prefill_target_samples_` of audio to be queued
+            // before draining starts — absorbs the streaming TTS
+            // chunk-arrival jitter. While we're waiting we write
+            // silence but bump prefill_silence_frames_ instead of
+            // underruns_, so /metrics distinguishes intentional
+            // pre-buffer fill from real starvation.
+            if (prefill_target_samples_ > 0 && active != event::kNoTurn
+                && primed_turn_ != active) {
+                if (queue_.pending_samples_for(active) >= prefill_target_samples_) {
+                    primed_turn_ = active;
+                } else {
+                    const std::size_t rem = frames - filled;
+                    std::memset(out + filled, 0, rem * sizeof(std::int16_t));
+                    prefill_silence_frames_.fetch_add(
+                        rem, std::memory_order_relaxed);
+                    return;
+                }
+            }
+
             auto next = queue_.dequeue_active(active);
             if (!next) {
                 std::memset(out + filled, 0,

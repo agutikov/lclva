@@ -84,6 +84,13 @@ public:
 
     [[nodiscard]] std::size_t size() const;
     [[nodiscard]] std::size_t capacity() const noexcept { return cap_; }
+
+    // Total int16 samples in the queue tagged with `turn`. Used by the
+    // PlaybackEngine's pre-buffer threshold to decide when to start
+    // draining a streaming TTS turn — chunk count is unreliable
+    // because each libcurl-burst-derived chunk has different size.
+    // Linear in queue depth (bounded by cap_).
+    [[nodiscard]] std::size_t pending_samples_for(dialogue::TurnId turn) const;
     [[nodiscard]] std::uint64_t drops() const noexcept    { return drops_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t enqueued() const noexcept { return enqueued_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t dequeued() const noexcept { return dequeued_.load(std::memory_order_relaxed); }

@@ -51,6 +51,7 @@ public:
     using ActiveTurnFn = std::function<dialogue::TurnId()>;
 
     PlaybackEngine(const config::AudioConfig& audio_cfg,
+                    const config::PlaybackConfig& playback_cfg,
                     PlaybackQueue& queue,
                     event::EventBus& bus,
                     ActiveTurnFn active_turn);
@@ -78,6 +79,12 @@ public:
     [[nodiscard]] std::uint64_t underruns()      const noexcept { return underruns_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t frames_played()  const noexcept { return frames_played_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t chunks_played()  const noexcept { return chunks_played_.load(std::memory_order_relaxed); }
+    // Frames written as silence while waiting for the per-turn pre-buffer
+    // threshold to be met. NOT counted as underruns — this is intentional
+    // pre-buffer fill, not a starvation event.
+    [[nodiscard]] std::uint64_t prefill_silence_frames() const noexcept {
+        return prefill_silence_frames_.load(std::memory_order_relaxed);
+    }
     [[nodiscard]] bool running() const noexcept                  { return running_.load(std::memory_order_acquire); }
     [[nodiscard]] bool headless() const noexcept                 { return headless_.load(std::memory_order_acquire); }
 
@@ -98,12 +105,16 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
 
-    const config::AudioConfig& cfg_;
+    const config::AudioConfig&    cfg_;
+    const config::PlaybackConfig& playback_cfg_;
     PlaybackQueue&    queue_;
     event::EventBus&  bus_;
     ActiveTurnFn      active_turn_;
 
     std::size_t frames_per_buffer_ = 480;
+    // Derived from playback_cfg_.prefill_ms × cfg_.sample_rate_hz at
+    // construction time. 0 disables the pre-buffer altogether.
+    std::size_t prefill_target_samples_ = 0;
 
     std::atomic<bool>          running_{false};
     std::atomic<bool>          headless_{false};
@@ -113,6 +124,14 @@ private:
     std::atomic<std::uint64_t> underruns_{0};
     std::atomic<std::uint64_t> frames_played_{0};
     std::atomic<std::uint64_t> chunks_played_{0};
+    std::atomic<std::uint64_t> prefill_silence_frames_{0};
+
+    // Per-turn prefill state. Owned by the audio callback thread —
+    // never read by anyone else, so no atomic needed. `primed_turn_`
+    // is the active_turn for which the prefill threshold has already
+    // been crossed; while active_turn != primed_turn_ we render
+    // silence and wait for the queue to fill.
+    dialogue::TurnId primed_turn_ = event::kNoTurn;
 };
 
 } // namespace acva::playback

@@ -1,6 +1,6 @@
 # M4B — Voice-Backend Consolidation onto Speaches
 
-**Status:** ✅ landed. All 7 steps + the Step 0 smoke gate complete on the dev workstation. Compose is `llama` + `speaches` only; `OpenAiTtsClient` + `OpenAiSttClient` ship; `acva demo {tts,chat,stt}` exercise the new wiring; 207 unit + 8 integration tests green. One known follow-up captured: streaming-TTS playback jitter (M4B follow-up task) — pre-buffer threshold in `PlaybackEngine` lands before M5 starts.
+**Status:** ✅ landed. All 7 steps + the Step 0 smoke gate + the streaming-TTS prefill follow-up complete on the dev workstation. Compose is `llama` + `speaches` only; `OpenAiTtsClient` + `OpenAiSttClient` ship; `PlaybackEngine` carries a per-turn `prefill_ms` gate (default 100 ms) that absorbs streaming-TTS chunk-arrival jitter — measured 56–71% fewer underruns. STT defaults to `deepdml/faster-whisper-large-v3-turbo-ct2` (the plain large-v3 model doesn't fit alongside llama-7B-Q4 on an 8 GB card). `acva demo {tts,chat,stt}` exercise the new wiring; 209 unit + 8 integration tests green.
 
 **Estimate:** 4–6 days.
 

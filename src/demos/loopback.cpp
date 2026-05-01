@@ -47,7 +47,7 @@ int run_loopback(const config::Config& cfg) {
 
     playback::PlaybackQueue queue(cfg.playback.max_queue_chunks);
     constexpr event::TurnId kFakeTurn = 1;
-    playback::PlaybackEngine engine(cfg.audio, queue, bus,
+    playback::PlaybackEngine engine(cfg.audio, cfg.playback, queue, bus,
                                       []{ return kFakeTurn; });
     if (!engine.start()) {
         std::fprintf(stderr, "demo[loopback] engine.start() failed\n");

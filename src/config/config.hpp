@@ -189,6 +189,17 @@ struct PlaybackConfig {
     // Throttle window for the "underrun" log line so a stuck pipeline
     // doesn't spam the logs.
     uint32_t underrun_log_throttle_ms = 1000;
+    // Per-turn pre-buffer: don't start consuming from the queue for a
+    // new active turn until at least this many milliseconds of audio
+    // have queued up. Absorbs the libcurl-receive jitter pattern of
+    // streaming TTS — Speaches sends bursts faster than realtime, but
+    // not perfectly evenly, so the audio thread would otherwise
+    // alternate between draining-fast and underrunning. 0 disables
+    // prebuffering (legacy M3 behaviour). 100 ms is the M4B default;
+    // tune up to ~250 ms if a slow TTS pipeline still produces
+    // underruns. Counts only samples for the *active* turn — barge-in
+    // or speculation-cancel resets the prefill state.
+    uint32_t prefill_ms = 100;
 };
 
 // M4 — Silero VAD knobs. `provider` is currently a label (silero is

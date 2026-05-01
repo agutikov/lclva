@@ -41,7 +41,7 @@ int run_tts(const config::Config& cfg) {
     playback::PlaybackQueue queue(cfg.playback.max_queue_chunks);
 
     tts::OpenAiTtsClient client(cfg.tts);
-    playback::PlaybackEngine engine(cfg.audio, queue, bus,
+    playback::PlaybackEngine engine(cfg.audio, cfg.playback, queue, bus,
                                       []{ return kTurn; });
     dialogue::TtsBridge     bridge(cfg, bus,
         [&](tts::TtsRequest r, tts::TtsCallbacks cb) {

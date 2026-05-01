@@ -362,7 +362,7 @@ int main(int argc, char** argv) {
         playback_queue = std::make_unique<acva::playback::PlaybackQueue>(
             cfg.playback.max_queue_chunks);
         playback_engine = std::make_unique<acva::playback::PlaybackEngine>(
-            cfg.audio, *playback_queue, bus,
+            cfg.audio, cfg.playback, *playback_queue, bus,
             [playback_active_turn]{
                 return playback_active_turn->load(std::memory_order_acquire);
             });

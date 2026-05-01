@@ -14,6 +14,7 @@
 #include <vector>
 
 using acva::config::AudioConfig;
+using acva::config::PlaybackConfig;
 using acva::dialogue::TurnId;
 using acva::event::EventBus;
 using acva::event::PlaybackFinished;
@@ -30,6 +31,15 @@ AudioConfig headless_cfg(std::size_t buffer_frames = 64) {
     c.sample_rate_hz = 48000;
     c.buffer_frames = static_cast<std::uint32_t>(buffer_frames);
     return c;
+}
+
+// Most engine tests pre-date the M4B prefill knob; they expect the
+// engine to start consuming immediately once a chunk lands. Tests
+// that exercise the prefill behaviour build their own PlaybackConfig.
+PlaybackConfig no_prefill_cfg() {
+    PlaybackConfig p;
+    p.prefill_ms = 0;
+    return p;
 }
 
 AudioChunk chunk(TurnId turn, SequenceNo seq, std::size_t n_samples,
@@ -86,7 +96,7 @@ TEST_CASE("PlaybackEngine: headless mode drains queue and emits PlaybackFinished
     FinishedSink sink(bus);
 
     std::atomic<TurnId> active{1};
-    PlaybackEngine eng(cfg, q, bus, [&]{ return active.load(); });
+    PlaybackEngine eng(cfg, no_prefill_cfg(), q, bus, [&]{ return active.load(); });
     eng.force_headless(std::chrono::milliseconds(2));
     REQUIRE(eng.start());
     CHECK(eng.headless());
@@ -117,7 +127,7 @@ TEST_CASE("PlaybackEngine: empty queue drives underruns to non-zero, no crash") 
     FinishedSink sink(bus);
 
     std::atomic<TurnId> active{1};
-    PlaybackEngine eng(cfg, q, bus, [&]{ return active.load(); });
+    PlaybackEngine eng(cfg, no_prefill_cfg(), q, bus, [&]{ return active.load(); });
     eng.force_headless(std::chrono::milliseconds(2));
     REQUIRE(eng.start());
 
@@ -135,7 +145,7 @@ TEST_CASE("PlaybackEngine: stale-turn chunks are dropped, never played") {
     FinishedSink sink(bus);
 
     std::atomic<TurnId> active{42};
-    PlaybackEngine eng(cfg, q, bus, [&]{ return active.load(); });
+    PlaybackEngine eng(cfg, no_prefill_cfg(), q, bus, [&]{ return active.load(); });
     eng.force_headless(std::chrono::milliseconds(2));
     REQUIRE(eng.start());
 
@@ -165,7 +175,7 @@ TEST_CASE("PlaybackEngine: render_into is callable directly (no thread needed)")
     FinishedSink sink(bus);
 
     std::atomic<TurnId> active{1};
-    PlaybackEngine eng(cfg, q, bus, [&]{ return active.load(); });
+    PlaybackEngine eng(cfg, no_prefill_cfg(), q, bus, [&]{ return active.load(); });
     // Manual mode — start the publisher but don't kick off either
     // PortAudio or the headless ticker. We need start() because that
     // spins up the publisher thread that reads the postbox.
@@ -200,11 +210,72 @@ TEST_CASE("PlaybackEngine: render_into is callable directly (no thread needed)")
     eng.stop();
 }
 
+TEST_CASE("PlaybackEngine: prefill_ms gates the first turn until threshold met") {
+    // Configure 100 ms prefill against a 48 kHz device — that's
+    // 4800 samples that need to queue before we start consuming.
+    AudioConfig cfg = headless_cfg(64);
+    PlaybackConfig pcfg;
+    pcfg.prefill_ms = 100;
+    PlaybackQueue q(8);
+    EventBus bus;
+    FinishedSink sink(bus);
+
+    std::atomic<TurnId> active{7};
+    PlaybackEngine eng(cfg, pcfg, q, bus, [&]{ return active.load(); });
+    eng.force_headless(std::chrono::seconds(60));   // manual ticking
+    REQUIRE(eng.start());
+
+    // Below threshold (1000 < 4800) — engine must NOT consume yet.
+    REQUIRE(q.enqueue(chunk(7, 0, 1000)));
+    std::vector<std::int16_t> out(256);
+    eng.render_into(out.data(), out.size());
+    eng.render_into(out.data(), out.size());
+    CHECK(eng.chunks_played() == 0);
+    CHECK(eng.prefill_silence_frames() >= 256);
+    CHECK(eng.underruns() == 0);   // prefill silence is NOT an underrun
+    CHECK(q.size() == 1);          // chunk still queued
+
+    // Push enough to cross 4800; engine should drain on the next call.
+    REQUIRE(q.enqueue(chunk(7, 1, 4000)));
+    // Render until both chunks are fully consumed. Each render
+    // copies up to 256 samples; 5000 total → ~20 calls; loop with
+    // a generous bound.
+    for (int i = 0; i < 30 && eng.chunks_played() < 2; ++i) {
+        eng.render_into(out.data(), out.size());
+    }
+    CHECK(eng.chunks_played() >= 2);
+    CHECK(q.size() == 0);
+    eng.stop();
+}
+
+TEST_CASE("PlaybackEngine: prefill_ms=0 disables the gate (legacy M3 behaviour)") {
+    AudioConfig cfg = headless_cfg(64);
+    PlaybackConfig pcfg;
+    pcfg.prefill_ms = 0;     // disabled
+    PlaybackQueue q(8);
+    EventBus bus;
+    FinishedSink sink(bus);
+
+    std::atomic<TurnId> active{1};
+    PlaybackEngine eng(cfg, pcfg, q, bus, [&]{ return active.load(); });
+    eng.force_headless(std::chrono::seconds(60));
+    REQUIRE(eng.start());
+
+    // A tiny chunk should be consumed immediately, no prefill silence.
+    REQUIRE(q.enqueue(chunk(1, 0, 100)));
+    std::vector<std::int16_t> out(128);
+    eng.render_into(out.data(), out.size());
+    eng.render_into(out.data(), out.size());
+    CHECK(eng.chunks_played() == 1);
+    CHECK(eng.prefill_silence_frames() == 0);
+    eng.stop();
+}
+
 TEST_CASE("PlaybackEngine: stop is idempotent") {
     AudioConfig cfg = headless_cfg();
     PlaybackQueue q(4);
     EventBus bus;
-    PlaybackEngine eng(cfg, q, bus, []{ return TurnId{1}; });
+    PlaybackEngine eng(cfg, no_prefill_cfg(), q, bus, []{ return TurnId{1}; });
     eng.force_headless(std::chrono::milliseconds(2));
     REQUIRE(eng.start());
     eng.stop();

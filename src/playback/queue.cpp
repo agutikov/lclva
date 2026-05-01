@@ -66,4 +66,13 @@ std::size_t PlaybackQueue::size() const {
     return q_.size();
 }
 
+std::size_t PlaybackQueue::pending_samples_for(dialogue::TurnId turn) const {
+    std::lock_guard lk(mu_);
+    std::size_t total = 0;
+    for (const auto& c : q_) {
+        if (c.turn == turn) total += c.samples.size();
+    }
+    return total;
+}
+
 } // namespace acva::playback

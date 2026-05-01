@@ -11,6 +11,8 @@ add_executable(acva_tests
     test_memory_thread.cpp
     test_paths.cpp
     test_piper_client.cpp
+    test_playback_engine.cpp
+    test_playback_queue.cpp
     test_probe.cpp
     test_prompt_builder.cpp
     test_service_monitor.cpp

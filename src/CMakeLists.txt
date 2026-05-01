@@ -23,6 +23,8 @@ add_library(acva_core STATIC
     memory/summarizer.cpp
     metrics/registry.cpp
     pipeline/fake_driver.cpp
+    playback/engine.cpp
+    playback/queue.cpp
     supervisor/keep_alive.cpp
     supervisor/probe.cpp
     supervisor/service.cpp

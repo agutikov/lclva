@@ -2,6 +2,8 @@
 
 **Estimate:** ~1 week (down from 1-2 weeks; the Piper-wrapper subproject is gone).
 
+**Status:** ✅ landed (steps 0–8 complete; 186/186 tests passing).
+
 **Depends on:** M1 (sentences flow as `LlmSentence` events; Compose stack from M1.B already runs `piper.http_server`), M2 (TTS service health-probed).
 
 **Blocks:** M7 (barge-in needs a playback queue to drain).
@@ -258,14 +260,25 @@ dialogue:
 
 ## Time breakdown
 
-| Step | Estimate |
-|---|---|
-| 1 Piper HTTP client (no wrapper to write) | 0.5 day |
-| 2 Per-language URL routing | 0.5 day |
-| 3 Playback queue | 1 day |
-| 4 Playback engine + PortAudio | 2 days |
-| 5 Resampler | 0.5 day |
-| 6 TTS bridge | 1 day |
-| 7 Sentence cap | 0.5 day |
-| 8 Config + tests | 1 day |
-| **Total** | **~7 days = ~1 week** |
+| Step | Estimate | Status |
+|---|---|---|
+| 0 Config schema (audio / tts.voices / playback) | — | ✅ +7 tests |
+| 1 + 2 Piper HTTP client + per-language URL routing | 1 day | ✅ +9 tests in `test_piper_client` |
+| 3 Playback queue | 1 day | ✅ +10 tests including a 5000-chunk concurrent stress |
+| 4 Playback engine + PortAudio | 2 days | ✅ +5 tests against the headless mode |
+| 5 Resampler | 0.5 day | ✅ +8 tests, sine-energy preservation, chunk-vs-batch phase stability |
+| 6 TTS bridge | 1 day | ✅ +6 tests, including barge-in cancel and queue drain |
+| 7 Sentence cap | 0.5 day | ✅ +1 test, validates LLM cancel + cap enforcement |
+| 8 Config + tests + main wiring + smoke | 1 day | ✅ smoke verified end-to-end on host without backends |
+| **Total** | **~7 days = ~1 week** | landed |
+
+## Lessons learned
+
+- **PortAudio's callback signature can't be expressed in headers without dragging `portaudio.h` everywhere.** The trampoline lives in the .cpp anonymous namespace with `PaStreamCallbackTimeInfo*` / `PaStreamCallbackFlags`; it forwards into a `public` `PlaybackEngine::render_into` member that's also called by the headless ticker. Tried friend declarations first — friend-vs-typedef-mismatch made that uglier than just exposing the entry point.
+- **Headless mode is essential.** PortAudio init can fail in CI containers, sandboxed shells, or systems without ALSA. The engine falls back automatically on init/open failure with a log line; tests use `force_headless()` so they never need a sound card. Same code path for both modes — render_into doesn't know which thread is calling it.
+- **cpp-httplib has no `Post(..., ContentReceiver)` overload.** Mid-response cancellation isn't available for POST. Mitigation: drop chunk-level cancellation — Piper synthesis is sub-second per sentence, and the playback queue's turn-id filtering in `dequeue_active` drops stale audio anyway. Pre-request cancellation still works via the token check.
+- **`-Werror=missing-field-initializers` requires every member explicitly** in designated initializers. Fixed PiperClient's `ProbeResult` constructions in tests by spelling out all four fields.
+- **`PiperClient` stores `cfg_(cfg)` by reference** (matching project convention) — passing a temporary directly into `PiperClient(make_tts_cfg({...}))` from tests crashed with SIGBUS once `submit()` ran. Bind to a named local. Same convention as `LlmClient`.
+- **Splitter has one-sentence lookahead.** It only emits "X." after seeing the capital starting "Y" — so test data with one-sentence-per-SSE-chunk only emits 2 sentences mid-stream regardless of how many arrive. Cap-test data needs to pack multiple boundaries per chunk to exercise mid-stream cancellation.
+- **`std::condition_variable::wait_for` is required for the headless ticker.** A naked `sleep_for(60s)` can't be interrupted, so `stop()` would block for the full tick interval. The cv lets `stop()` notify and return promptly.
+- **Mutex on the audio thread is acceptable for M3.** `PlaybackQueue::dequeue_active` takes the queue's mutex briefly. Linux pthreads uncontended cmpxchg + tens of ns producer hold = under-the-realtime-budget. The "lock-free against the audio thread" target from §4.10 is achieved at the higher level by M4's SPSC ring; the playback queue itself stays mutex-based and is fine in practice.

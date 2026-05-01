@@ -422,6 +422,63 @@ TEST_CASE("manager: gate flip from closed to open lets the next turn through") {
     bus.shutdown();
 }
 
+TEST_CASE("manager: max_assistant_sentences caps emission and cancels the LLM") {
+    FakeLlmServer srv;
+    // Pack four sentence boundaries into the first delta so the
+    // splitter actually emits ≥ cap sentences mid-stream (it has
+    // one-sentence lookahead — `One.` only emits when it sees the
+    // capital `T` of the next sentence). The trailing `Six.` gives
+    // the cap-cancel path a clear signal to abort instead of running
+    // to completion.
+    srv.set_chunks({
+        {sse_token("One. Two. Three. Four. "), {}},
+        {sse_token("Five. "),                   {}},
+        {sse_token("Six."),                     {}},
+        {sse_done(),                             {}},
+    });
+
+    ev::EventBus bus;
+    auto cfg = make_config(srv.base_url());
+    cfg.dialogue.max_assistant_sentences = 3;
+    auto mt  = open_mt();
+    llm::PromptBuilder pb(cfg, *mt);
+    llm::LlmClient client(cfg, bus);
+    dlg::TurnFactory turns;
+    dlg::Manager mgr(cfg, bus, pb, client, turns);
+
+    SentenceCollector sentences(bus);
+    FinishedCollector finished(bus);
+
+    mgr.start();
+    bus.publish(ev::FinalTranscript{
+        .turn = 0, .text = "list five things", .lang = "en", .confidence = 1.0F,
+        .audio_duration = {}, .processing_duration = {},
+    });
+    REQUIRE(wait_for([&]{ return !finished.snapshot().empty(); }));
+
+    auto snap = sentences.snapshot();
+    // Exactly the cap-many LlmSentence events were published — no more,
+    // even though the server kept sending and the splitter would
+    // otherwise have emitted "Six." at end-of-stream. Verifying the
+    // count is the cap-behavior contract; the per-sentence text is a
+    // SentenceSplitter property and lives in test_sentence_splitter.
+    REQUIRE(snap.size() == 3);
+
+    // The LLM stream was cancelled to stop further generation;
+    // LlmClient reports cancelled=true (libcurl's write callback
+    // returned 0 once the token flipped).
+    auto fin = finished.snapshot();
+    REQUIRE(fin.size() == 1);
+    CHECK(fin[0].cancelled);
+    // Fewer than the full set of deltas should have been processed —
+    // we cancelled mid-stream, so tokens_generated < 3 (the number of
+    // SSE chunks the server sent).
+    CHECK(fin[0].tokens_generated < 3);
+
+    mgr.stop();
+    bus.shutdown();
+}
+
 TEST_CASE("manager: throwing gate predicate is treated as open") {
     FakeLlmServer srv;
     srv.set_chunks({

@@ -103,6 +103,45 @@ Registry::Registry() : registry_(std::make_shared<prometheus::Registry>()) {
     llm_tokens_per_sec_metric_ = &llm_tokens_per_sec_->Add({},
         prometheus::Histogram::BucketBoundaries{
             5, 10, 20, 40, 80, 120, 200, 400});
+
+    // M3 — TTS / playback families.
+    tts_first_audio_ms_ = &prometheus::BuildHistogram()
+        .Name("voice_tts_first_audio_ms")
+        .Help("Time from TtsStarted to first TtsAudioChunk per (turn, seq), ms")
+        .Register(*registry_);
+    tts_first_audio_ms_metric_ = &tts_first_audio_ms_->Add({},
+        prometheus::Histogram::BucketBoundaries{
+            25, 50, 100, 200, 350, 500, 750, 1000, 1500, 3000});
+
+    tts_audio_bytes_ = &prometheus::BuildCounter()
+        .Name("voice_tts_audio_bytes_total")
+        .Help("Cumulative bytes of TTS audio enqueued for playback")
+        .Register(*registry_);
+    tts_audio_bytes_metric_ = &tts_audio_bytes_->Add({});
+
+    playback_queue_depth_ = &prometheus::BuildGauge()
+        .Name("voice_playback_queue_depth")
+        .Help("Current number of audio chunks queued for the playback callback")
+        .Register(*registry_);
+    playback_queue_depth_metric_ = &playback_queue_depth_->Add({});
+
+    playback_underruns_ = &prometheus::BuildGauge()
+        .Name("voice_playback_underruns_total")
+        .Help("Cumulative playback underruns (audio cb fell back to silence)")
+        .Register(*registry_);
+    playback_underruns_metric_ = &playback_underruns_->Add({});
+
+    playback_chunks_played_ = &prometheus::BuildGauge()
+        .Name("voice_playback_chunks_played_total")
+        .Help("Cumulative playback chunks fully consumed by the audio cb")
+        .Register(*registry_);
+    playback_chunks_played_metric_ = &playback_chunks_played_->Add({});
+
+    playback_drops_ = &prometheus::BuildGauge()
+        .Name("voice_playback_drops_total")
+        .Help("Cumulative chunks dropped by the queue (capacity / stale-turn / clear)")
+        .Register(*registry_);
+    playback_drops_metric_ = &playback_drops_->Add({});
 }
 
 void Registry::on_event_published(const char* event_name) {
@@ -168,6 +207,31 @@ void Registry::set_pipeline_state(const char* state_name) {
     }
 }
 
+void Registry::on_tts_first_audio(double ms) {
+    if (tts_first_audio_ms_metric_ != nullptr && ms >= 0.0) {
+        tts_first_audio_ms_metric_->Observe(ms);
+    }
+}
+
+void Registry::on_tts_audio_bytes(std::uint64_t delta_bytes) {
+    if (tts_audio_bytes_metric_ != nullptr && delta_bytes > 0) {
+        tts_audio_bytes_metric_->Increment(static_cast<double>(delta_bytes));
+    }
+}
+
+void Registry::set_playback_queue_depth(double depth) {
+    if (playback_queue_depth_metric_) playback_queue_depth_metric_->Set(depth);
+}
+void Registry::set_playback_underruns_total(double total) {
+    if (playback_underruns_metric_) playback_underruns_metric_->Set(total);
+}
+void Registry::set_playback_chunks_played_total(double total) {
+    if (playback_chunks_played_metric_) playback_chunks_played_metric_->Set(total);
+}
+void Registry::set_playback_drops_total(double total) {
+    if (playback_drops_metric_) playback_drops_metric_->Set(total);
+}
+
 std::vector<event::SubscriptionHandle> Registry::subscribe(event::EventBus& bus) {
     std::vector<event::SubscriptionHandle> handles;
 
@@ -231,6 +295,51 @@ std::vector<event::SubscriptionHandle> Registry::subscribe(event::EventBus& bus)
                     if (tps > 0.0 && llm_tokens_per_sec_metric_) {
                         llm_tokens_per_sec_metric_->Observe(tps);
                     }
+                }
+            }, e);
+        }));
+    }
+
+    // M3 — TTS first-audio latency + audio bytes. Mirrors the LLM
+    // timer pattern but keyed by (turn, seq) since multiple sentences
+    // overlap in flight.
+    {
+        event::SubscribeOptions opts;
+        opts.name = "metrics.tts";
+        opts.queue_capacity = 1024;
+        opts.policy = event::OverflowPolicy::DropOldest;
+        handles.push_back(bus.subscribe_all(opts, [this](const event::Event& e) {
+            std::visit([this]<class T>(const T& evt) {
+                using namespace std::chrono;
+                if constexpr (std::is_same_v<T, event::TtsStarted>) {
+                    const auto key = (static_cast<std::uint64_t>(evt.turn) << 32)
+                                       | static_cast<std::uint64_t>(evt.seq);
+                    std::lock_guard lk(tts_timers_mu_);
+                    tts_timers_[key] = TtsTimer{
+                        .started_at = steady_clock::now(),
+                        .first_audio_seen = false,
+                    };
+                } else if constexpr (std::is_same_v<T, event::TtsAudioChunk>) {
+                    const auto key = (static_cast<std::uint64_t>(evt.turn) << 32)
+                                       | static_cast<std::uint64_t>(evt.seq);
+                    auto now = steady_clock::now();
+                    double ms = -1.0;
+                    {
+                        std::lock_guard lk(tts_timers_mu_);
+                        auto it = tts_timers_.find(key);
+                        if (it != tts_timers_.end() && !it->second.first_audio_seen) {
+                            it->second.first_audio_seen = true;
+                            ms = duration<double, std::milli>(
+                                     now - it->second.started_at).count();
+                        }
+                    }
+                    on_tts_first_audio(ms);
+                    on_tts_audio_bytes(evt.bytes);
+                } else if constexpr (std::is_same_v<T, event::TtsFinished>) {
+                    const auto key = (static_cast<std::uint64_t>(evt.turn) << 32)
+                                       | static_cast<std::uint64_t>(evt.seq);
+                    std::lock_guard lk(tts_timers_mu_);
+                    tts_timers_.erase(key);
                 }
             }, e);
         }));

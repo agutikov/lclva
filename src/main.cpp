@@ -2,6 +2,7 @@
 #include "config/paths.hpp"
 #include "dialogue/fsm.hpp"
 #include "dialogue/manager.hpp"
+#include "dialogue/tts_bridge.hpp"
 #include "dialogue/turn.hpp"
 #include "dialogue/turn_writer.hpp"
 #include "event/bus.hpp"
@@ -16,10 +17,13 @@
 #include "memory/summarizer.hpp"
 #include "metrics/registry.hpp"
 #include "pipeline/fake_driver.hpp"
+#include "playback/engine.hpp"
+#include "playback/queue.hpp"
 #include "supervisor/keep_alive.hpp"
 #include "supervisor/probe.hpp"
 #include "supervisor/service.hpp"
 #include "supervisor/supervisor.hpp"
+#include "tts/piper_client.hpp"
 
 #include <fmt/format.h>
 #include <unistd.h>
@@ -259,6 +263,62 @@ int main(int argc, char** argv) {
 
     supervisor.start();
 
+    // ----- M3: TTS + playback stack -----
+    //
+    // Constructed conditionally on cfg.tts.voices being non-empty —
+    // when no voices are configured, the M3 path stays disabled and
+    // LlmSentence events flow with no audio side-effect, identical to
+    // M2 behaviour. The stack lives at function scope so its lifetime
+    // brackets the FSM/Manager (started after, stopped before).
+    std::unique_ptr<acva::playback::PlaybackQueue> playback_queue;
+    std::unique_ptr<acva::tts::PiperClient>        piper_client;
+    std::unique_ptr<acva::playback::PlaybackEngine> playback_engine;
+    std::unique_ptr<acva::dialogue::TtsBridge>     tts_bridge;
+    std::thread                                     playback_metrics_thread;
+    std::atomic<bool>                               playback_metrics_stop{false};
+
+    const bool tts_enabled = !cfg.tts.voices.empty();
+    if (tts_enabled) {
+        playback_queue = std::make_unique<acva::playback::PlaybackQueue>(
+            cfg.playback.max_queue_chunks);
+        piper_client = std::make_unique<acva::tts::PiperClient>(cfg.tts);
+        playback_engine = std::make_unique<acva::playback::PlaybackEngine>(
+            cfg.audio, *playback_queue, bus,
+            [&fsm]{ return fsm.snapshot().active_turn; });
+        tts_bridge = std::make_unique<acva::dialogue::TtsBridge>(
+            cfg, bus, *piper_client, *playback_queue);
+
+        playback_engine->start();
+        tts_bridge->start();
+
+        // Tiny poller thread: every 500 ms, push the engine + queue
+        // counters into the metrics gauges. The audio thread can't
+        // touch prometheus families directly (locks) so this side-thread
+        // owns the bridging.
+        playback_metrics_thread = std::thread([&]{
+            using namespace std::chrono_literals;
+            while (!playback_metrics_stop.load(std::memory_order_acquire)) {
+                registry->set_playback_queue_depth(
+                    static_cast<double>(playback_queue->size()));
+                registry->set_playback_underruns_total(
+                    static_cast<double>(playback_engine->underruns()));
+                registry->set_playback_chunks_played_total(
+                    static_cast<double>(playback_engine->chunks_played()));
+                registry->set_playback_drops_total(
+                    static_cast<double>(playback_queue->drops()));
+                std::this_thread::sleep_for(500ms);
+            }
+        });
+
+        acva::log::info("main", fmt::format(
+            "tts enabled — voices configured: {} (audio: {} headless={})",
+            cfg.tts.voices.size(),
+            cfg.audio.output_device,
+            playback_engine->headless()));
+    } else {
+        acva::log::info("main", "tts disabled — cfg.tts.voices is empty");
+    }
+
     // Build the /status JSON-extra closure: services array + pipeline_state.
     // Lambda captures `&supervisor` by reference; lifetime is fine because
     // the ControlServer is destroyed before the supervisor.
@@ -433,6 +493,14 @@ int main(int argc, char** argv) {
     if (manager)     manager->stop();
     if (turn_writer) turn_writer->stop();
     if (summarizer)  summarizer->stop();
+    // M3: stop tts producer first so no new chunks land in the queue,
+    // then drain the engine, then everything else.
+    if (tts_bridge)     tts_bridge->stop();
+    if (playback_engine) playback_engine->stop();
+    if (tts_enabled) {
+        playback_metrics_stop.store(true, std::memory_order_release);
+        if (playback_metrics_thread.joinable()) playback_metrics_thread.join();
+    }
     supervisor.stop();
     fsm.stop();
     control.reset();

@@ -189,11 +189,28 @@ void Manager::run_one(const event::FinalTranscript& e) {
     SentenceSplitter splitter(cfg_.dialogue.sentence_splitter);
     std::vector<std::string> emitted;
     event::SequenceNo seq = 0;
+    const auto cap = cfg_.dialogue.max_assistant_sentences;
+    bool cap_reached = false;
+
+    auto enforce_cap = [&] {
+        // Once the cap is hit, cancel the LLM stream so libcurl's
+        // write callback aborts on the next chunk. Already-emitted
+        // sentences keep flowing through the TTS bridge unchanged.
+        if (!cap_reached && cap > 0 && seq >= cap) {
+            cap_reached = true;
+            if (ctx.token) ctx.token->cancel();
+            log::info("dialogue", fmt::format(
+                "sentence cap hit: turn={} cap={} — cancelling LLM stream",
+                ctx.id, cap));
+        }
+    };
 
     auto on_token = [&](std::string_view delta) {
+        if (cap_reached) return;
         emitted.clear();
         splitter.push(delta, emitted);
         for (auto& s : emitted) {
+            if (cap > 0 && seq >= cap) break;
             bus_.publish(event::LlmSentence{
                 .turn = ctx.id,
                 .seq  = seq++,
@@ -201,13 +218,17 @@ void Manager::run_one(const event::FinalTranscript& e) {
                 .lang = lang,
             });
         }
-        bus_.publish(event::LlmToken{ .turn = ctx.id, .token = std::string{delta} });
+        enforce_cap();
+        if (!cap_reached) {
+            bus_.publish(event::LlmToken{ .turn = ctx.id, .token = std::string{delta} });
+        }
     };
 
     auto on_finished = [&](llm::LlmFinish f) {
         emitted.clear();
         splitter.flush(emitted);
         for (auto& s : emitted) {
+            if (cap > 0 && seq >= cap) break;
             bus_.publish(event::LlmSentence{
                 .turn = ctx.id,
                 .seq  = seq++,

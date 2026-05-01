@@ -24,6 +24,7 @@ add_executable(acva_tests
     test_repository.cpp
     test_resampler.cpp
     test_sentence_splitter.cpp
+    test_tts_bridge.cpp
     test_turn_writer.cpp
 )
 

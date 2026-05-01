@@ -68,6 +68,24 @@ public:
     // no_configured_critical_services).
     void set_pipeline_state(const char* state);
 
+    // M3 — TTS / playback metrics. -------------------------------------
+
+    // Observed latency from TtsStarted to the first TtsAudioChunk for
+    // a (turn, seq) pair, in milliseconds. Subscribed automatically via
+    // subscribe(bus); main.cpp doesn't need to call this directly.
+    void on_tts_first_audio(double ms);
+
+    // Cumulative byte count of TTS audio that reached the playback
+    // queue. Driven from TtsAudioChunk events.
+    void on_tts_audio_bytes(std::uint64_t delta_bytes);
+
+    // Polled gauges populated by a poller thread in main.cpp from the
+    // PlaybackEngine + PlaybackQueue counters. Set absolute values.
+    void set_playback_queue_depth(double depth);
+    void set_playback_underruns_total(double total);
+    void set_playback_chunks_played_total(double total);
+    void set_playback_drops_total(double total);
+
     // Subscribe metrics-collection handlers to the bus. Call after
     // construction. Returns subscriptions which the caller must keep alive.
     [[nodiscard]] std::vector<event::SubscriptionHandle> subscribe(event::EventBus& bus);
@@ -87,6 +105,29 @@ private:
     prometheus::Family<prometheus::Histogram>* llm_tokens_per_sec_;
     prometheus::Histogram* llm_first_token_ms_metric_ = nullptr;
     prometheus::Histogram* llm_tokens_per_sec_metric_ = nullptr;
+
+    prometheus::Family<prometheus::Histogram>* tts_first_audio_ms_   = nullptr;
+    prometheus::Histogram*                     tts_first_audio_ms_metric_ = nullptr;
+    prometheus::Family<prometheus::Counter>*   tts_audio_bytes_      = nullptr;
+    prometheus::Counter*                       tts_audio_bytes_metric_ = nullptr;
+    prometheus::Family<prometheus::Gauge>*     playback_queue_depth_ = nullptr;
+    prometheus::Gauge*                         playback_queue_depth_metric_ = nullptr;
+    prometheus::Family<prometheus::Gauge>*     playback_underruns_   = nullptr;
+    prometheus::Gauge*                         playback_underruns_metric_   = nullptr;
+    prometheus::Family<prometheus::Gauge>*     playback_chunks_played_ = nullptr;
+    prometheus::Gauge*                         playback_chunks_played_metric_ = nullptr;
+    prometheus::Family<prometheus::Gauge>*     playback_drops_       = nullptr;
+    prometheus::Gauge*                         playback_drops_metric_       = nullptr;
+
+    // Per-(turn, seq) TTS timer state, captured between TtsStarted and
+    // the first TtsAudioChunk so we can compute first-audio latency.
+    // Cleared once the chunk arrives or the turn is interrupted.
+    struct TtsTimer {
+        std::chrono::steady_clock::time_point started_at{};
+        bool first_audio_seen = false;
+    };
+    std::mutex tts_timers_mu_;
+    std::unordered_map<std::uint64_t, TtsTimer> tts_timers_;
 
     // Services registered via register_service_for_health(). Used so
     // set_health_state can clear all stale labels when a service flips.

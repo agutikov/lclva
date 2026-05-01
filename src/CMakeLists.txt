@@ -6,6 +6,7 @@ add_library(acva_core STATIC
     dialogue/fsm.cpp
     dialogue/manager.cpp
     dialogue/sentence_splitter.cpp
+    dialogue/tts_bridge.cpp
     dialogue/turn.cpp
     dialogue/turn_writer.cpp
     event/bus.cpp

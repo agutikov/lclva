@@ -33,6 +33,18 @@ else()
     message(STATUS "onnxruntime not found — Silero VAD will be a no-op stub")
 endif()
 
+# M5 — libdatachannel for WebRTC client to Speaches' /v1/realtime.
+# Optional at the project level: only the integration smoke
+# (`test_speaches_realtime_smoke.cpp`) is gated on it today; the
+# production STT client will hard-require it once M5 Step 2 lands.
+find_package(LibDataChannel CONFIG QUIET)
+if(LibDataChannel_FOUND)
+    set(ACVA_HAVE_LIBDATACHANNEL TRUE)
+else()
+    set(ACVA_HAVE_LIBDATACHANNEL FALSE)
+    message(STATUS "LibDataChannel not found — M5 realtime smoke will be skipped")
+endif()
+
 # cpp-httplib is vendored as a single header in third_party/cpp-httplib.
 # Used for the HTTP control plane — civetweb symbols inside prometheus-cpp
 # aren't exported, so we run our own HTTP server. Marked SYSTEM so the

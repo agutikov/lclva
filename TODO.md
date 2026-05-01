@@ -25,6 +25,11 @@ all-in-one C++ app ???
 ?? Interleaving with players (music, browser, etc)
 
 multi-user conversation
+    - detect users by voice
+    - remember
+
+multi-context per model
+and multi-model runtime
 
 different database, vector database, graph database
 

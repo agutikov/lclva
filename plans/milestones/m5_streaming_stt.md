@@ -15,14 +15,48 @@
 > **Streaming protocol correction (M4B Step 0 finding):** Speaches
 > exposes the streaming endpoint at `POST /v1/realtime` and the
 > implementation is **WebRTC** (`Realtime Webrtc` in the OpenAPI
-> spec), **not WebSocket** as Step 1 below speculated. M5's client
-> design therefore needs a WebRTC transport — `libdatachannel`
-> (~MIT, header-light, used by other voice projects) is the leading
-> candidate. This is a meaningful design point worth a small spike
-> at the start of M5 work. If `libdatachannel` integration looks
-> ugly, an alternative is to wrap the WebRTC negotiation in a tiny
-> in-image proxy or to depend on Speaches eventually shipping a
-> WebSocket fallback (none today, no announced plan).
+> spec), **not WebSocket** as Step 1 below speculated.
+>
+> **Spike resolved 2026-05-02 — `libdatachannel` is the M5 transport.**
+> A live SDP offer/answer round-trip against Speaches' aiortc with
+> `libdatachannel 0.24.1` (Manjaro `extra` repo, MPL-2.0, CMake target
+> `LibDataChannel::LibDataChannel`) negotiates cleanly: ICE+DTLS reaches
+> Connected, the `oai-events` data channel opens, and Speaches
+> proactively pushes `session.created`. Pinned by
+> `tests/test_speaches_realtime_smoke.cpp` (gated on `ACVA_HAVE_LIBDATACHANNEL`
+> and Speaches `/health`). No fallback proxy is needed.
+>
+> **Wire-level surprises pinned by the spike** (load-bearing for Step 2):
+>
+> 1. **POST `/v1/realtime?model=<id>` body is the SDP offer text**
+>    (Content-Type `application/sdp`); the response 200 body is the
+>    SDP answer. The OpenAPI schema does NOT document this — body is
+>    declared as `null` and only the `model` query param is captured.
+>    Don't trust the schema; trust the wire.
+> 2. **Speaches wraps every realtime event in its own envelope** before
+>    putting it on the data channel:
+>    ```json
+>    {"id":"event_…","type":"partial_message",
+>     "data":"<base64-of-inner-json>",
+>     "fragment_index":N,"total_fragments":M}
+>    ```
+>    The M5 STT client must reassemble fragments by `id`, base64-decode
+>    `data`, then parse the inner OpenAI Realtime event payload.
+> 3. **The query-string `model` parameter sets the session model, not
+>    the transcription model.** The default `session.created` arrives
+>    with `input_audio_transcription.model =
+>    "Systran/faster-distil-whisper-small.en"` regardless of the query
+>    string. To pin transcription to
+>    `deepdml/faster-whisper-large-v3-turbo-ct2`, the client must send
+>    a `session.update` event over the data channel after open.
+> 4. **Server-side VAD is on by default** (`turn_detection.type =
+>    "server_vad"`, threshold 0.9, silence 550 ms). M5 needs to decide
+>    whether to keep server VAD or send `session.update` with
+>    `turn_detection: null` and rely on our Silero VAD from M4. Open
+>    question — track in `open_questions.md` section L.
+> 5. **Default modalities include `audio` output and a Kokoro TTS
+>    voice.** STT-only consumers must `session.update` with
+>    `modalities: ["text"]` (and `tools: []`) to silence the TTS path.
 
 **Estimate:** 1.5–2 weeks (post-M4B). Was 1.5–3 weeks under the
 pre-M4B plan; the lower end of that range now applies because engine

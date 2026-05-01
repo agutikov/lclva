@@ -66,11 +66,17 @@ target_link_libraries(acva_unit_tests
 )
 
 # ----- integration suite -----
-add_executable(acva_integration_tests
+set(_acva_integration_sources
     ${_acva_test_main}
     test_speaches_smoke.cpp
     test_vad.cpp
 )
+
+if(ACVA_HAVE_LIBDATACHANNEL)
+    list(APPEND _acva_integration_sources test_speaches_realtime_smoke.cpp)
+endif()
+
+add_executable(acva_integration_tests ${_acva_integration_sources})
 
 target_link_libraries(acva_integration_tests
     PRIVATE
@@ -79,6 +85,11 @@ target_link_libraries(acva_integration_tests
         doctest::doctest
         acva_warnings
 )
+
+if(ACVA_HAVE_LIBDATACHANNEL)
+    target_link_libraries(acva_integration_tests
+        PRIVATE LibDataChannel::LibDataChannel)
+endif()
 
 # ----- ctest registration -----
 include(${doctest_DIR}/doctest.cmake OPTIONAL RESULT_VARIABLE _doctest_cmake_found)

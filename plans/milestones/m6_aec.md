@@ -156,6 +156,34 @@ After APM is in place, re-run the M4 false-start fixtures with the cleaned signa
 | `test_aec_validation.cpp` (gated) | real-audio ERLE measurement |
 | Manual integration | speak with assistant playing music nearby; verify VAD doesn't trigger on the music or the assistant's own voice |
 
+## Demo command (planned)
+
+### `acva demo aec` — speaker → mic loopback ERLE
+
+Plays a known stimulus (3-second 1 kHz sine, then 3-second pink noise)
+through the speakers while simultaneously capturing through the mic.
+Feeds both streams into APM and reports the convergence trajectory of
+the delay estimator and the final ERLE.
+
+Expected output:
+
+```
+demo[aec] stimulus=1khz_sine+pink_noise duration=6s
+demo[aec] playing stimulus through speakers while capturing…
+  t=0.50s  delay≈ 38ms  ERLE= 4.2 dB  (convergence)
+  t=1.00s  delay≈ 41ms  ERLE=11.8 dB
+  t=2.00s  delay≈ 42ms  ERLE=22.4 dB
+  t=4.00s  delay≈ 42ms  ERLE=27.9 dB
+demo[aec] done: final ERLE=28.1 dB delay=42ms (target ≥ 25 dB ≤ 60ms)
+```
+
+Failure modes:
+- `headless=true` (PortAudio output failed to open) → not testable without a real device.
+- `final ERLE < 10 dB` → either the loopback tap (M6.1) is wrong (reference signal is silent or out of phase) or the mic is somewhere it can't hear the speakers. Try moving them closer or use a near-field setup.
+- `delay grows over time` → playback resampler ratio is being adjusted; expected with hardware drift but should stay < 5 ms per minute.
+
+What it doesn't cover: actual user-voice preservation under cancellation. Use `acva demo capture` (M4) while music plays from another app to test that.
+
 ## Acceptance
 
 1. With speakers on (no headphones), TTS playback does not trigger VAD `SpeechStarted`. `voice_vad_false_starts_total` increases by < 1 per minute of TTS playback.

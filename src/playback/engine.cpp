@@ -89,6 +89,10 @@ void PlaybackEngine::render_into(std::int16_t* out, std::size_t frames) {
                     .seq  = impl_->current.seq,
                 });
                 chunks_played_.fetch_add(1, std::memory_order_relaxed);
+                // Mark the chunk consumed so a subsequent underrun
+                // doesn't re-publish PlaybackFinished or re-count it.
+                impl_->current = AudioChunk{};
+                impl_->pos = 0;
             }
             const auto active = active_turn_ ? active_turn_() : event::kNoTurn;
             auto next = queue_.dequeue_active(active);

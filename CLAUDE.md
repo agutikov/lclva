@@ -35,6 +35,8 @@ CMakeLists.txt, CMakePresets.json
 README.md, CLAUDE.md, LICENSE, .editorconfig, .gitignore
 compile_commands.json    — symlink to _build/dev/compile_commands.json (for clangd).
 build.sh, run_tests.sh   — `./build.sh [dev|debug|release]` and `./run_tests.sh [dev|debug]`.
+src/demos/               — `acva demo <name>` smoke checks per milestone (tone/tts/llm/health/fsm/chat).
+docs/troubleshooting.md  — symptom-first guide; routes failures to the right `acva demo` and reads its output.
 ```
 
 ## Authoritative Documents

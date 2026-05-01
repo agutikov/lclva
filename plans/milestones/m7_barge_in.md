@@ -123,6 +123,37 @@ barge_in:
 | `test_barge_in_validation.cpp` (gated) | the WAV-replay validation suite |
 | Manual: 50-trial barge-in stress | speak interrupting prompts, log per-trial outcome and latency |
 
+## Demo command (planned)
+
+### `acva demo bargein` — auto-injected interrupt during a chat turn
+
+Same setup as `acva demo chat` (M1+M3), but extended: submits a prompt
+known to produce ≥ 3 sentences ("Tell me a four-sentence story about
+the moon"), waits for the first sentence to start playing, then
+publishes `UserInterrupted` programmatically. Verifies the full
+cancellation cascade fires.
+
+Expected output:
+
+```
+demo[bargein] submitting long prompt; will inject interrupt after first sentence plays
+  Once upon a time on the moon, a quiet astronaut waited.
+demo[bargein] injecting UserInterrupted (turn=N, played=1 sentence)
+demo[bargein] done: time_to_cancel_ms=87 sentences_played=1 sentences_dropped=2
+              outcome=interrupted (M7 §6 persistence policy)
+```
+
+Failure modes:
+- `time_to_cancel_ms > 400` → cancellation cascade is slow; check for blocking I/O on the dialogue subscriber thread.
+- `outcome=completed` despite the interrupt → FSM didn't reach Speaking before we injected; increase the pre-inject delay or look for a stuck state machine.
+- `sentences_played=0 + outcome=discarded` → cap-or-cancel race; nothing to play yet. Try a longer prompt.
+
+What it doesn't cover: real-mic-driven barge-in (that's the manual
+50-trial test below). It's purely the cancellation-cascade smoke —
+proves the bus + Manager + TtsBridge + queue all drop in time and the
+TurnWriter persists the right outcome. The mic + AEC + VAD path is
+exercised by `acva demo capture` and `acva demo aec` separately.
+
 ## Acceptance
 
 1. Speaker mode (no headphones, AEC converged): 50-trial manual test, ≥ 90% correct cancellation within 400 ms; ≤ 1 false fire from the assistant's own voice.

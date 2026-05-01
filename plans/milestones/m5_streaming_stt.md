@@ -216,6 +216,44 @@ Touch points:
 | Multilingual smoke (gated) | `ACVA_REAL_WHISPER=1` against Common Voice clips in en/ru/de/es/fr |
 | End-to-end | speak in English; observe partials → final → speculation kept; speak with mid-sentence revision; observe restart |
 
+## Demo commands (planned)
+
+Two `acva demo <name>` subcommands cover M5 — one mic-driven, one fixture-driven.
+
+### `acva demo stt` — mic → transcript
+
+Records 5 seconds of mic input, pipes it through the chosen Whisper
+backend (Option A/B from §1), and prints partials + final transcript.
+
+Expected output (Option A or B):
+
+```
+demo[stt] backend='speaches' lang=auto duration=5s
+demo[stt] speak now…
+  partial  (seq=0, p=0.42, stable=12)  the q
+  partial  (seq=1, p=0.61, stable=18)  the quick brown
+  partial  (seq=2, p=0.79, stable=24)  the quick brown fox
+  final    (lang=en, conf=0.91)        The quick brown fox jumps.
+demo[stt] done: partials=4 final_chars=27 detected_lang=en
+```
+
+Under Option C (deferred): no partials line, only the final transcript.
+
+### `acva demo stt --fixture FILE.wav` — offline transcription
+
+Pipes a 16 kHz mono WAV through the same Whisper client without
+involving the mic. Useful in CI / soak runs where speaking isn't an
+option, and for regression-checking accuracy on a known clip.
+
+Failure modes (both):
+- `whisper /health probe failed` → the Whisper container isn't up; `acva demo health` to confirm.
+- `final_chars=0` → no speech detected; check VAD threshold (`acva demo capture` is the right tool to debug that).
+- `detected_lang=` mismatch — the model's language detector got confused; pin it via `cfg.stt.language` if needed.
+
+What neither covers: the speculation-reconcile logic in the dialogue
+manager — that's exercised end-to-end by `acva demo chat` once M5 is
+landed and the chat demo is updated to publish via the real STT path.
+
 ## Acceptance
 
 1. With the chosen STT backend running in Compose, speaking a sentence emits 3+ `PartialTranscript` events and one `FinalTranscript`. (Skip if Option C: only `FinalTranscript`.)

@@ -67,12 +67,13 @@ tts:
     degraded_max_failures: 3
   # Per-language voice routing. Upstream piper.http_server only loads
   # one voice per process, so each language gets its own Compose
-  # service on its own port. Drop a row here when you add a voice
-  # container; if voices is empty, the M3 TTS path stays disabled.
-  voices: {}
-  # voices:
-  #   en: { url: "http://127.0.0.1:8083" }
-  #   ru: { url: "http://127.0.0.1:8084" }
+  # service on its own port. The default below matches what
+  # `packaging/compose/fetch-assets.sh` downloads — the
+  # en_US-amy-medium voice running inside the `piper` Compose
+  # service (single service today; per-language sprawl arrives only
+  # if you add e.g. a `piper-ru` service in compose).
+  voices:
+    en: { url: "http://127.0.0.1:8083" }
   fallback_lang: en
   request_timeout_seconds: 10
 

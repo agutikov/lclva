@@ -1,5 +1,6 @@
 #include "config/config.hpp"
 #include "config/paths.hpp"
+#include "demos/demo.hpp"
 #include "dialogue/fsm.hpp"
 #include "dialogue/manager.hpp"
 #include "dialogue/tts_bridge.hpp"
@@ -59,12 +60,18 @@ struct CliArgs {
     std::filesystem::path config_path;
     bool show_help = false;
     bool stdin_mode = false;     // M1: read FinalTranscript lines from stdin
+
+    // Per-milestone smoke-check subcommand. Empty → run normally.
+    // "list" → print the catalog and exit. Otherwise, look up by name
+    // in acva::demos::find().
+    std::string demo;
 };
 
 void print_help() {
     std::cout << "acva — Autonomous Conversational Voice Agent\n"
                  "\n"
                  "Usage: acva [--config PATH] [--stdin]\n"
+                 "       acva [--config PATH] demo [<name>]\n"
                  "\n"
                  "Options:\n"
                  "  --config PATH        YAML config file. If omitted, search:\n"
@@ -75,6 +82,13 @@ void print_help() {
                  "  --stdin              Read FinalTranscript lines from stdin and drive\n"
                  "                       the real LLM. M1 mode.\n"
                  "  -h, --help           Show this help and exit\n"
+                 "\n"
+                 "Subcommands:\n"
+                 "  demo                 List per-milestone demo commands.\n"
+                 "  demo <name>          Run a demo end-to-end (no user input). E.g.\n"
+                 "                       `acva demo tone` plays a 1.5 s sine wave to\n"
+                 "                       verify the audio device. See `acva demo` for\n"
+                 "                       the catalog.\n"
                  "\n"
                  "To exercise the FSM without backends, set\n"
                  "`pipeline.fake_driver_enabled: true` in the YAML.\n";
@@ -92,6 +106,14 @@ CliArgs parse_args(int argc, char** argv) {
             args.config_path = argv[++i];
         } else if (a.starts_with("--config=")) {
             args.config_path = a.substr(std::string_view{"--config="}.size());
+        } else if (a == "demo") {
+            // `demo` subcommand: optional positional <name>. No name →
+            // print the catalog.
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                args.demo = argv[++i];
+            } else {
+                args.demo = "list";
+            }
         } else {
             std::cerr << "acva: unknown argument: " << a << "\n";
             std::exit(EXIT_FAILURE);
@@ -145,6 +167,25 @@ int main(int argc, char** argv) {
     acva::log::info("main", "acva starting");
     acva::log::info("main", fmt::format("config loaded: {}", config_path.string()));
     acva::log::info("main", fmt::format("memory db: {}", cfg.memory.db_path));
+
+    // ----- 2.5. Demo subcommand short-circuit -----
+    // Demos build only the subsystems they need from `cfg` and exit
+    // when done. They MUST run before the full runtime (memory thread,
+    // fsm, supervisor, ...) is constructed — otherwise we'd be paying
+    // SQLite + bus + threads for a fast smoke check.
+    if (!args.demo.empty()) {
+        if (args.demo == "list") {
+            acva::demos::print_list();
+            return EXIT_SUCCESS;
+        }
+        const auto* d = acva::demos::find(args.demo);
+        if (!d) {
+            std::cerr << "acva: unknown demo '" << args.demo
+                       << "' — try `acva demo` for the list.\n";
+            return EXIT_FAILURE;
+        }
+        return d->run(cfg);
+    }
 
     install_signal_handlers();
 
@@ -278,6 +319,21 @@ int main(int argc, char** argv) {
     std::thread                                     playback_metrics_thread;
     std::atomic<bool>                               playback_metrics_stop{false};
 
+    // Track the turn id the Manager mints for each LLM run. The
+    // PlaybackEngine reads this to filter "live" chunks. Using
+    // FSM.active_turn would be wrong for stdin mode: typed input
+    // never fires SpeechStarted, so FSM stays in Listening with
+    // active_turn=kNoTurn while Manager mints a fresh turn for the
+    // LLM stream — chunks would be dropped as stale. M5+ will unify
+    // turn minting between FSM and Manager (see manager.hpp).
+    auto playback_active_turn =
+        std::make_shared<std::atomic<acva::event::TurnId>>(acva::event::kNoTurn);
+    auto llm_started_sub = bus.subscribe<acva::event::LlmStarted>({},
+        [playback_active_turn](const acva::event::LlmStarted& e) {
+            playback_active_turn->store(e.turn, std::memory_order_release);
+        });
+    metric_subs.push_back(llm_started_sub);
+
     const bool tts_enabled = !cfg.tts.voices.empty();
     if (tts_enabled) {
         playback_queue = std::make_unique<acva::playback::PlaybackQueue>(
@@ -285,7 +341,9 @@ int main(int argc, char** argv) {
         piper_client = std::make_unique<acva::tts::PiperClient>(cfg.tts);
         playback_engine = std::make_unique<acva::playback::PlaybackEngine>(
             cfg.audio, *playback_queue, bus,
-            [&fsm]{ return fsm.snapshot().active_turn; });
+            [playback_active_turn]{
+                return playback_active_turn->load(std::memory_order_acquire);
+            });
         tts_bridge = std::make_unique<acva::dialogue::TtsBridge>(
             cfg, bus, *piper_client, *playback_queue);
 

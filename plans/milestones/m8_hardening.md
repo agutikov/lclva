@@ -159,6 +159,74 @@ The big one is the soak test (Step 1). On top of that:
 - Wipe tests: data gone; new turns work after.
 - OTLP smoke (gated): with otelcol-contrib running, one full turn, one root span with the expected children.
 
+## Demo commands (planned)
+
+Three short `acva demo <name>` subcommands, complementing the multi-hour
+soak harness in Step 1.
+
+### `acva demo soak` — 60-second mini-soak
+
+Runs the FakeDriver + (optional) real LLM/TTS for 60 seconds and
+reports the same metrics the 4-hour harness does, but at a tractable
+size. Useful as a pre-flight before kicking off the real soak.
+
+Expected output:
+
+```
+demo[soak] duration=60s driver=fake llm=on tts=on
+  t=10s  rss=215MiB  turns=4  underruns=0  queue_max=3   p95_first_audio=412ms
+  t=30s  rss=218MiB  turns=12 underruns=0  queue_max=3   p95_first_audio=438ms
+  t=60s  rss=220MiB  turns=24 underruns=1  queue_max=4   p95_first_audio=441ms
+demo[soak] done: rss_growth=5MiB latency_p95_drift=+29ms supervisor_restarts=0
+demo[soak] PASS (acceptance: rss_growth<50MiB, p95_drift<+20%, no supervisor restarts)
+```
+
+Failure modes:
+- `rss_growth > 50 MiB / minute` → leak. The full 4-hour harness will catch it; this is a quick screen.
+- `latency_p95_drift > 20%` → backpressure or thermal throttling.
+- `underruns > 5 / minute` → playback queue starving; producer (LLM or Piper) is slow.
+
+### `acva demo wipe` — privacy-command roundtrip
+
+Opens a tmp DB, writes a session with a few turns, calls `POST
+/wipe?session=<id>` then `POST /wipe?all=true`, and verifies row
+counts went to zero on each step.
+
+Expected output:
+
+```
+demo[wipe] tmp db=/tmp/acva-demo-wipe-NNN.db
+  step 1: insert 1 session + 3 turns → rows=4
+  step 2: POST /wipe?session=N → rows=1 (just the wiped session marker)
+  step 3: POST /wipe?all=true → rows=0
+demo[wipe] PASS
+```
+
+Failure modes:
+- `step 2 rows != 1` → cascade delete misconfigured (foreign-key not on or wrong column).
+- `step 3 rows != 0` → schema-drop-and-recreate path missing tables.
+
+### `acva demo reload` — hot-reload smoke
+
+Boots minimally, mutates a hot-reloadable field on disk
+(`logging.level: info` → `debug`), calls `POST /reload`, then logs at
+debug level to confirm it took effect. Also tries a restart-required
+field (`memory.db_path`) and asserts a 4xx with a clear message.
+
+Expected output:
+
+```
+demo[reload] hot-reload field 'logging.level': info → debug
+  POST /reload → 200 (took 12ms)
+  test log line at debug level: visible ✓
+demo[reload] restart-required field 'memory.db_path' rejected with 400 — message clear ✓
+demo[reload] PASS
+```
+
+Failure modes:
+- `200 but log line invisible` → the level change didn't propagate to the spdlog default sink.
+- `restart-required field accepted` → `cfg.dialogue.hot_reloadable_fields` validation gap.
+
 ## Acceptance
 
 1. **4-hour soak passes.** All criteria met. Report committed to `tests/soak/reports/` with date and git revision.

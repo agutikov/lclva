@@ -7,12 +7,39 @@ Detailed per-milestone plans. The high-level table lives in `../project_design.m
 | M0 | `m0_skeleton.md` | ✅ landed   |
 | M1 | `m1_llm_memory.md` | ✅ landed   |
 | M2 | `m2_supervision.md` | ✅ landed   |
-| M3 | `m3_tts_playback.md` | next      |
-| M4 | `m4_audio_vad.md` | planned    |
+| M3 | `m3_tts_playback.md` | ✅ landed   |
+| M4 | `m4_audio_vad.md` | next      |
 | M5 | `m5_streaming_stt.md` | planned  |
 | M6 | `m6_aec.md` | planned     |
 | M7 | `m7_barge_in.md` | planned     |
 | M8 | `m8_hardening.md` | planned    |
+
+## Demos — one-shot smoke checks built into the binary
+
+Every landed milestone exposes a `acva demo <name>` subcommand that
+exercises its headline deliverable end-to-end with no user input. Run
+`acva demo` (no name) for the catalog:
+
+| Demo     | Milestone | What it verifies |
+|----------|-----------|------------------|
+| `fsm`    | M0        | synthetic FSM driver runs through 3 turns, outcome counters increment |
+| `llm`    | M1        | `LlmClient` reaches llama-server, streams a fixed prompt's reply to stdout |
+| `health` | M2        | `HttpProbe` hits each configured backend's `/health`, prints `ok / status / latency` |
+| `tone`   | M3        | playback engine renders a 1.5 s 440 Hz sine through `cfg.audio.output_device` (no Piper) |
+| `tts`    | M3        | a fixed `LlmSentence` flows through `TtsBridge` → `PiperClient` → `PlaybackEngine` |
+| `chat`   | M1+M3     | full text-in → speech-out loop: fixed prompt → LLM → SentenceSplitter → TTS → speakers |
+
+Each demo exits with `0` on success and non-zero with a clear failure
+line on stderr. They use the same config-resolution path as `acva`
+itself — pass `--config PATH` to override.
+
+When something doesn't work, [`docs/troubleshooting.md`](../../docs/troubleshooting.md)
+is the symptom-first guide: it routes "I hear nothing" / "no LLM
+reply" / "backend down" / "audio choppy" to the right demo command
+and explains how to read the output. Future milestones (M4–M8) plan
+their own demo commands in their respective milestone files; once
+they land, the troubleshooting guide picks them up via the
+component-cross-reference table at the bottom.
 
 ## What you can try after each milestone
 
@@ -41,6 +68,9 @@ Watch the JSON-per-line log on stderr stream `fsm <prev> -> <next>`
 transitions; `voice_turns_total{outcome="completed"}` increments roughly
 once per `fake_idle_between_turns_ms`.
 
+One-shot version: `./_build/dev/acva demo fsm` runs the synthetic
+driver and exits.
+
 ### M1 ✅ — talk to a real LLM, memory persists across restarts
 
 Bring up the compose stack (llama+whisper+piper containers), then drive
@@ -59,6 +89,9 @@ sqlite3 acva.db "select id, role, lang, status, substr(text,1,40) from turns;"
 Kill the binary mid-turn (`kill -9`) and restart: the startup recovery
 sweep flips the dangling `in_progress` turn to `interrupted`. The
 `voice_llm_first_token_ms` histogram populates on the first reply.
+
+Want a no-input smoke check? `./_build/dev/acva demo llm` sends a
+fixed prompt straight to `LlmClient` and prints the streamed reply.
 
 ### M2 ✅ — supervision + dialogue gating + keep-alive
 
@@ -84,11 +117,15 @@ docker compose -f packaging/compose/docker-compose.yml start llama
 Idle the dialogue and watch `voice_llm_keepalive_total{outcome="fired"}`
 tick once every `cfg.llm.keep_alive_interval_seconds`.
 
-### M3 (next) — Piper TTS + playback queue
+`./_build/dev/acva demo health` is the one-shot equivalent: probes
+every configured backend once and prints `ok / http / latency` per
+service.
 
-Typed-in or LLM-generated sentences will be spoken through the speakers
-via Piper, with per-language voice routing and a sequence-tagged
-playback queue.
+### M3 ✅ — Piper TTS + playback queue
+
+Typed-in or LLM-generated sentences are spoken through the speakers via
+Piper, with per-language voice routing and a sequence-tagged playback
+queue.
 
 ```sh
 ./_build/dev/acva --stdin --config config/default.yaml
@@ -96,6 +133,16 @@ playback queue.
 > ¿qué tal?                     # routes to es voice if cfg.tts.voices[es] is set
 curl -s http://127.0.0.1:9876/metrics | grep voice_tts_first_audio_ms
 ```
+
+Two no-input demos cover the M3 surface:
+
+```sh
+./_build/dev/acva demo tone     # 1.5 s 440 Hz sine — verifies sound output, no Piper
+./_build/dev/acva demo tts      # synthesizes "Hello from acva." through Piper
+```
+
+`tone` is the one to run first when troubleshooting "I hear nothing":
+it isolates the audio device + PortAudio path from the Piper config.
 
 ### M4 (planned) — mic capture + VAD endpointing
 

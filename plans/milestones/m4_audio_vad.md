@@ -245,6 +245,54 @@ utterance:
 | `test_vad.cpp` (gated) | run silero against fixed clip, assert probability >0.9 on speech, <0.1 on silence |
 | Manual integration | speak into mic, observe `SpeechStarted` and `SpeechEnded` log lines with realistic timing |
 
+## Demo commands (planned)
+
+Two new `acva demo <name>` subcommands ship with M4. Both build only the M4
+input path; they exit cleanly without user input beyond "speak when prompted".
+
+### `acva demo loopback` — mic → speakers passthrough
+
+Smallest possible smoke for the new capture path. Resamples mic input
+48 → 16 kHz then back 16 → 48 kHz and pushes it straight through the
+M3 playback queue. No VAD, no STT — just verifies the input device,
+SPSC ring, and resampler chain.
+
+Expected output:
+
+```
+demo[loopback] capture device='default' input rate=48000Hz duration=5s
+demo[loopback] speak now…
+demo[loopback] done: frames_captured=240000 underruns=0 overruns=0
+```
+
+Failure modes:
+- `input device not found` → set `cfg.audio.input_device` to a substring of an `arecord -L` entry.
+- `frames_captured << expected` + `overruns > 0` → SPSC ring overflowing because the audio thread is starved; check CPU / nice level.
+
+### `acva demo capture` — mic + VAD endpointing report
+
+Captures for 5 seconds, runs Silero VAD on the cleaned (post-resample,
+no AEC yet) audio, and reports each utterance's start/end timestamps
+plus VAD probability summaries. Useful for tuning thresholds without
+spinning up the LLM.
+
+Expected output:
+
+```
+demo[capture] device='default' duration=5s vad onset>=0.50 offset<=0.35 hangover=600ms
+demo[capture] speak when ready…
+  utterance #1: 1.243s → 2.901s (1.66s, peak p=0.97, mean p=0.71)
+  utterance #2: 3.612s → 4.420s (0.81s, peak p=0.92, mean p=0.62)
+demo[capture] done: utterances=2 false_starts=0 max_rms=0.42
+```
+
+Failure modes:
+- `utterances=0` despite obvious speech → VAD onset threshold too high; lower `cfg.vad.onset_threshold` and re-run.
+- `false_starts > utterances` → background noise above the floor; raise `cfg.vad.onset_threshold`.
+
+What neither demo covers: STT (M5), AEC (M6). `loopback` doesn't tell
+you whether VAD endpointing is sensible — that's `capture`'s job.
+
 ## Acceptance
 
 1. Speaking briefly into the mic produces exactly one `SpeechStarted` and one `SpeechEnded` event with `~300 ms` pre-padding included in the utterance.

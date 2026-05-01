@@ -3,6 +3,13 @@ add_library(acva_core STATIC
     audio/resampler.cpp
     config/config.cpp
     config/paths.cpp
+    demos/chat.cpp
+    demos/demo.cpp
+    demos/fsm.cpp
+    demos/health.cpp
+    demos/llm.cpp
+    demos/tone.cpp
+    demos/tts.cpp
     dialogue/fsm.cpp
     dialogue/manager.cpp
     dialogue/sentence_splitter.cpp

@@ -12,7 +12,7 @@ Streaming partial STT with speculative LLM start (M5 — three options on the ta
 
 ## Status
 
-**M0 + M1 + M2 + M3 + M4 complete.** 210/210 tests passing (3 model-gated VAD tests skipped without `ACVA_SILERO_MODEL`). The compose stack reaches all-three-healthy on the dev workstation; `acva --stdin` drives a real LLM end-to-end via `PromptBuilder` → `LlmClient` (libcurl SSE) → `DialogueManager` → `SentenceSplitter` → `LlmSentence` events → `TurnWriter` → SQLite, and (when `cfg.tts.voices` is non-empty) onward through `TtsBridge` → `PiperClient` → `Resampler` → `PlaybackQueue` → `PlaybackEngine`. M4 adds the capture path: when `cfg.audio.capture_enabled: true`, `CaptureEngine` (PortAudio input) → SPSC ring → `AudioPipeline` worker → `Resampler` (48 → 16 kHz) → `SileroVad` (optional, ONNX Runtime) → `Endpointer` → `UtteranceBuffer` → `SpeechStarted` / `SpeechEnded` / `UtteranceReady` events on the bus. The fake driver gains a `suppress_speech_events` flag so real VAD can own those events while synthetic FinalTranscript/LlmSentence keep flowing for end-to-end smoke tests. Two new demos ship: `acva demo loopback` (mic → speakers passthrough) and `acva demo capture` (mic + VAD endpointing report). Manager enforces `max_assistant_sentences` by cancelling the LLM stream once the cap is hit; `UserInterrupted` drains the bridge's pending queue and clears the playback queue. JSON-per-line logs on stderr; `voice_llm_*` / `voice_health_*` / `voice_pipeline_state` / `voice_llm_keepalive_total` / `voice_tts_first_audio_ms` / `voice_tts_audio_bytes_total` / `voice_playback_{queue_depth,underruns_total,chunks_played_total,drops_total}` emit on `/metrics`; `/status` includes `pipeline_state` + `services[]`. Supervisor probes each backend's `/health`, runs the per-service state machine, gates the dialogue path when a critical backend is unhealthy past the grace window, and runs LLM keep-alive while idle. Next: **M5 — STT** (streaming Whisper via `whisper-server` or Speaches; subscribes to `UtteranceReady` and publishes `PartialTranscript` / `FinalTranscript`).
+**M0 + M1 + M2 + M3 + M4 complete.** Test suite split into `acva_unit_tests` (213 cases, no external deps) and `acva_integration_tests` (4 cases, real Silero model). Both pass green on the dev workstation without any env vars; integration tests resolve assets via the XDG defaults main.cpp uses. The compose stack reaches all-three-healthy on the dev workstation; `acva --stdin` drives a real LLM end-to-end via `PromptBuilder` → `LlmClient` (libcurl SSE) → `DialogueManager` → `SentenceSplitter` → `LlmSentence` events → `TurnWriter` → SQLite, and (when `cfg.tts.voices` is non-empty) onward through `TtsBridge` → `PiperClient` → `Resampler` → `PlaybackQueue` → `PlaybackEngine`. M4 adds the capture path: when `cfg.audio.capture_enabled: true`, `CaptureEngine` (PortAudio input) → SPSC ring → `AudioPipeline` worker → `Resampler` (48 → 16 kHz) → `SileroVad` (optional, ONNX Runtime) → `Endpointer` → `UtteranceBuffer` → `SpeechStarted` / `SpeechEnded` / `UtteranceReady` events on the bus. The fake driver gains a `suppress_speech_events` flag so real VAD can own those events while synthetic FinalTranscript/LlmSentence keep flowing for end-to-end smoke tests. Two new demos ship: `acva demo loopback` (mic → speakers passthrough) and `acva demo capture` (mic + VAD endpointing report). Manager enforces `max_assistant_sentences` by cancelling the LLM stream once the cap is hit; `UserInterrupted` drains the bridge's pending queue and clears the playback queue. JSON-per-line logs on stderr; `voice_llm_*` / `voice_health_*` / `voice_pipeline_state` / `voice_llm_keepalive_total` / `voice_tts_first_audio_ms` / `voice_tts_audio_bytes_total` / `voice_playback_{queue_depth,underruns_total,chunks_played_total,drops_total}` emit on `/metrics`; `/status` includes `pipeline_state` + `services[]`. Supervisor probes each backend's `/health`, runs the per-service state machine, gates the dialogue path when a critical backend is unhealthy past the grace window, and runs LLM keep-alive while idle. Next: **M5 — STT** (streaming Whisper via `whisper-server` or Speaches; subscribes to `UtteranceReady` and publishes `PartialTranscript` / `FinalTranscript`).
 
 ## Repository Layout
 
@@ -34,7 +34,16 @@ plans/
 CMakeLists.txt, CMakePresets.json
 README.md, CLAUDE.md, LICENSE, .editorconfig, .gitignore
 compile_commands.json    — symlink to _build/dev/compile_commands.json (for clangd).
-build.sh, run_tests.sh   — `./build.sh [dev|debug|release]` and `./run_tests.sh [dev|debug]`.
+build.sh                 — `./build.sh [dev|debug|release]`.
+run_tests.sh             — `./run_tests.sh [dev|debug]`. Runs the **unit** suite
+                            (`acva_unit_tests`): no external deps, fast feedback.
+run_integration_tests.sh — `./run_integration_tests.sh [dev|debug]`. Runs the
+                            **integration** suite (`acva_integration_tests`): real
+                            on-disk assets (Silero model today, more later) and
+                            real local services. Resolves dep paths via the same
+                            XDG defaults main.cpp uses, so on the dev workstation
+                            no env vars are required. Missing deps cause individual
+                            cases to skip cleanly, never fail.
 src/demos/               — `acva demo <name>` smoke checks per milestone (tone/tts/llm/health/fsm/chat/loopback/capture).
 docs/troubleshooting.md  — symptom-first guide; routes failures to the right `acva demo` and reads its output.
 ```
@@ -115,8 +124,9 @@ Build:
 ./build.sh                # = dev preset; output under _build/dev/
 ./build.sh debug          # ASan/UBSan-friendly build; _build/debug/
 ./build.sh release        # -DNDEBUG, tests off; _build/release/
-./run_tests.sh            # build + run doctest suite for the dev preset
+./run_tests.sh            # build + run unit suite for the dev preset
 ./run_tests.sh dev --test-case='paths*'   # filter pass-through to doctest
+./run_integration_tests.sh                # build + run integration suite (Silero, etc.)
 ```
 
 Equivalent raw cmake invocations (the scripts wrap these):

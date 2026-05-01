@@ -453,6 +453,8 @@ int main(int argc, char** argv) {
     std::unique_ptr<acva::audio::CaptureRing>          capture_ring;
     std::unique_ptr<acva::audio::CaptureEngine>        capture_engine;
     std::unique_ptr<acva::audio::AudioPipeline>        audio_pipeline;
+    std::thread                                         audio_metrics_thread;
+    std::atomic<bool>                                   audio_metrics_stop{false};
     if (cfg.audio.capture_enabled) {
         audio_clock  = std::make_unique<acva::audio::MonotonicAudioClock>();
         capture_ring = std::make_unique<acva::audio::CaptureRing>();
@@ -479,6 +481,31 @@ int main(int argc, char** argv) {
 
         capture_engine->start();
         audio_pipeline->start();
+
+        // Mirror M4 counters into /metrics every 500 ms. Same shape as
+        // the playback poller below — main owns the bridge so the
+        // capture audio thread never touches prometheus families.
+        audio_metrics_thread = std::thread([&]{
+            using namespace std::chrono_literals;
+            while (!audio_metrics_stop.load(std::memory_order_acquire)) {
+                registry->set_capture_frames_total(
+                    static_cast<double>(capture_engine->frames_captured()));
+                registry->set_capture_ring_overruns_total(
+                    static_cast<double>(capture_engine->ring_overruns()));
+                registry->set_audio_pipeline_frames_total(
+                    static_cast<double>(audio_pipeline->frames_processed()));
+                registry->set_vad_false_starts_total(
+                    static_cast<double>(audio_pipeline->false_starts_total()));
+                registry->set_utterances_total(
+                    static_cast<double>(audio_pipeline->utterances_total()));
+                registry->set_utterance_drops_total(
+                    static_cast<double>(audio_pipeline->utterance_drops()));
+                registry->set_utterance_in_flight(
+                    static_cast<double>(audio_pipeline->in_flight()));
+                std::this_thread::sleep_for(500ms);
+            }
+        });
+
         acva::log::info("main", fmt::format(
             "audio capture enabled (input='{}', headless={}, vad={})",
             cfg.audio.input_device,
@@ -615,9 +642,15 @@ int main(int argc, char** argv) {
         fake_driver->stop();
     }
     // M4: stop capture before the pipeline so no more frames land in
-    // the SPSC ring while the worker thread is winding down.
+    // the SPSC ring while the worker thread is winding down. Then
+    // wind the metrics poller down so it stops reading from the
+    // engines as they tear down.
     if (capture_engine) capture_engine->stop();
     if (audio_pipeline) audio_pipeline->stop();
+    if (audio_metrics_thread.joinable()) {
+        audio_metrics_stop.store(true, std::memory_order_release);
+        audio_metrics_thread.join();
+    }
     if (keep_alive)  keep_alive->stop();   // before llm_client teardown
     if (manager)     manager->stop();
     if (turn_writer) turn_writer->stop();

@@ -93,6 +93,9 @@ void AudioPipeline::process_frame(const AudioFrame& frame) {
     if (vad_) {
         last_vad_p_ = vad_->push_frame(resampled);
     }
+    if (test_probability_ >= 0.0F) {
+        last_vad_p_ = test_probability_;
+    }
 
     // Compute frame duration in ms from the resampled length and rate.
     const auto frame_dur = std::chrono::milliseconds{

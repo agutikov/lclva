@@ -142,6 +142,51 @@ Registry::Registry() : registry_(std::make_shared<prometheus::Registry>()) {
         .Help("Cumulative chunks dropped by the queue (capacity / stale-turn / clear)")
         .Register(*registry_);
     playback_drops_metric_ = &playback_drops_->Add({});
+
+    // M4 — capture / VAD / utterance families. Gauges (not Counters)
+    // because main.cpp's poller writes absolute values; on restart they
+    // reset to 0 alongside the underlying source counters.
+    capture_frames_total_ = &prometheus::BuildGauge()
+        .Name("voice_capture_frames_total")
+        .Help("Cumulative frames captured by the PortAudio input stream")
+        .Register(*registry_);
+    capture_frames_total_metric_ = &capture_frames_total_->Add({});
+
+    capture_ring_overruns_ = &prometheus::BuildGauge()
+        .Name("voice_capture_ring_overruns_total")
+        .Help("Cumulative SPSC ring overruns — the audio-processing thread fell behind")
+        .Register(*registry_);
+    capture_ring_overruns_metric_ = &capture_ring_overruns_->Add({});
+
+    audio_pipeline_frames_ = &prometheus::BuildGauge()
+        .Name("voice_audio_pipeline_frames_total")
+        .Help("Cumulative frames processed by the audio-processing thread (resample + VAD)")
+        .Register(*registry_);
+    audio_pipeline_frames_metric_ = &audio_pipeline_frames_->Add({});
+
+    vad_false_starts_ = &prometheus::BuildGauge()
+        .Name("voice_vad_false_starts_total")
+        .Help("Onset → Quiet without maturing into Speaking — background noise rejected")
+        .Register(*registry_);
+    vad_false_starts_metric_ = &vad_false_starts_->Add({});
+
+    utterances_total_gauge_ = &prometheus::BuildGauge()
+        .Name("voice_utterances_total")
+        .Help("Cumulative utterances emitted by the M4 audio pipeline")
+        .Register(*registry_);
+    utterances_total_metric_ = &utterances_total_gauge_->Add({});
+
+    utterance_drops_ = &prometheus::BuildGauge()
+        .Name("voice_utterance_drops_total")
+        .Help("Cumulative utterances dropped by the in-flight cap")
+        .Register(*registry_);
+    utterance_drops_metric_ = &utterance_drops_->Add({});
+
+    utterance_in_flight_ = &prometheus::BuildGauge()
+        .Name("voice_utterance_in_flight")
+        .Help("Live utterance slices held by consumers (STT, recorders)")
+        .Register(*registry_);
+    utterance_in_flight_metric_ = &utterance_in_flight_->Add({});
 }
 
 void Registry::on_event_published(const char* event_name) {
@@ -230,6 +275,28 @@ void Registry::set_playback_chunks_played_total(double total) {
 }
 void Registry::set_playback_drops_total(double total) {
     if (playback_drops_metric_) playback_drops_metric_->Set(total);
+}
+
+void Registry::set_capture_frames_total(double total) {
+    if (capture_frames_total_metric_) capture_frames_total_metric_->Set(total);
+}
+void Registry::set_capture_ring_overruns_total(double total) {
+    if (capture_ring_overruns_metric_) capture_ring_overruns_metric_->Set(total);
+}
+void Registry::set_audio_pipeline_frames_total(double total) {
+    if (audio_pipeline_frames_metric_) audio_pipeline_frames_metric_->Set(total);
+}
+void Registry::set_vad_false_starts_total(double total) {
+    if (vad_false_starts_metric_) vad_false_starts_metric_->Set(total);
+}
+void Registry::set_utterances_total(double total) {
+    if (utterances_total_metric_) utterances_total_metric_->Set(total);
+}
+void Registry::set_utterance_drops_total(double total) {
+    if (utterance_drops_metric_) utterance_drops_metric_->Set(total);
+}
+void Registry::set_utterance_in_flight(double depth) {
+    if (utterance_in_flight_metric_) utterance_in_flight_metric_->Set(depth);
 }
 
 std::vector<event::SubscriptionHandle> Registry::subscribe(event::EventBus& bus) {

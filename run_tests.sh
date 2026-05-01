@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# run_tests.sh — build the test binary for a preset and run the suite.
+# run_tests.sh — build + run the **unit** test suite.
+#
+# Pure unit tests, no external deps (no on-disk model files, no live
+# backends). Fast feedback loop. For tests that need real assets or
+# services, see ./run_integration_tests.sh.
 #
 # Usage:
 #   ./run_tests.sh              # = dev
@@ -21,7 +25,7 @@ shift || true
 case "$PRESET" in
     dev|debug) ;;
     -h|--help)
-        sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
         exit 0
         ;;
     release)
@@ -36,6 +40,6 @@ esac
 
 cd "$(dirname "$0")"
 
-./build.sh "$PRESET" --target acva_tests
+./build.sh "$PRESET" --target acva_unit_tests
 
-exec "_build/${PRESET}/tests/acva_tests" "$@"
+exec "_build/${PRESET}/tests/acva_unit_tests" "$@"

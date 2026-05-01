@@ -86,6 +86,19 @@ public:
     void set_playback_chunks_played_total(double total);
     void set_playback_drops_total(double total);
 
+    // M4 — capture / VAD / utterance metrics. All polled from the
+    // AudioPipeline + CaptureEngine + UtteranceBuffer counters by the
+    // same main.cpp poller thread that handles playback. Set absolute
+    // values; the registry mirrors them onto monotonic gauges so a
+    // process restart resets the dashboard to 0.
+    void set_capture_frames_total(double total);
+    void set_capture_ring_overruns_total(double total);
+    void set_audio_pipeline_frames_total(double total);
+    void set_vad_false_starts_total(double total);
+    void set_utterances_total(double total);
+    void set_utterance_drops_total(double total);
+    void set_utterance_in_flight(double depth);
+
     // Subscribe metrics-collection handlers to the bus. Call after
     // construction. Returns subscriptions which the caller must keep alive.
     [[nodiscard]] std::vector<event::SubscriptionHandle> subscribe(event::EventBus& bus);
@@ -118,6 +131,24 @@ private:
     prometheus::Gauge*                         playback_chunks_played_metric_ = nullptr;
     prometheus::Family<prometheus::Gauge>*     playback_drops_       = nullptr;
     prometheus::Gauge*                         playback_drops_metric_       = nullptr;
+
+    // M4 capture / VAD / utterance gauges. All driven by main.cpp's
+    // poller thread reading AudioPipeline + CaptureEngine + UtteranceBuffer
+    // counters every 500 ms.
+    prometheus::Family<prometheus::Gauge>* capture_frames_total_           = nullptr;
+    prometheus::Gauge*                     capture_frames_total_metric_    = nullptr;
+    prometheus::Family<prometheus::Gauge>* capture_ring_overruns_          = nullptr;
+    prometheus::Gauge*                     capture_ring_overruns_metric_   = nullptr;
+    prometheus::Family<prometheus::Gauge>* audio_pipeline_frames_          = nullptr;
+    prometheus::Gauge*                     audio_pipeline_frames_metric_   = nullptr;
+    prometheus::Family<prometheus::Gauge>* vad_false_starts_               = nullptr;
+    prometheus::Gauge*                     vad_false_starts_metric_        = nullptr;
+    prometheus::Family<prometheus::Gauge>* utterances_total_gauge_         = nullptr;
+    prometheus::Gauge*                     utterances_total_metric_        = nullptr;
+    prometheus::Family<prometheus::Gauge>* utterance_drops_                = nullptr;
+    prometheus::Gauge*                     utterance_drops_metric_         = nullptr;
+    prometheus::Family<prometheus::Gauge>* utterance_in_flight_            = nullptr;
+    prometheus::Gauge*                     utterance_in_flight_metric_     = nullptr;
 
     // Per-(turn, seq) TTS timer state, captured between TtsStarted and
     // the first TtsAudioChunk so we can compute first-audio latency.

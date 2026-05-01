@@ -1,4 +1,5 @@
 #include "audio/vad.hpp"
+#include "config/paths.hpp"
 
 #include <doctest/doctest.h>
 
@@ -28,12 +29,22 @@ std::vector<std::int16_t> tone(std::size_t n, double freq_hz, double sr = 16000.
     return out;
 }
 
-// VAD model path is opt-in via env var. Without it the gated tests
-// below skip — the build environment doesn't ship the model file.
+// Resolve the Silero model path the same way main.cpp does:
+//   1. ACVA_SILERO_MODEL env var (override, mainly for CI tooling)
+//   2. ${XDG_DATA_HOME:-$HOME/.local/share}/acva/models/silero_vad.onnx
+//      — written by scripts/download-silero-vad.sh.
+//
+// Returns empty when nothing exists; the gated tests then skip. The
+// dev workstation has the model in the XDG location so no env var is
+// needed there.
 std::filesystem::path model_path_or_empty() {
-    if (const char* p = std::getenv("ACVA_SILERO_MODEL")) {
-        return std::filesystem::path{p};
+    if (const char* p = std::getenv("ACVA_SILERO_MODEL"); p && *p) {
+        std::filesystem::path candidate{p};
+        if (std::filesystem::exists(candidate)) return candidate;
     }
+    auto resolved = acva::config::resolve_data_path(
+        "", "models/silero_vad.onnx");
+    if (std::filesystem::exists(resolved)) return resolved;
     return {};
 }
 

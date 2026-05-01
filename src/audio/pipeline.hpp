@@ -72,6 +72,12 @@ public:
     // the worker thread. Returns the number of frames processed.
     std::size_t pump_for_test(std::size_t max_frames);
 
+    // For tests: force the VAD probability for the next pump cycle,
+    // bypassing the model. Useful for end-to-end pipeline tests that
+    // shouldn't depend on Silero. -1.0 disables the override and falls
+    // back to the real VAD path.
+    void set_test_probability(float p) noexcept { test_probability_ = p; }
+
 private:
     void run_loop();
     void process_frame(const AudioFrame& frame);
@@ -97,6 +103,9 @@ private:
     // windows; we may step the endpointer at the resampled frame rate
     // ≈ 10 ms, so the same probability applies to multiple frames).
     float last_vad_p_ = 0.0F;
+
+    // Test override (-1 = inactive, otherwise replaces last_vad_p_).
+    float test_probability_ = -1.0F;
 };
 
 } // namespace acva::audio

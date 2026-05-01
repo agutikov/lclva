@@ -11,7 +11,7 @@ Resolved decisions are marked *(resolved)* with the chosen answer and consequenc
 Major shifts from the original design that came out of this interview:
 
 - **Speakers + AEC is the primary UX** (was: both, headphones reliable until M6).
-- **Streaming partial STT + speculative LLM in MVP** (was: utterance-based, deferred). *Note: revisited in L1 below — M5 may pick option C and defer speculation past MVP.*
+- **Streaming partial STT + speculative LLM in MVP** (was: utterance-based, deferred). *Note: L1 below resolved to option B — Speaches — and escalated into a dedicated **M4B** milestone for voice-backend consolidation. M5 keeps streaming + speculation as planned.*
 - **Full multilingual** STT/TTS/LLM with per-utterance language detection (was: English-only).
 - **Docker Compose for backends in dev; systemd as alternative production path** (was: systemd-managed services from day one). See L0 below.
 - **OTLP traces** opt-in (was: logs only).
@@ -313,17 +313,19 @@ Decisions that surfaced during M0/M1 implementation, post-interview. These super
   - M5's custom Whisper streaming wrapper gets reframed as one of three options — see L1.
   - `packaging/systemd/` stays in tree as production deployment alternative; not the default.
 
-**L1. M5 streaming-STT engine.** *(unresolved — decide at M5 start)*
-- Three options:
+**L1. M5 streaming-STT engine.** *(resolved → option B, escalated to M4B)*
+- Decision: **B (Speaches).** Inserted as a dedicated milestone **M4B** between M4 and M5 because Speaches packages STT + TTS together and the right move is to consolidate the *entire* voice backend, not just STT. M5 then becomes a focused "streaming + speculation" task against an already-chosen and smoke-tested engine.
+- Original three options preserved here for context:
   - **A.** Custom C++ wrapper around `whisper.cpp/examples/stream` (~3 weeks).
   - **B.** Adopt **Speaches** / faster-whisper, OpenAI-Realtime-compatible streaming server (~2 weeks).
-  - **C.** Defer streaming partials past MVP — drop the `SpeculativeThinking` FSM concurrent state; use upstream `whisper.cpp:server` request/response (~1 week).
-- Default assumption: B if Speaches is healthy at M5 start; otherwise A; C as fallback if the project is behind schedule.
-- Impact:
-  - On A/B: M5 estimate ~2-3 weeks; FSM speculation logic + reconciliation + speculation metrics ship.
-  - On C: M5 estimate ~1 week; design's "streaming partial STT in MVP" line in B5 reverts to its original "deferred" position. The SpeculativeThinking concurrent-state and speculation-policy code in §6 don't ship for MVP.
-  - End-to-end P50 latency 300-500 ms higher under C.
-- Verify before committing to B: Speaches recent commit activity, model format compatibility, 5-minute smoke against the image.
+  - **C.** Defer streaming partials past MVP (~1 week); drops `SpeculativeThinking` from the FSM.
+- Why B + M4B over the original "decide at M5 start": Speaches ALSO ships Piper TTS behind the same OpenAI-compatible surface. Adopting it for STT but keeping standalone `piper.http_server` for TTS would leave us with two HTTP-client styles in tree and three Compose services where two would do. M4B does the consolidation; M5 layers streaming on top.
+- Fallback if M4B's smoke gate fails (Speaches Piper support broken / project stagnated): revert to option **A** at M5 start, keep the existing `piper.http_server` and `whisper.cpp/server` services. M4B's plan documents this fallback explicitly.
+- Consequences:
+  - M5 estimate drops from 2–3 weeks to **1.5–2 weeks**: engine selection is done, request/response STT client already shipped (in M4B), streaming becomes a swap of one client implementation against the same event surface.
+  - Compose collapses from `llama` + `whisper` + `piper` to `llama` + `speaches`.
+  - `cfg.tts.voices[*].url` → `cfg.tts.base_url` + per-language `voice_id`. One-time config migration; no production deploys yet so this is acceptable.
+- See `plans/milestones/m4b_speaches_consolidation.md` for the full plan.
 
 **L2. C++23 baseline, not C++20.** *(resolved retroactively)*
 - The C++20 lock from B-section was inadvertently violated by glaze 7.x, which forces `-std=c++23` transitively. C++23 STL features (std::expected, deducing-this, etc.) are now fair game.

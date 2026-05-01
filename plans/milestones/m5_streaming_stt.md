@@ -1,8 +1,25 @@
 # M5 — Streaming STT + Speculation
 
-**Estimate:** 1.5–3 weeks. The range depends on the streaming-engine decision in Step 1 below.
+> **Update:** the engine-choice decision matrix below (Step 1, options A/B/C)
+> was **resolved before M5 starts** by inserting **M4B — Voice-Backend
+> Consolidation onto Speaches** between M4 and M5. M4B brings up Speaches,
+> ships a request/response STT client, and migrates the M3 TTS client to
+> the same Speaches base URL. M5 therefore picks up with **option B
+> already in production** and focuses on swapping the request/response
+> STT client for Speaches' streaming / Realtime endpoint plus the
+> Dialogue-Manager-side speculation work. See
+> `plans/milestones/m4b_speaches_consolidation.md` and `open_questions.md` L1.
+> Step 1 below is preserved for historical context but no longer drives
+> the milestone.
 
-**Depends on:** M1 (Dialogue Manager wiring; LLM client cancellation), M4 (utterance pipeline; AudioSlice).
+**Estimate:** 1.5–2 weeks (post-M4B). Was 1.5–3 weeks under the
+pre-M4B plan; the lower end of that range now applies because engine
+selection + request/response wiring already shipped.
+
+**Depends on:** M1 (Dialogue Manager wiring; LLM client cancellation),
+M4 (utterance pipeline; AudioSlice), **M4B (Speaches container,
+OpenAI-compatible STT/TTS clients, real `FinalTranscript` flowing on
+the bus)**.
 
 **Blocks:** M7 (full barge-in needs partials, *if* we keep speculation in MVP). If speculation is deferred (Option C), M7 still ships — just with slightly higher perceived latency.
 

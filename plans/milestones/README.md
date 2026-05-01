@@ -2,17 +2,18 @@
 
 Detailed per-milestone plans. The high-level table lives in `../project_design.md` §17; this directory has one file per milestone with concrete steps, file lists, APIs, tests, and acceptance criteria.
 
-| #  | File | Status      |
-|----|------|-------------|
-| M0 | `m0_skeleton.md` | ✅ landed   |
-| M1 | `m1_llm_memory.md` | ✅ landed   |
-| M2 | `m2_supervision.md` | ✅ landed   |
-| M3 | `m3_tts_playback.md` | ✅ landed   |
-| M4 | `m4_audio_vad.md` | next      |
-| M5 | `m5_streaming_stt.md` | planned  |
-| M6 | `m6_aec.md` | planned     |
-| M7 | `m7_barge_in.md` | planned     |
-| M8 | `m8_hardening.md` | planned    |
+| #   | File | Status      |
+|-----|------|-------------|
+| M0  | `m0_skeleton.md` | ✅ landed   |
+| M1  | `m1_llm_memory.md` | ✅ landed   |
+| M2  | `m2_supervision.md` | ✅ landed   |
+| M3  | `m3_tts_playback.md` | ✅ landed   |
+| M4  | `m4_audio_vad.md` | ✅ landed   |
+| M4B | `m4b_speaches_consolidation.md` | next |
+| M5  | `m5_streaming_stt.md` | planned (depends on M4B) |
+| M6  | `m6_aec.md` | planned     |
+| M7  | `m7_barge_in.md` | planned     |
+| M8  | `m8_hardening.md` | planned    |
 
 ## Demos — one-shot smoke checks built into the binary
 
@@ -144,7 +145,7 @@ Two no-input demos cover the M3 surface:
 `tone` is the one to run first when troubleshooting "I hear nothing":
 it isolates the audio device + PortAudio path from the Piper config.
 
-### M4 (planned) — mic capture + VAD endpointing
+### M4 ✅ — mic capture + VAD endpointing
 
 Speak into the mic; the orchestrator emits `SpeechStarted` /
 `SpeechEnded`, captures the utterance, and shows it via `/status`. STT
@@ -155,6 +156,35 @@ isn't wired yet — the fake driver still supplies the transcript.
 # Speak. JSON log lines `event:"speech_started"` / `"speech_ended"` appear.
 curl -s http://127.0.0.1:9876/metrics | grep -E 'voice_vad_(false_starts|onsets)_total'
 ```
+
+Two no-input demos cover the M4 surface:
+
+```sh
+./_build/dev/acva demo loopback   # mic → speakers passthrough; verifies SPSC + resampler
+./_build/dev/acva demo capture    # mic + VAD endpointing report; tunes thresholds
+```
+
+### M4B (planned) — voice-backend consolidation onto Speaches
+
+One Speaches container replaces the separate `whisper.cpp/server` and
+`piper.http_server` Compose services. Same audio output to a listener,
+same `acva demo tts` and `acva demo chat` behaviour — but now over an
+OpenAI-compatible HTTP surface, and the synthetic-`FinalTranscript`
+hole in M4 is closed: real STT lands on the bus.
+
+```sh
+# Bring up the new container alongside the old ones (Step 1):
+docker compose -f packaging/compose/docker-compose.yml up -d speaches
+./scripts/download-speaches-models.sh
+# Smoke endpoints directly:
+curl -fsS http://127.0.0.1:8090/health
+# After Step 5 the orchestrator wires real STT:
+./_build/dev/acva --config config/default.yaml
+# Speak. Watch `event:"final_transcript"` lines from a real engine.
+./_build/dev/acva demo stt        # one-shot STT smoke against a fixture WAV
+```
+
+After Step 6 the Compose stack is just `llama` + `speaches`.
 
 ### M5 (planned) — streaming STT + speculation
 

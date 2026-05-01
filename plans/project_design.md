@@ -747,13 +747,14 @@ digraph Milestones {
   M1 [fillcolor="#7C3AED", fontcolor=white, label="M1\nLLM + Memory\n1-2w"];
   M2 [fillcolor="#0891B2", fontcolor=white, label="M2\nSupervision\n1w"];
   M3 [fillcolor="#F59E0B", fontcolor=white, label="M3\nTTS + Playback\n1-2w"];
-  M4 [fillcolor="#3B82F6", fontcolor=white, label="M4\nAudio + VAD\n1-2w"];
-  M5 [fillcolor="#10B981", fontcolor=white, label="M5\nStreaming STT\n+ Speculation\n2-3w"];
-  M6 [fillcolor="#2563EB", fontcolor=white, label="M6\nAEC / NS / AGC\n1-2w"];
-  M7 [fillcolor="#DC2626", fontcolor=white, label="M7\nBarge-In\n1w"];
-  M8 [fillcolor="#16A34A", fontcolor=white, label="M8\nHardening\n2w"];
+  M4  [fillcolor="#3B82F6", fontcolor=white, label="M4\nAudio + VAD\n1-2w"];
+  M4B [fillcolor="#6366F1", fontcolor=white, label="M4B\nSpeaches\nConsolidation\n~6d"];
+  M5  [fillcolor="#10B981", fontcolor=white, label="M5\nStreaming STT\n+ Speculation\n1.5-2w"];
+  M6  [fillcolor="#2563EB", fontcolor=white, label="M6\nAEC / NS / AGC\n1-2w"];
+  M7  [fillcolor="#DC2626", fontcolor=white, label="M7\nBarge-In\n1w"];
+  M8  [fillcolor="#16A34A", fontcolor=white, label="M8\nHardening\n2w"];
 
-  M0 -> M1 -> M2 -> M3 -> M4 -> M5 -> M6 -> M7 -> M8;
+  M0 -> M1 -> M2 -> M3 -> M4 -> M4B -> M5 -> M6 -> M7 -> M8;
 
   // Highlight critical reorderings
   M2 -> M3 [label="supervision\nbefore TTS", fontcolor="#0891B2", color="#0891B2", style=dashed, constraint=false];
@@ -797,10 +798,17 @@ Each milestone has a detailed plan in `plans/milestones/`. The summary below is 
 - Silero VAD on cleaned audio.
 - Utterance buffer with reference-counted slices.
 
-### M5: STT — Streaming Partials (2–3 weeks) — see [milestones/m5_streaming_stt.md](milestones/m5_streaming_stt.md)
-- whisper.cpp **streaming** integration (sliding-window inference; not utterance-only).
-- `PartialTranscript` + `FinalTranscript` event flow with stable-prefix tracking.
-- Multilingual model; language detection per utterance.
+### M4B: Voice-Backend Consolidation onto Speaches (~6 days) — see [milestones/m4b_speaches_consolidation.md](milestones/m4b_speaches_consolidation.md)
+- One Speaches container replaces standalone `whisper.cpp/server` + `piper.http_server`.
+- Strict additive-then-deprecate sequence: Speaches added alongside existing services, smoke-tested, clients swapped one at a time, obsolete infra removed last.
+- Closes M5's L1 open question before M5 starts: streaming engine is decided and proven.
+- Closes the M4 synthetic-`FinalTranscript` hole — real STT lands on the bus (request/response, not yet streaming).
+- Drops `cfg.tts.voices[*].url` in favor of one `tts.base_url` + per-language `voice_id`.
+
+### M5: STT — Streaming Partials (1.5–2 weeks) — see [milestones/m5_streaming_stt.md](milestones/m5_streaming_stt.md)
+- Swap M4B's request/response STT client for Speaches' streaming / Realtime endpoint.
+- `PartialTranscript` events on the bus with stable-prefix tracking.
+- Language detection per utterance (already wired in M4B; consumed here).
 - **Speculative LLM start** in Dialogue Manager (speculation policy from §6).
 - Reconciliation logic: speculation kept vs. cancelled-and-restarted.
 - Tests: prefix-stable utterances commit speculation; revision-heavy utterances correctly restart.
@@ -824,7 +832,7 @@ Each milestone has a detailed plan in `plans/milestones/`. The summary below is 
 - Wipe/privacy commands.
 - Packaging (single binary + config + service files).
 
-**Total: ~14–16 weeks** for a single competent C++ developer to MVP. (Up from 12–14 due to M5 expansion for streaming partial STT and multilingual.)
+**Total: ~14–17 weeks** for a single competent C++ developer to MVP. (Up from 12–14 due to M5 expansion for streaming partial STT and multilingual; M4B adds ~6 days of consolidation work but shrinks M5 by roughly the same amount because the streaming engine is already chosen and smoke-tested by the time M5 starts.)
 
 ---
 

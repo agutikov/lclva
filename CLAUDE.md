@@ -12,20 +12,23 @@ Streaming partial STT with speculative LLM start (M5 — three options on the ta
 
 ## Status
 
-**M0 + M1 + M2 + M3 + M4 complete.** Test suite split into `acva_unit_tests` (213 cases, no external deps) and `acva_integration_tests` (4 cases, real Silero model). Both pass green on the dev workstation without any env vars; integration tests resolve assets via the XDG defaults main.cpp uses. The compose stack reaches all-three-healthy on the dev workstation; `acva --stdin` drives a real LLM end-to-end via `PromptBuilder` → `LlmClient` (libcurl SSE) → `DialogueManager` → `SentenceSplitter` → `LlmSentence` events → `TurnWriter` → SQLite, and (when `cfg.tts.voices` is non-empty) onward through `TtsBridge` → `PiperClient` → `Resampler` → `PlaybackQueue` → `PlaybackEngine`. M4 adds the capture path: when `cfg.audio.capture_enabled: true`, `CaptureEngine` (PortAudio input) → SPSC ring → `AudioPipeline` worker → `Resampler` (48 → 16 kHz) → `SileroVad` (optional, ONNX Runtime) → `Endpointer` → `UtteranceBuffer` → `SpeechStarted` / `SpeechEnded` / `UtteranceReady` events on the bus. The fake driver gains a `suppress_speech_events` flag so real VAD can own those events while synthetic FinalTranscript/LlmSentence keep flowing for end-to-end smoke tests. Two new demos ship: `acva demo loopback` (mic → speakers passthrough) and `acva demo capture` (mic + VAD endpointing report). Manager enforces `max_assistant_sentences` by cancelling the LLM stream once the cap is hit; `UserInterrupted` drains the bridge's pending queue and clears the playback queue. JSON-per-line logs on stderr; `voice_llm_*` / `voice_health_*` / `voice_pipeline_state` / `voice_llm_keepalive_total` / `voice_tts_first_audio_ms` / `voice_tts_audio_bytes_total` / `voice_playback_{queue_depth,underruns_total,chunks_played_total,drops_total}` emit on `/metrics`; `/status` includes `pipeline_state` + `services[]`. Supervisor probes each backend's `/health`, runs the per-service state machine, gates the dialogue path when a critical backend is unhealthy past the grace window, and runs LLM keep-alive while idle. Next: **M5 — STT** (streaming Whisper via `whisper-server` or Speaches; subscribes to `UtteranceReady` and publishes `PartialTranscript` / `FinalTranscript`).
+**M0 + M1 + M2 + M3 + M4 complete.** Test suite split into `acva_unit_tests` (213 cases, no external deps) and `acva_integration_tests` (4 cases, real Silero model). Both pass green on the dev workstation without any env vars; integration tests resolve assets via the XDG defaults main.cpp uses. **Next: M4B (voice-backend consolidation onto Speaches)** — replace standalone `whisper.cpp/server` and `piper.http_server` Compose services with one Speaches container fronting both STT and TTS over an OpenAI-compatible HTTP surface. Strict additive-then-deprecate: bring up Speaches alongside, smoke-test, swap clients one at a time, delete obsolete infra last. See `plans/milestones/m4b_speaches_consolidation.md`. The compose stack reaches all-three-healthy on the dev workstation; `acva --stdin` drives a real LLM end-to-end via `PromptBuilder` → `LlmClient` (libcurl SSE) → `DialogueManager` → `SentenceSplitter` → `LlmSentence` events → `TurnWriter` → SQLite, and (when `cfg.tts.voices` is non-empty) onward through `TtsBridge` → `PiperClient` → `Resampler` → `PlaybackQueue` → `PlaybackEngine`. M4 adds the capture path: when `cfg.audio.capture_enabled: true`, `CaptureEngine` (PortAudio input) → SPSC ring → `AudioPipeline` worker → `Resampler` (48 → 16 kHz) → `SileroVad` (optional, ONNX Runtime) → `Endpointer` → `UtteranceBuffer` → `SpeechStarted` / `SpeechEnded` / `UtteranceReady` events on the bus. The fake driver gains a `suppress_speech_events` flag so real VAD can own those events while synthetic FinalTranscript/LlmSentence keep flowing for end-to-end smoke tests. Two new demos ship: `acva demo loopback` (mic → speakers passthrough) and `acva demo capture` (mic + VAD endpointing report). Manager enforces `max_assistant_sentences` by cancelling the LLM stream once the cap is hit; `UserInterrupted` drains the bridge's pending queue and clears the playback queue. JSON-per-line logs on stderr; `voice_llm_*` / `voice_health_*` / `voice_pipeline_state` / `voice_llm_keepalive_total` / `voice_tts_first_audio_ms` / `voice_tts_audio_bytes_total` / `voice_playback_{queue_depth,underruns_total,chunks_played_total,drops_total}` emit on `/metrics`; `/status` includes `pipeline_state` + `services[]`. Supervisor probes each backend's `/health`, runs the per-service state machine, gates the dialogue path when a critical backend is unhealthy past the grace window, and runs LLM keep-alive while idle. Next: **M5 — STT** (streaming Whisper via `whisper-server` or Speaches; subscribes to `UtteranceReady` and publishes `PartialTranscript` / `FinalTranscript`).
 
 ## Repository Layout
 
 ```
-src/                     — C++ source. Per-subsystem subdirs: config/, dialogue/, event/,
-                            http/, log/, memory/, metrics/, pipeline/.
-tests/                   — doctest-based unit tests; one file per src subsystem.
-config/default.yaml      — default runtime config (M0 + M1.A coverage).
+src/                     — C++ source. Per-subsystem subdirs: audio/, config/, dialogue/,
+                            event/, http/, log/, memory/, metrics/, pipeline/, playback/, ...
+tests/                   — doctest-based suites: acva_unit_tests (no deps) +
+                            acva_integration_tests (real Silero model + future Speaches).
+config/default.yaml      — default runtime config (covers everything through M4).
 cmake/                   — Dependencies.cmake, Warnings.cmake.
 third_party/cpp-httplib/ — vendored single-header HTTP server lib.
+scripts/                 — one-shot dev scripts (download-silero-vad.sh, etc).
 packaging/
   systemd/               — alternative production deployment: per-user units (M2 stretch / M8).
-  compose/               — dev default: docker-compose.yml + .env.example. NOT YET CREATED.
+  compose/               — dev default: docker-compose.yml + per-service Dockerfiles where needed.
+                            M4B will collapse `whisper/` + `piper/` into a single `speaches` block.
 plans/
   project_design.md      — source of truth for architecture, components, milestones, risks.
   open_questions.md      — resolved/unresolved decisions; section L holds implementation-driven revisions.
@@ -87,11 +90,12 @@ If you find yourself recommending Boost.Cobalt, C++23 modules, an embedded infer
 
 ## Milestone Order (Adjusted from Original)
 
-`M0 skeleton → M1 LLM+memory (split: A complete, B Compose stack, C remaining) → M2 supervision → M3 TTS+playback → M4 audio+VAD → M5 STT → M6 AEC → M7 barge-in → M8 hardening`
+`M0 skeleton → M1 LLM+memory (split: A complete, B Compose stack, C remaining) → M2 supervision → M3 TTS+playback → M4 audio+VAD → M4B Speaches consolidation → M5 STT → M6 AEC → M7 barge-in → M8 hardening`
 
-Two reorderings vs. the original plan, both intentional:
+Three reorderings / insertions vs. the original plan, all intentional:
 - **Supervision (M2) before TTS (M3)** — llama.cpp will crash during long-context dev; retrofitting supervision is painful.
 - **AEC (M6) before barge-in (M7)** — without AEC the assistant's own voice triggers VAD; you'll spend a week debugging phantom interruptions.
+- **M4B Speaches consolidation between M4 and M5** — Speaches packages STT + TTS behind one OpenAI-compatible surface and matches CLAUDE.md pillar #5 ("don't write a custom HTTP wrapper around a backend that already ships one"). Doing this swap *before* M5 closes the M5 L1 decision (A/B/C) up front and lets M5 focus on streaming partials + speculation rather than mixing engine selection in. See `plans/milestones/m4b_speaches_consolidation.md`.
 
 Don't propose moving these back without strong reasons.
 

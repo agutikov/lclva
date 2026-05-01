@@ -7,7 +7,10 @@
 #include "memory/repository.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
+#include <cstdint>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -63,12 +66,27 @@ public:
     // session in SQLite. Defaults to 0 (cold start; no memory included).
     void set_session(memory::SessionId s) noexcept { session_.store(s, std::memory_order_release); }
 
+    // Pipeline gate. Returns true when the dialogue path may proceed,
+    // false when the supervisor has flagged a critical backend
+    // unhealthy past its grace window (M2.5). When the gate is closed,
+    // the Manager refuses new turns: it logs (rate-limited at once per
+    // minute) and publishes UserInterrupted so the FSM returns to
+    // Listening instead of staying stuck in Thinking. Default: open.
+    using PipelineGate = std::function<bool()>;
+    void set_pipeline_gate(PipelineGate gate) noexcept;
+
+    // Test hook: how many turns the gate has refused since startup.
+    [[nodiscard]] std::uint64_t gated_turns() const noexcept {
+        return gated_turns_.load(std::memory_order_acquire);
+    }
+
 private:
     void on_event(const event::Event& e);
     void enqueue_turn(event::FinalTranscript e);
     void cancel_active(event::TurnId target);
     void io_loop();
     void run_one(const event::FinalTranscript& e);
+    [[nodiscard]] bool gate_open() const;
 
     const config::Config& cfg_;
     event::EventBus& bus_;
@@ -91,6 +109,13 @@ private:
     // thread when starting / finishing a job.
     std::mutex active_mu_;
     TurnContext active_;
+
+    // Pipeline gate. Stored under gate_mu_ so set_pipeline_gate can
+    // swap the predicate atomically with respect to readers.
+    mutable std::mutex gate_mu_;
+    PipelineGate gate_;
+    std::chrono::steady_clock::time_point gate_last_log_at_{};
+    std::atomic<std::uint64_t> gated_turns_{0};
 };
 
 } // namespace acva::dialogue

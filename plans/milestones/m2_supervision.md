@@ -2,6 +2,8 @@
 
 **Estimate:** ~3 days.
 
+**Status:** ✅ landed (steps 1–6 complete; 127/127 tests passing).
+
 **Depends on:** M1 (LLM client to probe).
 
 **Blocks:** M3 (TTS supervision shares the same code path), M5 (STT same).
@@ -191,15 +193,24 @@ tts:
 
 ## Time breakdown
 
-| Step | Estimate |
-|---|---|
-| 1 HTTP probe | 0.5 day |
-| 2 Service state machine | 0.5 day |
-| 3 Supervisor + status | 0.5 day |
-| 4 Keep-alive | 0.5 day |
-| 5 Pipeline gating | 0.5 day |
-| 6 Config + tests | 0.5 day |
-| **Total** | **~3 days** |
+| Step | Estimate | Status |
+|---|---|---|
+| 1 HTTP probe | 0.5 day | ✅ `src/supervisor/probe.{hpp,cpp}` + 7 tests |
+| 2 Service state machine | 0.5 day | ✅ `src/supervisor/service.{hpp,cpp}` + 9 tests |
+| 3 Supervisor + status | 0.5 day | ✅ `src/supervisor/supervisor.{hpp,cpp}` + 6 tests |
+| 4 Keep-alive | 0.5 day | ✅ `src/supervisor/keep_alive.{hpp,cpp}` + 7 tests |
+| 5 Pipeline gating | 0.5 day | ✅ `Manager::set_pipeline_gate` + 3 tests |
+| 6 Config + tests | 0.5 day | ✅ config schema + 5 tests; main.cpp wiring; smoke verified |
+| **Total** | **~3 days** | landed |
+
+## Lessons learned
+
+- The Supervisor's evaluator needs both an event-driven path (HealthChanged on the bus) and a periodic 1 s tick. Without the tick, a backend that stays Unhealthy past the grace window without further state changes never trips `pipeline_state == failed`.
+- `register_service_for_health` on the metrics registry pre-creates every (service, state) gauge cell, so /metrics shows the full grid from t=0. Without it, prometheus would only show a service after its first transition — confusing in dashboards.
+- ProbeFn as a `std::function` (rather than a hard `HttpProbe&` reference) made testing cleanly deterministic: the ServiceMonitor and Supervisor tests drive transitions via a programmable mock instead of standing up a real HTTP server.
+- `KeepAlive` follows the same pattern: takes `should_fire` + `on_tick` callables, decoupled from `LlmClient` and `Fsm`. Tests run without a real LLM by injecting trivial lambdas.
+- Pipeline gating in the Manager publishes `UserInterrupted` to drain the FSM back to `Listening` instead of letting it stay stuck in `Thinking`. Cleaner than inventing a new event.
+- The 1-minute log-rate-limit on the gate was important — with a chatty stdin user typing into a gated pipeline, the log was unreadable without it.
 
 ---
 

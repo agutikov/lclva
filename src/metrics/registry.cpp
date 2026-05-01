@@ -4,6 +4,7 @@
 
 #include <prometheus/labels.h>
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <utility>
@@ -18,6 +19,18 @@ namespace {
 constexpr std::array kAllStates = {
     "idle", "listening", "user_speaking", "transcribing",
     "thinking", "speaking", "completed", "interrupted",
+};
+
+// All public health-state labels published by ServiceMonitor. Same
+// pre-create pattern as kAllStates: every (service, state) cell starts
+// at 0 so /metrics shows the full grid before the first probe.
+constexpr std::array kAllHealthStates = {
+    "unknown", "healthy", "degraded", "unhealthy",
+};
+
+// All pipeline-state labels published by Supervisor.
+constexpr std::array kAllPipelineStates = {
+    "ok", "failed", "no_configured_critical_services",
 };
 
 } // namespace
@@ -51,6 +64,28 @@ Registry::Registry() : registry_(std::make_shared<prometheus::Registry>()) {
     for (auto* s : kAllStates) {
         fsm_state_->Add({{"state", s}}).Set(0.0);
     }
+
+    keep_alive_total_ = &prometheus::BuildCounter()
+        .Name("voice_llm_keepalive_total")
+        .Help("LLM keep-alive ticks, labeled by outcome (fired or skipped)")
+        .Register(*registry_);
+    keep_alive_total_->Add({{"outcome", "fired"}});
+    keep_alive_total_->Add({{"outcome", "skipped"}});
+
+    health_state_ = &prometheus::BuildGauge()
+        .Name("voice_health_state")
+        .Help("Per-service supervisor state — 1 for the active label, 0 for others")
+        .Register(*registry_);
+
+    pipeline_state_ = &prometheus::BuildGauge()
+        .Name("voice_pipeline_state")
+        .Help("Aggregate dialogue-pipeline state — 1 for the active label")
+        .Register(*registry_);
+    for (auto* s : kAllPipelineStates) {
+        pipeline_state_->Add({{"state", s}}).Set(0.0);
+    }
+    // Boot-time default: nothing registered yet → no_configured_critical_services.
+    pipeline_state_->Add({{"state", "no_configured_critical_services"}}).Set(1.0);
 
     llm_first_token_ms_ = &prometheus::BuildHistogram()
         .Name("voice_llm_first_token_ms")
@@ -90,6 +125,46 @@ void Registry::set_fsm_state(const char* state_name) {
     for (auto* s : kAllStates) {
         const double v = (std::strcmp(s, state_name) == 0) ? 1.0 : 0.0;
         fsm_state_->Add({{"state", s}}).Set(v);
+    }
+}
+
+void Registry::register_service_for_health(const std::string& service) {
+    std::lock_guard lk(health_mu_);
+    if (std::find(health_services_.begin(), health_services_.end(), service)
+        != health_services_.end()) return;
+    health_services_.push_back(service);
+    for (auto* s : kAllHealthStates) {
+        health_state_->Add({{"service", service}, {"state", s}}).Set(0.0);
+    }
+    // Default to "unknown" until the first probe lands.
+    health_state_->Add({{"service", service}, {"state", "unknown"}}).Set(1.0);
+}
+
+void Registry::set_health_state(const std::string& service, const char* state_name) {
+    std::lock_guard lk(health_mu_);
+    if (std::find(health_services_.begin(), health_services_.end(), service)
+        == health_services_.end()) {
+        // Race with shutdown / late event after register() — register lazily so
+        // we don't lose the data. Cardinality is bounded by configured services.
+        health_services_.push_back(service);
+        for (auto* s : kAllHealthStates) {
+            health_state_->Add({{"service", service}, {"state", s}}).Set(0.0);
+        }
+    }
+    for (auto* s : kAllHealthStates) {
+        const double v = (std::strcmp(s, state_name) == 0) ? 1.0 : 0.0;
+        health_state_->Add({{"service", service}, {"state", s}}).Set(v);
+    }
+}
+
+void Registry::on_keep_alive(bool fired) {
+    keep_alive_total_->Add({{"outcome", fired ? "fired" : "skipped"}}).Increment();
+}
+
+void Registry::set_pipeline_state(const char* state_name) {
+    for (auto* s : kAllPipelineStates) {
+        const double v = (std::strcmp(s, state_name) == 0) ? 1.0 : 0.0;
+        pipeline_state_->Add({{"state", s}}).Set(v);
     }
 }
 

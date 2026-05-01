@@ -12,7 +12,7 @@ Streaming partial STT with speculative LLM start (M5 — three options on the ta
 
 ## Status
 
-**M0 + M1 complete.** 90/90 tests passing. The compose stack reaches all-three-healthy on the dev workstation; `acva --stdin` drives a real LLM end-to-end via the in-tree `PromptBuilder` → `LlmClient` (libcurl SSE) → `DialogueManager` → `SentenceSplitter` → `LlmSentence` events → `TurnWriter` → SQLite chain. JSON-per-line logs land on stderr; `voice_llm_first_token_ms` and `voice_llm_tokens_per_sec` histograms emit non-zero on `/metrics`. Next: **M2 — service supervision** (HTTP `/health` probes, dialogue gating, restart-loop coordination with Compose's `restart: unless-stopped`).
+**M0 + M1 + M2 complete.** 127/127 tests passing. The compose stack reaches all-three-healthy on the dev workstation; `acva --stdin` drives a real LLM end-to-end via the in-tree `PromptBuilder` → `LlmClient` (libcurl SSE) → `DialogueManager` → `SentenceSplitter` → `LlmSentence` events → `TurnWriter` → SQLite chain. JSON-per-line logs land on stderr; `voice_llm_first_token_ms` / `voice_llm_tokens_per_sec` / `voice_health_state` / `voice_pipeline_state` / `voice_llm_keepalive_total` emit on `/metrics`; `/status` includes `pipeline_state` + `services[]`. Supervisor probes each backend's `/health`, runs the per-service state machine, gates the dialogue path when a critical backend is unhealthy past the grace window, and runs LLM keep-alive while idle — all on top of Compose's `restart: unless-stopped`. Next: **M3 — TTS + playback** (Piper HTTP client, per-language voice routing, PortAudio playback queue with sequence-number cancellation).
 
 ## Repository Layout
 

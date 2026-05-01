@@ -5,6 +5,7 @@ add_executable(acva_tests
     test_db.cpp
     test_fsm.cpp
     test_json_sink.cpp
+    test_keep_alive.cpp
     test_llm_client.cpp
     test_manager.cpp
     test_memory_thread.cpp

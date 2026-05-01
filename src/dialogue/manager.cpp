@@ -63,9 +63,65 @@ void Manager::stop() {
     }
 }
 
+void Manager::set_pipeline_gate(PipelineGate gate) noexcept {
+    std::lock_guard lk(gate_mu_);
+    gate_ = std::move(gate);
+}
+
+bool Manager::gate_open() const {
+    PipelineGate g;
+    {
+        std::lock_guard lk(gate_mu_);
+        g = gate_;
+    }
+    if (!g) return true;       // no gate installed → always open
+    try {
+        return g();
+    } catch (...) {
+        // Defensive: if the gate predicate throws, default to "open"
+        // so a buggy supervisor wiring can't permanently freeze the
+        // dialogue path. The exception is logged once.
+        log::info("dialogue", "pipeline gate predicate threw; treating as open");
+        return true;
+    }
+}
+
 void Manager::on_event(const event::Event& e) {
     std::visit([this]<class T>(const T& evt) {
         if constexpr (std::is_same_v<T, event::FinalTranscript>) {
+            if (!gate_open()) {
+                gated_turns_.fetch_add(1, std::memory_order_relaxed);
+                // Rate-limit the log line at once per minute. Without this
+                // a stuck-Unhealthy backend would dominate the log when a
+                // user keeps typing into stdin / speaking into the mic.
+                bool should_log = false;
+                {
+                    std::lock_guard lk(gate_mu_);
+                    const auto now = std::chrono::steady_clock::now();
+                    if (gate_last_log_at_ == std::chrono::steady_clock::time_point{}
+                        || now - gate_last_log_at_ >= std::chrono::seconds(60)) {
+                        gate_last_log_at_ = now;
+                        should_log = true;
+                    }
+                }
+                if (should_log) {
+                    log::info("dialogue",
+                        fmt::format(
+                            "pipeline gated; refusing FinalTranscript turn={} "
+                            "(supervisor reports a critical backend unhealthy)",
+                            evt.turn));
+                }
+                // Publish UserInterrupted so the FSM (which advances to
+                // Thinking on FinalTranscript when in Transcribing) is
+                // returned to Listening with a Discarded outcome. The
+                // event applies to the FSM's active turn — the field
+                // value here is informational.
+                bus_.publish(event::UserInterrupted{
+                    .turn = evt.turn,
+                    .ts   = std::chrono::steady_clock::now(),
+                });
+                return;
+            }
             enqueue_turn(evt);
         } else if constexpr (std::is_same_v<T, event::UserInterrupted>) {
             cancel_active(evt.turn);

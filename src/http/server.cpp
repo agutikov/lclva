@@ -24,23 +24,39 @@ std::string serialize_metrics(const prometheus::Registry& reg) {
     return os.str();
 }
 
-std::string serialize_status(const dialogue::Fsm* fsm) {
+std::string serialize_status(const dialogue::Fsm* fsm,
+                              const ControlServer::StatusExtra& extra) {
+    std::string body;
     if (!fsm) {
-        return R"({"state":"unknown"})" "\n";
+        body = R"("state":"unknown")";
+    } else {
+        const auto snap = fsm->snapshot();
+        body = fmt::format(
+            R"("state":"{}","active_turn":{},"outcome":"{}",)"
+            R"("sentences_played":{},"turns_completed":{},)"
+            R"("turns_interrupted":{},"turns_discarded":{})",
+            dialogue::to_string(snap.state),
+            snap.active_turn,
+            dialogue::to_string(snap.outcome),
+            snap.sentences_played,
+            snap.turns_completed,
+            snap.turns_interrupted,
+            snap.turns_discarded);
     }
-    const auto snap = fsm->snapshot();
-    return fmt::format(
-        R"({{"state":"{}","active_turn":{},"outcome":"{}",)"
-        R"("sentences_played":{},"turns_completed":{},)"
-        R"("turns_interrupted":{},"turns_discarded":{}}}{})",
-        dialogue::to_string(snap.state),
-        snap.active_turn,
-        dialogue::to_string(snap.outcome),
-        snap.sentences_played,
-        snap.turns_completed,
-        snap.turns_interrupted,
-        snap.turns_discarded,
-        "\n");
+
+    if (extra) {
+        try {
+            auto frag = extra();
+            if (!frag.empty()) {
+                body.push_back(',');
+                body.append(frag);
+            }
+        } catch (...) {
+            // Never fail /status because of an extra-field supplier.
+        }
+    }
+
+    return "{" + body + "}\n";
 }
 
 } // namespace
@@ -54,8 +70,12 @@ struct ControlServer::Impl {
 
 ControlServer::ControlServer(const config::ControlConfig& cfg,
                              std::shared_ptr<metrics::Registry> registry,
-                             const dialogue::Fsm* fsm)
-    : registry_(std::move(registry)), fsm_(fsm), impl_(std::make_unique<Impl>()) {
+                             const dialogue::Fsm* fsm,
+                             StatusExtra status_extra)
+    : registry_(std::move(registry)),
+      fsm_(fsm),
+      status_extra_(std::move(status_extra)),
+      impl_(std::make_unique<Impl>()) {
 
     auto& server = impl_->server;
 
@@ -63,8 +83,9 @@ ControlServer::ControlServer(const config::ControlConfig& cfg,
         res.set_content(serialize_metrics(*reg), "text/plain; version=0.0.4");
     });
 
-    server.Get("/status", [fsm = fsm_](const httplib::Request&, httplib::Response& res) {
-        res.set_content(serialize_status(fsm), "application/json");
+    server.Get("/status", [fsm = fsm_, extra = status_extra_]
+               (const httplib::Request&, httplib::Response& res) {
+        res.set_content(serialize_status(fsm, extra), "application/json");
     });
 
     server.Get("/health", [](const httplib::Request&, httplib::Response& res) {

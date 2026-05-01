@@ -322,3 +322,133 @@ TEST_CASE("manager: language flows from FinalTranscript to LlmSentence") {
     mgr.stop();
     bus.shutdown();
 }
+
+// --- M2.5: pipeline gating ---
+
+TEST_CASE("manager: closed gate refuses turn, no LlmFinished, UserInterrupted published") {
+    FakeLlmServer srv;
+    // The server should NOT be hit. Stage chunks anyway so that a
+    // regression (manager submits despite the closed gate) shows up as
+    // a clear "saw sentences when we shouldn't have".
+    srv.set_chunks({
+        {sse_token("should not run"), {}},
+        {sse_done(),                   {}},
+    });
+
+    ev::EventBus bus;
+    auto cfg = make_config(srv.base_url());
+    auto mt  = open_mt();
+    llm::PromptBuilder pb(cfg, *mt);
+    llm::LlmClient client(cfg, bus);
+    dlg::TurnFactory turns;
+    dlg::Manager mgr(cfg, bus, pb, client, turns);
+
+    // Capture UserInterrupted as a signal that gating fired.
+    std::atomic<int> interrupts{0};
+    auto h = bus.subscribe<ev::UserInterrupted>({}, [&](const ev::UserInterrupted&) {
+        interrupts.fetch_add(1);
+    });
+
+    SentenceCollector  sentences(bus);
+    FinishedCollector  finished(bus);
+
+    mgr.set_pipeline_gate([]{ return false; });   // gate closed
+    mgr.start();
+
+    bus.publish(ev::FinalTranscript{
+        .turn = 0, .text = "ignored", .lang = "en", .confidence = 1.0F,
+        .audio_duration = {}, .processing_duration = {},
+    });
+
+    // Wait for the gate to take effect: gated_turns increments and
+    // UserInterrupted gets dispatched. Both happen on the subscriber
+    // thread synchronously with the FinalTranscript dispatch.
+    REQUIRE(wait_for([&]{ return mgr.gated_turns() >= 1; }));
+    REQUIRE(wait_for([&]{ return interrupts.load() >= 1; }));
+
+    // Give any phantom LLM work time to surface — none should.
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    CHECK(finished.snapshot().empty());
+    CHECK(sentences.snapshot().empty());
+
+    h->stop();
+    mgr.stop();
+    bus.shutdown();
+}
+
+TEST_CASE("manager: gate flip from closed to open lets the next turn through") {
+    FakeLlmServer srv;
+    srv.set_chunks({
+        {sse_token("Hello. "), {}},
+        {sse_done(),            {}},
+    });
+
+    ev::EventBus bus;
+    auto cfg = make_config(srv.base_url());
+    auto mt  = open_mt();
+    llm::PromptBuilder pb(cfg, *mt);
+    llm::LlmClient client(cfg, bus);
+    dlg::TurnFactory turns;
+    dlg::Manager mgr(cfg, bus, pb, client, turns);
+
+    std::atomic<bool> open{false};
+    SentenceCollector sentences(bus);
+    FinishedCollector finished(bus);
+
+    mgr.set_pipeline_gate([&]{ return open.load(); });
+    mgr.start();
+
+    // First turn is gated.
+    bus.publish(ev::FinalTranscript{
+        .turn = 0, .text = "first", .lang = "en", .confidence = 1.0F,
+        .audio_duration = {}, .processing_duration = {},
+    });
+    REQUIRE(wait_for([&]{ return mgr.gated_turns() >= 1; }));
+    CHECK(finished.snapshot().empty());
+
+    // Open the gate; the next turn should reach the LLM.
+    open.store(true);
+    bus.publish(ev::FinalTranscript{
+        .turn = 0, .text = "second", .lang = "en", .confidence = 1.0F,
+        .audio_duration = {}, .processing_duration = {},
+    });
+    REQUIRE(wait_for([&]{ return !finished.snapshot().empty(); }));
+    auto fin = finished.snapshot();
+    REQUIRE(fin.size() == 1);
+    CHECK_FALSE(fin[0].cancelled);
+    CHECK(mgr.gated_turns() == 1);   // unchanged
+
+    mgr.stop();
+    bus.shutdown();
+}
+
+TEST_CASE("manager: throwing gate predicate is treated as open") {
+    FakeLlmServer srv;
+    srv.set_chunks({
+        {sse_token("ok. "), {}},
+        {sse_done(),         {}},
+    });
+
+    ev::EventBus bus;
+    auto cfg = make_config(srv.base_url());
+    auto mt  = open_mt();
+    llm::PromptBuilder pb(cfg, *mt);
+    llm::LlmClient client(cfg, bus);
+    dlg::TurnFactory turns;
+    dlg::Manager mgr(cfg, bus, pb, client, turns);
+
+    FinishedCollector finished(bus);
+
+    mgr.set_pipeline_gate([]() -> bool { throw std::runtime_error("boom"); });
+    mgr.start();
+
+    bus.publish(ev::FinalTranscript{
+        .turn = 0, .text = "ping", .lang = "en", .confidence = 1.0F,
+        .audio_duration = {}, .processing_duration = {},
+    });
+    REQUIRE(wait_for([&]{ return !finished.snapshot().empty(); }));
+    CHECK(mgr.gated_turns() == 0);
+
+    mgr.stop();
+    bus.shutdown();
+}

@@ -21,6 +21,7 @@ add_library(acva_core STATIC
     memory/summarizer.cpp
     metrics/registry.cpp
     pipeline/fake_driver.cpp
+    supervisor/keep_alive.cpp
     supervisor/probe.cpp
     supervisor/service.cpp
     supervisor/supervisor.cpp

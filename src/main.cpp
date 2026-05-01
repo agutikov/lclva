@@ -15,6 +15,10 @@
 #include "memory/summarizer.hpp"
 #include "metrics/registry.hpp"
 #include "pipeline/fake_driver.hpp"
+#include "supervisor/keep_alive.hpp"
+#include "supervisor/probe.hpp"
+#include "supervisor/service.hpp"
+#include "supervisor/supervisor.hpp"
 
 #include <fmt/format.h>
 #include <unistd.h>
@@ -167,12 +171,110 @@ int main(int argc, char** argv) {
         });
     metric_subs.push_back(fsm_metric_sub);
 
+    // ----- M2: Supervisor -----
+    //
+    // One HttpProbe shared by every ServiceMonitor — it carries no
+    // per-call state and uses the supervisor-wide probe_timeout_ms.
+    // Wrapped in a shared_ptr so the ProbeFn closure keeps it alive
+    // for the entire process lifetime.
+    auto http_probe = std::make_shared<acva::supervisor::HttpProbe>(
+        std::chrono::milliseconds(cfg.supervisor.probe_timeout_ms));
+    acva::supervisor::ProbeFn probe_fn = [http_probe](std::string_view url) {
+        return http_probe->get(url);
+    };
+
+    acva::supervisor::Supervisor supervisor(cfg.supervisor, bus, probe_fn);
+    supervisor.register_service(
+        acva::supervisor::ServiceConfig::from_health("llm", cfg.llm.health));
+    supervisor.register_service(
+        acva::supervisor::ServiceConfig::from_health("stt", cfg.stt.health));
+    supervisor.register_service(
+        acva::supervisor::ServiceConfig::from_health("tts", cfg.tts.health));
+
+    // Pre-create the per-service health gauges so /metrics shows the
+    // full grid before the first probe lands.
+    if (!cfg.llm.health.health_url.empty()) registry->register_service_for_health("llm");
+    if (!cfg.stt.health.health_url.empty()) registry->register_service_for_health("stt");
+    if (!cfg.tts.health.health_url.empty()) registry->register_service_for_health("tts");
+
+    // Mirror HealthChanged events into the metric.
+    {
+        acva::event::SubscribeOptions opts;
+        opts.name = "metrics.health";
+        opts.queue_capacity = 64;
+        opts.policy = acva::event::OverflowPolicy::DropOldest;
+        auto h = bus.subscribe<acva::event::HealthChanged>(opts,
+            [registry](const acva::event::HealthChanged& e) {
+                const char* s = "unknown";
+                switch (e.state) {
+                    case acva::event::HealthState::Unknown:   s = "unknown";   break;
+                    case acva::event::HealthState::Healthy:   s = "healthy";   break;
+                    case acva::event::HealthState::Degraded:  s = "degraded";  break;
+                    case acva::event::HealthState::Unhealthy: s = "unhealthy"; break;
+                }
+                registry->set_health_state(e.service, s);
+            });
+        metric_subs.push_back(h);
+    }
+
+    // Pipeline-state metric updater. Polls supervisor.pipeline_state()
+    // on every event so the gauge stays current; cheap because both
+    // calls are atomic loads.
+    {
+        acva::event::SubscribeOptions opts;
+        opts.name = "metrics.pipeline";
+        opts.queue_capacity = 64;
+        opts.policy = acva::event::OverflowPolicy::DropOldest;
+        auto h = bus.subscribe_all(opts,
+            [registry, &supervisor](const acva::event::Event&) {
+                registry->set_pipeline_state(std::string(
+                    acva::supervisor::to_string(supervisor.pipeline_state())).c_str());
+            });
+        metric_subs.push_back(h);
+    }
+
+    supervisor.start();
+
+    // Build the /status JSON-extra closure: services array + pipeline_state.
+    // Lambda captures `&supervisor` by reference; lifetime is fine because
+    // the ControlServer is destroyed before the supervisor.
+    auto status_extra = [&supervisor]() -> std::string {
+        const auto snap = supervisor.snapshot();
+        std::string out = "\"pipeline_state\":\"";
+        out.append(acva::supervisor::to_string(snap.pipeline_state));
+        out.append("\",\"services\":[");
+        for (std::size_t i = 0; i < snap.services.size(); ++i) {
+            const auto& s = snap.services[i];
+            const auto last_ok_ms_ago =
+                s.last_ok_at.time_since_epoch().count() == 0
+                    ? -1
+                    : std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::steady_clock::now() - s.last_ok_at).count();
+            if (i) out.push_back(',');
+            out += fmt::format(
+                R"({{"name":"{}","state":"{}","last_ok_ms_ago":{},)"
+                R"("consecutive_failures":{},"total_probes":{},)"
+                R"("total_failures":{},"last_http_status":{}}})",
+                s.name,
+                acva::supervisor::to_string(s.state),
+                last_ok_ms_ago,
+                s.consecutive_failures,
+                s.total_probes,
+                s.total_failures,
+                s.last_http_status);
+        }
+        out.push_back(']');
+        return out;
+    };
+
     // HTTP control plane (/metrics, /status, /health).
     std::unique_ptr<acva::http::ControlServer> control;
     try {
-        control = std::make_unique<acva::http::ControlServer>(cfg.control, registry, &fsm);
+        control = std::make_unique<acva::http::ControlServer>(
+            cfg.control, registry, &fsm, status_extra);
     } catch (const std::exception& ex) {
         acva::log::error("main", fmt::format("control server failed to start: {}", ex.what()));
+        supervisor.stop();
         fsm.stop();
         bus.shutdown();
         return EXIT_FAILURE;
@@ -199,6 +301,7 @@ int main(int argc, char** argv) {
     std::unique_ptr<acva::dialogue::Manager> manager;
     std::unique_ptr<acva::dialogue::TurnWriter> turn_writer;
     std::unique_ptr<acva::memory::Summarizer> summarizer;
+    std::unique_ptr<acva::supervisor::KeepAlive> keep_alive;
     std::thread stdin_reader;
 
     if (args.stdin_mode) {
@@ -225,9 +328,32 @@ int main(int argc, char** argv) {
         manager->set_session(session_id);
         turn_writer->set_session(session_id);
         summarizer->set_session(session_id);
+
+        // M2: pipeline gating + LLM keep-alive. The gate refuses new
+        // turns when the supervisor reports pipeline_state==Failed; the
+        // keep-alive timer pings llama every keep_alive_interval_seconds
+        // while the FSM is Listening so the model stays loaded.
+        manager->set_pipeline_gate([&supervisor]{
+            return supervisor.pipeline_state()
+                != acva::supervisor::PipelineState::Failed;
+        });
+
+        keep_alive = std::make_unique<acva::supervisor::KeepAlive>(
+            acva::supervisor::KeepAlive::Options{
+                .interval = std::chrono::milliseconds(
+                    cfg.llm.keep_alive_interval_seconds * 1000ULL),
+                .should_fire = [&fsm]{
+                    return fsm.snapshot().state == acva::dialogue::State::Listening;
+                },
+                .on_tick = [client = llm_client.get()]{ client->keep_alive(); },
+                .on_fired   = [registry]{ registry->on_keep_alive(/*fired*/ true); },
+                .on_skipped = [registry]{ registry->on_keep_alive(/*fired*/ false); },
+            });
+
         manager->start();
         turn_writer->start();
         summarizer->start();
+        keep_alive->start();
 
         if (!llm_client->probe()) {
             acva::log::info("main",
@@ -279,9 +405,11 @@ int main(int argc, char** argv) {
     if (fake_driver) {
         fake_driver->stop();
     }
+    if (keep_alive)  keep_alive->stop();   // before llm_client teardown
     if (manager)     manager->stop();
     if (turn_writer) turn_writer->stop();
     if (summarizer)  summarizer->stop();
+    supervisor.stop();
     fsm.stop();
     control.reset();
     bus.shutdown();

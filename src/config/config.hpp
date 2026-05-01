@@ -29,9 +29,9 @@ struct ControlConfig {
 
 struct PipelineConfig {
     // Drive the FSM with synthetic events (no real audio/STT/LLM/TTS).
-    // The default in the YAML config is true at M0 since no real backends
-    // are wired yet.
-    bool fake_driver_enabled = true;
+    // Default off — useful only as an M0-era demo. Set to true in YAML
+    // to exercise the FSM end-to-end without configuring backends.
+    bool fake_driver_enabled = false;
     // Sentences per synthetic turn.
     uint32_t fake_sentences_per_turn = 3;
     // Idle between synthetic turns, in ms.

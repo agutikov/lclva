@@ -23,10 +23,14 @@ the project root as cwd and a successful `./build.sh` (= dev preset).
 ### M0 ✅ — skeleton runs end-to-end on synthetic events
 
 The orchestrator boots, the FSM cycles, and the control plane answers.
-No LLM, no audio, no SQLite — but the scaffolding is real.
+No LLM, no audio, no SQLite — but the scaffolding is real. The fake
+driver ships off by default; flip it on for an M0-style demo:
 
 ```sh
-./_build/dev/acva --config config/default.yaml      # fake_driver_enabled: true
+# Enable the synthetic FSM driver via config (default is off):
+sed -i 's/fake_driver_enabled: false/fake_driver_enabled: true/' \
+    config/default.yaml
+./_build/dev/acva
 # in another terminal:
 curl -s http://127.0.0.1:9876/health              # → "ok"
 curl -s http://127.0.0.1:9876/status | jq         # FSM state + turn counters tick

@@ -58,14 +58,13 @@ struct CliArgs {
     // then ./config/default.yaml, then /etc/acva/default.yaml).
     std::filesystem::path config_path;
     bool show_help = false;
-    bool no_fake_driver = false; // override config to disable
     bool stdin_mode = false;     // M1: read FinalTranscript lines from stdin
 };
 
 void print_help() {
     std::cout << "acva — Autonomous Conversational Voice Agent\n"
                  "\n"
-                 "Usage: acva [--config PATH] [--no-fake-driver] [--stdin]\n"
+                 "Usage: acva [--config PATH] [--stdin]\n"
                  "\n"
                  "Options:\n"
                  "  --config PATH        YAML config file. If omitted, search:\n"
@@ -73,10 +72,12 @@ void print_help() {
                  "                         ./config/default.yaml,\n"
                  "                         /etc/acva/default.yaml\n"
                  "                       (first existing path wins).\n"
-                 "  --no-fake-driver     Disable the synthetic pipeline driver (M0)\n"
                  "  --stdin              Read FinalTranscript lines from stdin and drive\n"
-                 "                       the real LLM (implies --no-fake-driver). M1 mode.\n"
-                 "  -h, --help           Show this help and exit\n";
+                 "                       the real LLM. M1 mode.\n"
+                 "  -h, --help           Show this help and exit\n"
+                 "\n"
+                 "To exercise the FSM without backends, set\n"
+                 "`pipeline.fake_driver_enabled: true` in the YAML.\n";
 }
 
 CliArgs parse_args(int argc, char** argv) {
@@ -85,11 +86,8 @@ CliArgs parse_args(int argc, char** argv) {
         std::string a = argv[i];
         if (a == "-h" || a == "--help") {
             args.show_help = true;
-        } else if (a == "--no-fake-driver") {
-            args.no_fake_driver = true;
         } else if (a == "--stdin") {
             args.stdin_mode = true;
-            args.no_fake_driver = true;
         } else if (a == "--config" && i + 1 < argc) {
             args.config_path = argv[++i];
         } else if (a.starts_with("--config=")) {
@@ -129,7 +127,10 @@ int main(int argc, char** argv) {
     }
     auto cfg = std::get<acva::config::Config>(std::move(load_result));
 
-    if (args.no_fake_driver) {
+    // --stdin still implies "fake driver off", since the user is the
+    // event source. Without this the synthetic driver would race the
+    // typed input.
+    if (args.stdin_mode) {
         cfg.pipeline.fake_driver_enabled = false;
     }
 

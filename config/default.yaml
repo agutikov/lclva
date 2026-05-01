@@ -21,7 +21,10 @@ control:
   port: 9876
 
 pipeline:
-  fake_driver_enabled: true       # M0: drive FSM with synthetic events
+  # Synthetic FSM driver. Set to true to exercise the dialogue path
+  # end-to-end without any real backends — useful for M0/M2 demos and
+  # for verifying observability before bringing up Compose / audio.
+  fake_driver_enabled: false
   fake_sentences_per_turn: 3
   fake_idle_between_turns_ms: 1500
   fake_barge_in_probability: 0.0  # 0..1; e.g. 0.2 for 20% chance of barge-in

@@ -250,7 +250,7 @@ utterance:
 1. Speaking briefly into the mic produces exactly one `SpeechStarted` and one `SpeechEnded` event with `~300 ms` pre-padding included in the utterance.
 2. False starts (background TV at low volume) are filtered out: `voice_vad_false_starts_total` increments instead.
 3. Soak (10 minutes of intermittent speech): no audio underruns at the playback side, no SPSC ring overflows, `voice_queue_depth` for audio frames stays under 50% of capacity.
-4. With `--no-fake-driver` and headphones plugged in, drive an end-to-end turn: speak → see VAD endpoint → wait for fake STT → hear synthetic LLM reply. (Real STT lands in M5.)
+4. With `pipeline.fake_driver_enabled: false` and headphones plugged in, drive an end-to-end turn: speak → see VAD endpoint → wait for fake STT → hear synthetic LLM reply. (Real STT lands in M5.)
 5. Endpoint timing P95 is within 100 ms of an external ground-truth measurement on a recorded fixture.
 
 ## Risks specific to M4

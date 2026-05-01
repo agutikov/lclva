@@ -38,7 +38,7 @@ digraph Infra {
           fillcolor="#FACC15", fontcolor="#78350F", shape=note];
     Env  [label=".env\nACVA_MODELS_DIR\nACVA_VOICES_DIR\nACVA_LLM_MODEL\nACVA_WHISPER_MODEL\nACVA_PIPER_VOICE",
           fillcolor="#EAB308", fontcolor="#422006", shape=note];
-    Cli  [label="CLI flags\n--config / --no-fake-driver / --stdin",
+    Cli  [label="CLI flags\n--config / --stdin",
           fillcolor="#FDE68A", fontcolor="#78350F", shape=note];
     Composey [label="compose.yaml\n→ packaging/compose/\n  docker-compose.yml",
               fillcolor="#CA8A04", fontcolor=white, shape=note];

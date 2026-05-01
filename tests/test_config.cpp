@@ -174,3 +174,111 @@ supervisor:
     CHECK(std::get<LoadError>(r).message.find("supervisor.probe_timeout_ms")
           != std::string::npos);
 }
+
+// --- M3: tts.voices, audio, playback ---
+
+TEST_CASE("config: M3 defaults") {
+    auto r = load_from_string("logging: {}\ncontrol: {}\n");
+    REQUIRE(std::holds_alternative<Config>(r));
+    auto& cfg = std::get<Config>(r);
+    CHECK(cfg.tts.voices.empty());
+    CHECK(cfg.tts.fallback_lang == "en");
+    CHECK(cfg.tts.request_timeout_seconds == 10);
+    CHECK(cfg.audio.output_device == "default");
+    CHECK(cfg.audio.sample_rate_hz == 48000);
+    CHECK(cfg.audio.buffer_frames == 480);
+    CHECK(cfg.playback.max_queue_chunks == 64);
+    CHECK(cfg.playback.underrun_log_throttle_ms == 1000);
+    CHECK(cfg.dialogue.max_tts_queue_sentences == 3);
+}
+
+TEST_CASE("config: tts.voices map parses") {
+    constexpr auto yaml = R"(
+logging: {}
+control: {}
+tts:
+  voices:
+    en: { url: "http://127.0.0.1:8083" }
+    ru: { url: "http://127.0.0.1:8084" }
+  fallback_lang: en
+  request_timeout_seconds: 7
+)";
+    auto r = load_from_string(yaml);
+    REQUIRE(std::holds_alternative<Config>(r));
+    auto& cfg = std::get<Config>(r);
+    REQUIRE(cfg.tts.voices.size() == 2);
+    CHECK(cfg.tts.voices.at("en").url == "http://127.0.0.1:8083");
+    CHECK(cfg.tts.voices.at("ru").url == "http://127.0.0.1:8084");
+    CHECK(cfg.tts.fallback_lang == "en");
+    CHECK(cfg.tts.request_timeout_seconds == 7);
+}
+
+TEST_CASE("config: tts.voices URL without scheme rejected") {
+    constexpr auto yaml = R"(
+logging: {}
+control: {}
+tts:
+  voices:
+    en: { url: "127.0.0.1:8083" }
+  fallback_lang: en
+)";
+    auto r = load_from_string(yaml);
+    REQUIRE(std::holds_alternative<LoadError>(r));
+    CHECK(std::get<LoadError>(r).message.find("tts.voices[en].url")
+          != std::string::npos);
+    CHECK(std::get<LoadError>(r).message.find("scheme")
+          != std::string::npos);
+}
+
+TEST_CASE("config: tts.fallback_lang must point to a configured voice") {
+    constexpr auto yaml = R"(
+logging: {}
+control: {}
+tts:
+  voices:
+    ru: { url: "http://127.0.0.1:8084" }
+  fallback_lang: en
+)";
+    auto r = load_from_string(yaml);
+    REQUIRE(std::holds_alternative<LoadError>(r));
+    CHECK(std::get<LoadError>(r).message.find("tts.fallback_lang")
+          != std::string::npos);
+}
+
+TEST_CASE("config: empty tts.voices skips fallback validation") {
+    // No TTS configured at all is a valid state — M3 path is just disabled.
+    constexpr auto yaml = R"(
+logging: {}
+control: {}
+tts:
+  fallback_lang: zz
+)";
+    auto r = load_from_string(yaml);
+    REQUIRE(std::holds_alternative<Config>(r));
+}
+
+TEST_CASE("config: zero audio.sample_rate_hz rejected") {
+    constexpr auto yaml = R"(
+logging: {}
+control: {}
+audio:
+  sample_rate_hz: 0
+)";
+    auto r = load_from_string(yaml);
+    REQUIRE(std::holds_alternative<LoadError>(r));
+    CHECK(std::get<LoadError>(r).message.find("audio.sample_rate_hz")
+          != std::string::npos);
+}
+
+TEST_CASE("config: zero playback.max_queue_chunks rejected") {
+    constexpr auto yaml = R"(
+logging: {}
+control: {}
+playback:
+  max_queue_chunks: 0
+)";
+    auto r = load_from_string(yaml);
+    REQUIRE(std::holds_alternative<LoadError>(r));
+    CHECK(std::get<LoadError>(r).message.find("playback.max_queue_chunks")
+          != std::string::npos);
+}

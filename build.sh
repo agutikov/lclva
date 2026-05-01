@@ -39,7 +39,7 @@ cd "$(dirname "$0")"
 cmake --preset "$PRESET"
 
 # Build.
-cmake --build --preset "$PRESET" "$@"
+cmake --build -j8 --preset "$PRESET" "$@"
 
 # Refresh the top-level compile_commands.json symlink for clangd. The
 # build always emits one under _build/<preset>/; we make the active

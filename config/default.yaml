@@ -62,6 +62,27 @@ tts:
     probe_interval_healthy_ms: 5000
     probe_interval_degraded_ms: 1000
     degraded_max_failures: 3
+  # Per-language voice routing. Upstream piper.http_server only loads
+  # one voice per process, so each language gets its own Compose
+  # service on its own port. Drop a row here when you add a voice
+  # container; if voices is empty, the M3 TTS path stays disabled.
+  voices: {}
+  # voices:
+  #   en: { url: "http://127.0.0.1:8083" }
+  #   ru: { url: "http://127.0.0.1:8084" }
+  fallback_lang: en
+  request_timeout_seconds: 10
+
+# M3 — audio output + playback queue tuning. Capture lives in audio.input
+# under M4; only output knobs ship in M3.
+audio:
+  output_device: default     # "default" | substring of device name | "none" (skips PortAudio init)
+  sample_rate_hz: 48000
+  buffer_frames: 480         # 10 ms @ 48 kHz
+
+playback:
+  max_queue_chunks: 64       # ~640 ms ahead of the audio cb
+  underrun_log_throttle_ms: 1000
 
 supervisor:
   pipeline_fail_grace_seconds: 30

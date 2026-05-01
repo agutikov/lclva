@@ -141,6 +141,44 @@ std::optional<LoadError> validate(const Config& cfg) {
             "config: dialogue.system_prompts: must contain an entry for the fallback_language ('"
             + cfg.dialogue.fallback_language + "')"};
     }
+
+    // M3 — TTS / audio / playback knobs.
+    if (cfg.tts.request_timeout_seconds == 0) {
+        return LoadError{"config: tts.request_timeout_seconds: must be > 0"};
+    }
+    for (const auto& [lang, voice] : cfg.tts.voices) {
+        if (voice.url.empty()) {
+            return LoadError{"config: tts.voices[" + lang + "].url: must be non-empty"};
+        }
+        // Same scheme requirement as the supervisor probes — guards
+        // against accidentally writing "127.0.0.1:8083" without a
+        // scheme, which httplib would silently swallow.
+        if (voice.url.find("://") == std::string::npos) {
+            return LoadError{"config: tts.voices[" + lang
+                + "].url: must include scheme (http://...)"};
+        }
+    }
+    // If tts.voices is non-empty, the fallback_lang must point to one
+    // of them — otherwise PiperClient would have no route at all when
+    // the detected language is missing from the map.
+    if (!cfg.tts.voices.empty()
+        && !cfg.tts.voices.contains(cfg.tts.fallback_lang)) {
+        return LoadError{
+            "config: tts.fallback_lang ('" + cfg.tts.fallback_lang
+            + "') must match one of tts.voices keys"};
+    }
+    if (cfg.audio.sample_rate_hz == 0) {
+        return LoadError{"config: audio.sample_rate_hz: must be > 0"};
+    }
+    if (cfg.audio.buffer_frames == 0) {
+        return LoadError{"config: audio.buffer_frames: must be > 0"};
+    }
+    if (cfg.playback.max_queue_chunks == 0) {
+        return LoadError{"config: playback.max_queue_chunks: must be > 0"};
+    }
+    if (cfg.dialogue.max_tts_queue_sentences == 0) {
+        return LoadError{"config: dialogue.max_tts_queue_sentences: must be > 0"};
+    }
     return std::nullopt;
 }
 

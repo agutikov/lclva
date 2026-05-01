@@ -1,5 +1,6 @@
 # Core library — everything except main(). Tests link against this.
 add_library(acva_core STATIC
+    audio/resampler.cpp
     config/config.cpp
     config/paths.cpp
     dialogue/fsm.cpp
@@ -26,6 +27,7 @@ add_library(acva_core STATIC
     supervisor/probe.cpp
     supervisor/service.cpp
     supervisor/supervisor.cpp
+    tts/piper_client.cpp
 )
 
 target_include_directories(acva_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -41,6 +43,8 @@ target_link_libraries(acva_core
         CURL::libcurl
         Threads::Threads
     PRIVATE
+        PkgConfig::portaudio
+        PkgConfig::soxr
         acva_httplib
         acva_warnings
 )

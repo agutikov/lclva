@@ -13,6 +13,14 @@ find_package(SQLite3 REQUIRED)
 find_package(CURL REQUIRED)
 find_package(Threads REQUIRED)
 
+# M3 — audio output. PortAudio drives the realtime playback callback;
+# soxr handles 22.05 (Piper) → 48 kHz (device), reused in M4 for the
+# 48 → 16 kHz capture path. Both ship as system pkg-config modules on
+# Manjaro/Arch and Ubuntu — no vendoring.
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(portaudio REQUIRED IMPORTED_TARGET portaudio-2.0)
+pkg_check_modules(soxr      REQUIRED IMPORTED_TARGET soxr)
+
 # cpp-httplib is vendored as a single header in third_party/cpp-httplib.
 # Used for the HTTP control plane — civetweb symbols inside prometheus-cpp
 # aren't exported, so we run our own HTTP server. Marked SYSTEM so the

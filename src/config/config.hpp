@@ -73,8 +73,22 @@ struct SttConfig {
     ServiceHealthConfig health;
 };
 
+// One Piper service per language. Upstream `piper.http_server` only
+// loads one voice per process, so each language gets its own port and
+// container. The PiperClient picks the URL by detected language.
+struct TtsVoice {
+    std::string url;
+};
+
 struct TtsConfig {
     ServiceHealthConfig health;
+    // Map of BCP-47 language code → voice service. Empty in default
+    // config; populated explicitly by the user / packaging script as
+    // each language gets a Piper container.
+    std::map<std::string, TtsVoice> voices;
+    // Used when the detected language has no entry in `voices`.
+    std::string fallback_lang = "en";
+    uint32_t request_timeout_seconds = 10;
 };
 
 struct SupervisorConfig {
@@ -120,10 +134,34 @@ struct DialogueConfig {
     uint32_t recent_turns_n = 10;
     uint32_t max_assistant_sentences = 6;
     uint32_t max_assistant_tokens = 400;
+    // Backpressure on the TTS path: when the playback queue depth
+    // crosses this, the dialogue layer pauses pulling more sentences
+    // off the LLM stream. Independent of max_assistant_sentences.
+    uint32_t max_tts_queue_sentences = 3;
     std::string fallback_language = "en";
     // Map of lang code → system-prompt text. English is required.
     std::map<std::string, std::string> system_prompts;
     SentenceSplitterConfig sentence_splitter;
+};
+
+struct AudioConfig {
+    // PortAudio device selector. "default" → host default; otherwise
+    // matched by name substring (case-insensitive). Empty == "default".
+    std::string output_device = "default";
+    uint32_t sample_rate_hz = 48000;
+    // Frames-per-callback for the PortAudio output stream. 480 frames
+    // = 10 ms at 48 kHz. Larger = more headroom against underruns;
+    // smaller = lower playback start latency.
+    uint32_t buffer_frames = 480;
+};
+
+struct PlaybackConfig {
+    // Hard cap on chunks queued ahead of the audio callback. At ~10 ms
+    // per chunk this is ~640 ms of audio.
+    uint32_t max_queue_chunks = 64;
+    // Throttle window for the "underrun" log line so a stuck pipeline
+    // doesn't spam the logs.
+    uint32_t underrun_log_throttle_ms = 1000;
 };
 
 struct Config {
@@ -136,6 +174,8 @@ struct Config {
     SupervisorConfig supervisor;
     MemoryConfig memory;
     DialogueConfig dialogue;
+    AudioConfig audio;
+    PlaybackConfig playback;
 };
 
 struct LoadError {

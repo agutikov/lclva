@@ -100,7 +100,11 @@ struct MemoryFactsConfig {
 };
 
 struct MemoryConfig {
-    std::string db_path = "${XDG_DATA_HOME:-~/.local/share}/acva/acva.db";
+    // Empty → resolved to ${XDG_DATA_HOME:-$HOME/.local/share}/acva/acva.db
+    // at startup via config::resolve_data_path. Relative paths are
+    // resolved against the same XDG root. Absolute paths are used as-is.
+    // The resolver `mkdir -p`s the parent directory for first-run UX.
+    std::string db_path;
     uint32_t recent_turns_n = 10;
     uint32_t write_queue_capacity = 256;
     MemorySummaryConfig summary;

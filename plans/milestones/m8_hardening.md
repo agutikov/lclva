@@ -122,7 +122,7 @@ Two deployment paths ship side-by-side; both have been informally validated sinc
   - `.env.example` documented.
 - `scripts/dev-up.sh` — `cd packaging/compose && docker compose up -d`, plus a model-availability check.
 - `scripts/dev-down.sh` — symmetric.
-- The orchestrator continues to run as a host CLI (`./build/release/acva --config ...`).
+- The orchestrator continues to run as a host CLI (`./_build/release/acva --config ...`).
 
 ### Production path: systemd units (alternative)
 
@@ -166,7 +166,7 @@ The big one is the soak test (Step 1). On top of that:
 3. **Wipe works.** `POST /wipe?all=true` empties the database and audio dir; new turns create a fresh session.
 4. **OTLP traces visible** in a local otelcol when enabled; no impact when disabled.
 5. **Both deployment paths work** end-to-end on a clean Manjaro and a clean Ubuntu 24.04 VM:
-   - Docker Compose: `docker compose up -d && ./scripts/dev-up.sh` brings up backends; `./build/release/acva` connects on the host.
+   - Docker Compose: `docker compose up -d && ./scripts/dev-up.sh` brings up backends; `./_build/release/acva` connects on the host.
    - systemd: `./scripts/install-systemd.sh && systemctl --user start acva.target` brings up the full stack as units; `systemctl --user status` shows all four `active (running)`.
 6. **Documentation complete.** A new contributor can read README + architecture.md and understand the system.
 

@@ -68,9 +68,11 @@ supervisor:
   probe_timeout_ms: 3000
 
 memory:
-  # Resolved relative to CWD if not absolute. Production deployments should
-  # set an absolute path under XDG_DATA_HOME.
-  db_path: "acva.db"
+  # Empty (or relative) → resolved to
+  #   ${XDG_DATA_HOME:-$HOME/.local/share}/acva/<value>
+  # at startup. Set an absolute path to override (e.g. for tests or
+  # multi-tenant installs). The parent directory is created on first run.
+  db_path: ""
   recent_turns_n: 10
   write_queue_capacity: 256
   summary:

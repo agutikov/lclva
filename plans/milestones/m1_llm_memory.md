@@ -422,7 +422,7 @@ Existing `info(component, message)` call sites stay unchanged.
 
 ## Acceptance for M1 (full)
 
-1. With `docker compose up` running, `./build/dev/acva --config config/dev.yaml` accepts text input on stdin, streams an answer logged as `LlmSentence` events, and writes both turns to SQLite with `status='committed'`.
+1. With `docker compose up` running, `./_build/dev/acva --config config/dev.yaml` accepts text input on stdin, streams an answer logged as `LlmSentence` events, and writes both turns to SQLite with `status='committed'`.
 2. Killing the orchestrator mid-turn and restarting it: recovery sweep marks the in-flight turn `interrupted`, the next session opens cleanly, prior session's `ended_at` set.
 3. `tests/test_sentence_splitter.cpp` golden corpus passes. ✅ (slice 1)
 4. SSE cancellation: setting the turn's cancellation token mid-stream causes the LLM client to abort and emit `LlmFinished{ cancelled=true }` within 100 ms.

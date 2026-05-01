@@ -5,14 +5,154 @@ Detailed per-milestone plans. The high-level table lives in `../project_design.m
 | #  | File | Status      |
 |----|------|-------------|
 | M0 | `m0_skeleton.md` | ✅ landed   |
-| M1 | `m1_llm_memory.md` | next      |
-| M2 | `m2_supervision.md` | planned   |
-| M3 | `m3_tts_playback.md` | planned   |
-| M4 | `m4_audio_vad.md` | planned   |
-| M5 | `m5_streaming_stt.md` | planned   |
+| M1 | `m1_llm_memory.md` | ✅ landed   |
+| M2 | `m2_supervision.md` | ✅ landed   |
+| M3 | `m3_tts_playback.md` | next      |
+| M4 | `m4_audio_vad.md` | planned    |
+| M5 | `m5_streaming_stt.md` | planned  |
 | M6 | `m6_aec.md` | planned     |
 | M7 | `m7_barge_in.md` | planned     |
 | M8 | `m8_hardening.md` | planned    |
+
+## What you can try after each milestone
+
+A short tour of the user-touchable surface each milestone delivers — the
+shortest commands that exercise its headline feature. All commands assume
+the project root as cwd and a successful `./build.sh` (= dev preset).
+
+### M0 ✅ — skeleton runs end-to-end on synthetic events
+
+The orchestrator boots, the FSM cycles, and the control plane answers.
+No LLM, no audio, no SQLite — but the scaffolding is real.
+
+```sh
+./_build/dev/acva --config config/default.yaml      # fake_driver_enabled: true
+# in another terminal:
+curl -s http://127.0.0.1:9876/health              # → "ok"
+curl -s http://127.0.0.1:9876/status | jq         # FSM state + turn counters tick
+curl -s http://127.0.0.1:9876/metrics | grep voice_turns_total
+```
+
+Watch the JSON-per-line log on stderr stream `fsm <prev> -> <next>`
+transitions; `voice_turns_total{outcome="completed"}` increments roughly
+once per `fake_idle_between_turns_ms`.
+
+### M1 ✅ — talk to a real LLM, memory persists across restarts
+
+Bring up the compose stack (llama+whisper+piper containers), then drive
+the orchestrator from stdin and watch streamed sentences come back.
+
+```sh
+cd packaging/compose && docker compose up -d      # one-time pull, then warm starts
+cd ../..
+./_build/dev/acva --stdin --config config/default.yaml
+> what's the weather like on the moon?            # watch sentences stream back
+> ^D                                              # clean exit; session closes
+sqlite3 acva.db "select id, role, lang, status, substr(text,1,40) from turns;"
+./_build/dev/acva --stdin --config config/default.yaml   # second run inherits memory
+```
+
+Kill the binary mid-turn (`kill -9`) and restart: the startup recovery
+sweep flips the dangling `in_progress` turn to `interrupted`. The
+`voice_llm_first_token_ms` histogram populates on the first reply.
+
+### M2 ✅ — supervision + dialogue gating + keep-alive
+
+The supervisor probes each backend's `/health`, gates the dialogue path
+when a critical backend goes unhealthy, and pings the LLM during idle to
+keep it warm.
+
+```sh
+./_build/dev/acva --stdin --config config/default.yaml &   # backends already up
+curl -s http://127.0.0.1:9876/status | jq '.pipeline_state, .services'
+curl -s http://127.0.0.1:9876/metrics | grep -E 'voice_(health_state|pipeline_state|llm_keepalive)'
+
+# Force-fail the LLM and watch gating kick in:
+docker compose -f packaging/compose/docker-compose.yml stop llama
+# Within ~5 s: services[].state flips to "degraded", then "unhealthy"
+# After supervisor.pipeline_fail_grace_seconds: pipeline_state → "failed".
+# Type a stdin line — refused, one log line per minute.
+
+docker compose -f packaging/compose/docker-compose.yml start llama
+# Recovers within a couple of probe intervals; pipeline_state → "ok".
+```
+
+Idle the dialogue and watch `voice_llm_keepalive_total{outcome="fired"}`
+tick once every `cfg.llm.keep_alive_interval_seconds`.
+
+### M3 (next) — Piper TTS + playback queue
+
+Typed-in or LLM-generated sentences will be spoken through the speakers
+via Piper, with per-language voice routing and a sequence-tagged
+playback queue.
+
+```sh
+./_build/dev/acva --stdin --config config/default.yaml
+> hi, how are you?              # plays back through the default audio device
+> ¿qué tal?                     # routes to es voice if cfg.tts.voices[es] is set
+curl -s http://127.0.0.1:9876/metrics | grep voice_tts_first_audio_ms
+```
+
+### M4 (planned) — mic capture + VAD endpointing
+
+Speak into the mic; the orchestrator emits `SpeechStarted` /
+`SpeechEnded`, captures the utterance, and shows it via `/status`. STT
+isn't wired yet — the fake driver still supplies the transcript.
+
+```sh
+./_build/dev/acva --config config/default.yaml      # fake_driver gives transcript
+# Speak. JSON log lines `event:"speech_started"` / `"speech_ended"` appear.
+curl -s http://127.0.0.1:9876/metrics | grep -E 'voice_vad_(false_starts|onsets)_total'
+```
+
+### M5 (planned) — streaming STT + speculation
+
+End-to-end voice conversation in any language Whisper handles: speak a
+question, hear a spoken answer. Speculation may start the LLM on a
+stable partial before the final transcript lands.
+
+```sh
+./_build/dev/acva --config config/default.yaml
+# Speak in English, then Russian. Replies come back in the spoken language.
+curl -s http://127.0.0.1:9876/metrics | grep -E 'voice_(stt_partials|speculation_(kept|restarted))_total'
+```
+
+### M6 (planned) — AEC clears speaker echo
+
+The assistant's own voice through speakers no longer triggers VAD. You
+can hold a hands-free conversation without headphones.
+
+```sh
+./_build/dev/acva --config config/default.yaml
+# Use built-in speakers (no headphones). Long replies don't self-trigger.
+curl -s http://127.0.0.1:9876/metrics | grep -E 'voice_aec_(delay_estimate_ms|erle_db)'
+```
+
+### M7 (planned) — barge-in
+
+Interrupt the assistant mid-sentence by speaking. Playback drains within
+a few hundred milliseconds; the assistant turn is persisted as
+`Interrupted` (or `Discarded` if no sentence finished).
+
+```sh
+./_build/dev/acva --config config/default.yaml
+# Ask a long question; speak again while the answer plays.
+curl -s http://127.0.0.1:9876/metrics | grep voice_barge_in_latency_ms
+sqlite3 acva.db "select id, status, interrupted_at_sentence from turns order by id desc limit 5;"
+```
+
+### M8 (planned) — production hardening
+
+Long-running soak harness, hot-reload, privacy commands, and a packaged
+deployment.
+
+```sh
+scripts/soak.sh 4h                                # 4-hour scripted exchange
+curl -X POST http://127.0.0.1:9876/reload         # safe field hot-reload
+curl -X POST http://127.0.0.1:9876/mute           # toggle VAD intake
+curl -X POST 'http://127.0.0.1:9876/wipe?session=42'
+systemctl --user start acva.target                # systemd-packaged dev path
+```
 
 ## Conventions used in these documents
 

@@ -9,6 +9,7 @@ add_executable(acva_tests
     test_llm_client.cpp
     test_manager.cpp
     test_memory_thread.cpp
+    test_paths.cpp
     test_probe.cpp
     test_prompt_builder.cpp
     test_service_monitor.cpp

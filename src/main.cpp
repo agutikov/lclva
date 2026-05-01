@@ -1,4 +1,5 @@
 #include "config/config.hpp"
+#include "config/paths.hpp"
 #include "dialogue/fsm.hpp"
 #include "dialogue/manager.hpp"
 #include "dialogue/turn.hpp"
@@ -49,7 +50,9 @@ void install_signal_handlers() {
 }
 
 struct CliArgs {
-    std::filesystem::path config_path = "config/default.yaml";
+    // Empty → resolve via config::resolve_config_path (XDG_CONFIG_HOME first,
+    // then ./config/default.yaml, then /etc/acva/default.yaml).
+    std::filesystem::path config_path;
     bool show_help = false;
     bool no_fake_driver = false; // override config to disable
     bool stdin_mode = false;     // M1: read FinalTranscript lines from stdin
@@ -61,7 +64,11 @@ void print_help() {
                  "Usage: acva [--config PATH] [--no-fake-driver] [--stdin]\n"
                  "\n"
                  "Options:\n"
-                 "  --config PATH        YAML config file (default: config/default.yaml)\n"
+                 "  --config PATH        YAML config file. If omitted, search:\n"
+                 "                         ${XDG_CONFIG_HOME:-~/.config}/acva/default.yaml,\n"
+                 "                         ./config/default.yaml,\n"
+                 "                         /etc/acva/default.yaml\n"
+                 "                       (first existing path wins).\n"
                  "  --no-fake-driver     Disable the synthetic pipeline driver (M0)\n"
                  "  --stdin              Read FinalTranscript lines from stdin and drive\n"
                  "                       the real LLM (implies --no-fake-driver). M1 mode.\n"
@@ -101,7 +108,17 @@ int main(int argc, char** argv) {
     }
 
     // ----- 1. Load config -----
-    auto load_result = acva::config::load_from_file(args.config_path);
+    // Resolve --config first: empty → walk the XDG/in-tree/system search
+    // list. An explicit --config is used verbatim and any "not found"
+    // error comes from load_from_file.
+    auto cp = acva::config::resolve_config_path(args.config_path.string());
+    if (auto* err = std::get_if<acva::config::LoadError>(&cp)) {
+        std::cerr << err->message << "\n";
+        return EXIT_FAILURE;
+    }
+    const auto config_path = std::get<std::filesystem::path>(std::move(cp));
+
+    auto load_result = acva::config::load_from_file(config_path);
     if (auto* err = std::get_if<acva::config::LoadError>(&load_result)) {
         std::cerr << err->message << "\n";
         return EXIT_FAILURE;
@@ -112,10 +129,17 @@ int main(int argc, char** argv) {
         cfg.pipeline.fake_driver_enabled = false;
     }
 
+    // Resolve the SQLite path: empty / relative → under XDG_DATA_HOME.
+    // Mutates cfg in place so anything that re-reads cfg.memory.db_path
+    // later (e.g. /status, log lines) sees the canonical absolute path.
+    cfg.memory.db_path =
+        acva::config::resolve_data_path(cfg.memory.db_path, "acva.db").string();
+
     // ----- 2. Initialize logging -----
     acva::log::init(cfg.logging);
     acva::log::info("main", "acva starting");
-    acva::log::info("main", fmt::format("config loaded: {}", args.config_path.string()));
+    acva::log::info("main", fmt::format("config loaded: {}", config_path.string()));
+    acva::log::info("main", fmt::format("memory db: {}", cfg.memory.db_path));
 
     install_signal_handlers();
 

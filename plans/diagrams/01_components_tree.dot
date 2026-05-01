@@ -28,7 +28,7 @@ digraph ComponentsTree {
   RM  [label="README.md",          fillcolor="#FEF3C7", fontcolor="#78350F", shape=note];
   CMK [label="CMakeLists.txt\nCMakePresets.json", fillcolor="#E2E8F0", fontcolor="#0F172A"];
   CMP [label="compose.yaml\n.env.example",        fillcolor="#E2E8F0", fontcolor="#0F172A"];
-  CC  [label="compile_commands.json\n→ build/dev/", fillcolor="#F1F5F9", fontcolor="#475569", shape=oval];
+  CC  [label="compile_commands.json\n→ _build/dev/", fillcolor="#F1F5F9", fontcolor="#475569", shape=oval];
 
   Root -> {CL RM CMK CMP CC};
 
@@ -192,7 +192,7 @@ digraph ComponentsTree {
   Tp  [label="third_party/cpp-httplib/\n(vendored single header)", fillcolor="#FDBA74", fontcolor="#7C2D12", shape=folder];
   Cm  [label="cmake/\nDependencies.cmake\nWarnings.cmake",         fillcolor="#FED7AA", fontcolor="#7C2D12"];
   Cf  [label="config/default.yaml\n(M0 + M1.A schema)",            fillcolor="#FCD34D", fontcolor="#78350F", shape=note];
-  Bd  [label="build/dev/  (CMake out-of-tree)",                    fillcolor="#E2E8F0", fontcolor="#0F172A", shape=folder];
+  Bd  [label="_build/dev/  (CMake out-of-tree)",                    fillcolor="#E2E8F0", fontcolor="#0F172A", shape=folder];
   Root -> {Tp Cm Cf Bd};
 
   // legend

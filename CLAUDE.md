@@ -33,7 +33,8 @@ plans/
   architecture_review.md, local_voice_ai_orchestrator_mvp_cpp_architecture_2026.md — historical inputs.
 CMakeLists.txt, CMakePresets.json
 README.md, CLAUDE.md, LICENSE, .editorconfig, .gitignore
-compile_commands.json    — symlink to build/dev/compile_commands.json (for clangd).
+compile_commands.json    — symlink to _build/dev/compile_commands.json (for clangd).
+build.sh, run_tests.sh   — `./build.sh [dev|debug|release]` and `./run_tests.sh [dev|debug]`.
 ```
 
 ## Authoritative Documents
@@ -109,6 +110,16 @@ P50 end-to-end (user-stop → first-audio): **~1.7 s.** P95: **~3.5 s.** The ori
 Build:
 
 ```sh
+./build.sh                # = dev preset; output under _build/dev/
+./build.sh debug          # ASan/UBSan-friendly build; _build/debug/
+./build.sh release        # -DNDEBUG, tests off; _build/release/
+./run_tests.sh            # build + run doctest suite for the dev preset
+./run_tests.sh dev --test-case='paths*'   # filter pass-through to doctest
+```
+
+Equivalent raw cmake invocations (the scripts wrap these):
+
+```sh
 cmake --preset dev
 cmake --build --preset dev
 ctest --preset dev
@@ -117,19 +128,21 @@ ctest --preset dev
 Run (dev path, with backends in Compose):
 
 ```sh
-cd packaging/compose && docker compose up -d   # M1.B; not yet scaffolded
+cd packaging/compose && docker compose up -d
 cd ../..
-./build/dev/acva --config config/default.yaml
+./_build/dev/acva                                  # picks up config + db via XDG
 ```
 
 Run (without backends, M0 fake-driver mode):
 
 ```sh
-./build/dev/acva --config config/default.yaml      # fake_driver_enabled: true is the default
+./_build/dev/acva                                  # fake_driver_enabled: true is the default
 # in another terminal:
 curl http://127.0.0.1:9876/status
 curl http://127.0.0.1:9876/metrics
 ```
+
+**Path resolution (M2.x).** When `--config` is omitted, `config::resolve_config_path` searches in order: `$XDG_CONFIG_HOME/acva/default.yaml` (default `~/.config/acva/default.yaml`), `./config/default.yaml` (in-tree dev fallback), `/etc/acva/default.yaml`. SQLite path: `cfg.memory.db_path` empty/relative resolves to `$XDG_DATA_HOME/acva/<value>` (default `~/.local/share/acva/acva.db`). Parent dirs are auto-created on first run. Tests in `tests/test_paths.cpp` cover the precedence + fallback rules.
 
 The `acva` binary itself always runs on the host as a CLI process — it's intentionally never put inside Compose so the realtime audio path stays direct. Production-style packaging as `acva.service` is M8 work.
 

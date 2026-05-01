@@ -329,11 +329,13 @@ To override host paths or model file selection, copy `.env.example` to `.env` at
 ### 4. Run the orchestrator on the host
 
 ```sh
-cmake --preset dev && cmake --build --preset dev
-./build/dev/acva --config config/default.yaml
+./build.sh                   # = ./build.sh dev; output under _build/dev/
+./_build/dev/acva            # config + db resolved via XDG (see CLAUDE.md)
 # Control plane:
 curl -sS http://127.0.0.1:9876/status
 curl -sS http://127.0.0.1:9876/metrics
+# Test suite:
+./run_tests.sh               # = ./run_tests.sh dev
 ```
 
 Until M1 slice 2 lands, acva runs in M0 fake-driver mode — it doesn't yet use the Compose backends. Once slice 2 is in, the orchestrator connects to llama / whisper / piper at the URLs in `config/default.yaml`.

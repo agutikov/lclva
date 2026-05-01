@@ -1,6 +1,7 @@
 # Core library — everything except main(). Tests link against this.
 add_library(acva_core STATIC
     config/config.cpp
+    config/paths.cpp
     dialogue/fsm.cpp
     dialogue/manager.cpp
     dialogue/sentence_splitter.cpp

@@ -50,7 +50,7 @@ Three steps, smallest scope first:
      Run `acva demo health` next.
    - **`FAIL: cfg.tts.voices is empty`** → populate that map. Default
      is `en: { url: "http://127.0.0.1:8083" }` matching the Piper
-     voice that `packaging/compose/fetch-assets.sh` downloads.
+     voice that `scripts/download-backend-assets.sh` downloads.
 
 3. If both pass and it's only `acva --stdin` that's silent: confirm
    the startup log says `tts enabled — voices configured: N` (not
@@ -202,9 +202,10 @@ Common boot failures:
 
 | Service | Symptom | Fix |
 |---|---|---|
-| `llama` | `unable to load model` | Run `packaging/compose/fetch-assets.sh` to download the Qwen GGUF shards. Check `${ACVA_MODELS_DIR}` (default `~/.local/share/acva/models`). |
-| `whisper` | `cannot load model from /models/ggml-small.bin` | Same — fetch-assets downloads it. |
-| `piper` | `voice file not found` | Voice file not in `${ACVA_VOICES_DIR}`. fetch-assets puts `en_US-amy-medium.onnx` there. |
+| `llama` | `unable to load model` | Run `scripts/download-backend-assets.sh` to download the Qwen GGUF shards. Check `${ACVA_MODELS_DIR}` (default `~/.local/share/acva/models`). |
+| `whisper` | `cannot load model from /models/ggml-small.bin` | Same — `download-backend-assets.sh` fetches it. (Goes away in M4B Step 6 when whisper service retires.) |
+| `piper` | `voice file not found` | Voice file not in `${ACVA_VOICES_DIR}`. `download-backend-assets.sh` puts `en_US-amy-medium.onnx` there. (Goes away in M4B Step 6.) |
+| `speaches` | `model not found` on `/v1/audio/speech` or `/v1/audio/transcriptions` | Run `scripts/download-speaches-models.sh` after the container is up. The script hits Speaches' own `POST /v1/models/{id}` endpoint per model; downloads land under `${ACVA_MODELS_DIR}/speaches/`. |
 | All three | `nvidia-smi` not visible inside container | Install the NVIDIA Container Toolkit on the host; restart Docker. |
 
 ## Component → demo cross-reference

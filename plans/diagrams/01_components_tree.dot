@@ -179,7 +179,7 @@ digraph ComponentsTree {
   Sys [label="packaging/systemd/\n(M8 alt prod path)", fillcolor="#0E7490", fontcolor=white, shape=folder];
   Pkg -> {Cmp Sys};
 
-  Yml [label="docker-compose.yml\nfetch-assets.sh", fillcolor="#5EEAD4", fontcolor="#134E4A"];
+  Yml [label="docker-compose.yml", fillcolor="#5EEAD4", fontcolor="#134E4A"];
   Wh  [label="whisper/Dockerfile",                  fillcolor="#5EEAD4", fontcolor="#134E4A"];
   Pi  [label="piper/Dockerfile",                    fillcolor="#5EEAD4", fontcolor="#134E4A"];
   Cmp -> {Yml Wh Pi};

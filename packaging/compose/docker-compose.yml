@@ -125,3 +125,39 @@ services:
       - "8083"
       - "--model"
       - "/voices/${ACVA_PIPER_VOICE:-en_US-amy-medium.onnx}"
+
+  # ---------------------------------------------------------------------
+  # Speaches — combined STT + TTS, OpenAI-API-compatible. Replaces both
+  # the standalone whisper.cpp/server and piper.http_server services
+  # once M4B is fully landed; runs alongside them during the migration
+  # so the orchestrator can be migrated one client at a time. See
+  # plans/milestones/m4b_speaches_consolidation.md for the cutover
+  # plan.
+  #
+  # Model storage: Speaches owns its own HuggingFace cache layout
+  # (`models--<owner>--<repo>/`). We bind-mount a host subdir to the
+  # container's HF cache path so models survive restarts. Use
+  # `scripts/download-speaches-models.sh` to install voices + STT
+  # models via Speaches' own POST /v1/models/{id} endpoint.
+  # ---------------------------------------------------------------------
+  speaches:
+    image: ghcr.io/speaches-ai/speaches:latest-cuda
+    container_name: acva-speaches
+    ports:
+      - "127.0.0.1:8090:8000"
+    volumes:
+      - ${ACVA_MODELS_DIR:-${HOME}/.local/share/acva/models}/speaches:/home/ubuntu/.cache/huggingface/hub
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 5s
+      timeout: 2s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped

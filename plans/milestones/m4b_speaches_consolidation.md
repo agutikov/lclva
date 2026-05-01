@@ -102,7 +102,10 @@ speaches:
   container_name: acva-speaches
   ports: ["127.0.0.1:8090:8000"]
   volumes:
-    - ${ACVA_MODELS_DIR:-${HOME}/.local/share/acva/models}/speaches:/data
+    # Speaches owns its own HF cache; we bind-mount it to a host
+    # subdir so models survive container restarts. Layout inside the
+    # cache is HuggingFace-standard (`models--<owner>--<repo>/`).
+    - ${ACVA_MODELS_DIR:-${HOME}/.local/share/acva/models}/speaches:/home/ubuntu/.cache/huggingface/hub
   deploy:
     resources:
       reservations:
@@ -123,26 +126,37 @@ hasn't changed.
 
 **Files:**
 - `scripts/download-speaches-models.sh` (new)
-- `packaging/compose/fetch-assets.sh` (touch — call the new script)
+- `scripts/download-backend-assets.sh` (was `packaging/compose/fetch-assets.sh`; moved to `scripts/` during M4B for one-canonical-location ergonomics — sibling of `download-silero-vad.sh`. The whisper.cpp + Piper rows in it become unused after Step 6.)
 
-`fetch-assets.sh` already pulls llama, whisper, and piper assets. Add a
-parallel `download-speaches-models.sh` that:
+`download-backend-assets.sh` already pulls llama, whisper, and piper assets.
+`download-speaches-models.sh` is much simpler than originally drafted
+because **Speaches owns its own model installation** via a `POST
+/v1/models/{id}` endpoint (idempotent — returns 200 if already cached,
+201 on first download). The script just hits Speaches and lets it pull
+from HuggingFace into the bind-mounted cache directory.
 
-1. Creates `${XDG_DATA_HOME}/acva/models/speaches/` (the bind-mount
-   target).
-2. Downloads / converts the faster-whisper model in CTranslate2 format
-   that we want as the M4B baseline (likely
-   `Systran/faster-whisper-large-v3` or `medium` depending on
-   workstation RAM).
-3. Drops the existing Piper voice `.onnx` + `.json` files into
-   whatever subpath Speaches expects (decided in Step 0(4)). For each
-   language we already configure in `cfg.tts.voices`, the script
-   writes a corresponding voice descriptor.
-4. Idempotent — if the file is already present, skip and print one
-   line.
+The script:
 
-The script must succeed on a clean machine with no env vars set. Same
-contract as `scripts/download-silero-vad.sh`.
+1. Creates `${XDG_DATA_HOME}/acva/models/speaches/` if missing (the
+   bind-mount target). No layout work — Speaches writes
+   `models--speaches-ai--piper-{locale}-{voice}/` and
+   `models--Systran--faster-whisper-{size}/` directories itself.
+2. Waits for `GET /health` 200 with a generous timeout (Speaches takes
+   ~3 s to start cold).
+3. Loops over a small fixed list of model IDs (currently
+   `Systran/faster-whisper-large-v3` and the Piper voices we ship in
+   `config/default.yaml`'s `tts.voices`) and calls
+   `POST /v1/models/{id}` for each. The endpoint is idempotent.
+4. Verifies via `GET /v1/models` that everything in the install list
+   shows up.
+5. Same contract as `scripts/download-silero-vad.sh`: succeeds on a
+   clean machine with no env vars set.
+
+Side benefit: the script can also drive `acva demo health` (post-M4B)
+to verify the install loop without needing a separate runbook. We can
+copy the existing Piper `.onnx` files we already have under
+`~/.local/share/acva/voices/` into the trash; Speaches' registry
+mirrors them.
 
 ## Step 3 — Smoke tests against the running stack
 
@@ -174,7 +188,7 @@ the project memory note) has the stack running, so no skip there.
 - `src/tts/openai_tts_client.hpp` (new)
 - `src/tts/piper_client.cpp` (kept, marked deprecated in header)
 - `src/tts/piper_client.hpp` (kept)
-- `src/dialogue/tts_bridge.cpp` (1-line change: pick the client)
+- `src/dialogue/tts_bridge.cpp` (rewire to use streaming receive)
 - `src/config/config.hpp` (extend `TtsConfig`)
 - `config/default.yaml` (per-language `voice_id` instead of `url`)
 - `tests/test_openai_tts_client.cpp` (new — mirrors `test_piper_client.cpp`'s
@@ -185,6 +199,22 @@ one sentence in one language → stream of PCM samples) but talks
 `POST /v1/audio/speech` against Speaches instead of one
 `piper.http_server` per language. Voice routing collapses from
 "language → URL" to "language → voice_id" against a single base URL.
+
+**Use `response_format=pcm`, not `wav`.** The Step 0 smoke found Speaches'
+WAV variant has a streaming-broken header (reports the first chunk's
+size in the `data_size` field; a naive parser would truncate to ~1.4 s).
+PCM dodges that entirely — bare int16 mono 22050 Hz stream, drops
+straight into the existing `PlaybackQueue` after the M3 22050 → 48 kHz
+resample.
+
+**Consume the response as a stream, not a single buffer.** This is the
+load-bearing performance change: Speaches' median TTFB is **10 ms**
+versus Piper bare's **600 ms**, but only realised if the client starts
+forwarding bytes to the `PlaybackQueue` as they arrive. The current
+M3 `TtsBridge` uses cpp-httplib with a single response body; M4B
+swaps that for a chunk-receiver callback (cpp-httplib supports it via
+`Client::Post(..., ContentReceiver)`) or libcurl write-callback. Either
+works; cpp-httplib keeps us off a second HTTP library on the TTS path.
 
 Config shape change:
 
@@ -254,8 +284,10 @@ day of bench testing, delete:
 - `packaging/compose/docker-compose.yml` — drop `whisper` and `piper`
   service blocks; rebind `speaches` to its production port (8082 or
   similar).
-- `packaging/compose/fetch-assets.sh` — drop the whisper/piper
-  branches.
+- `scripts/download-backend-assets.sh` — drop the whisper/piper
+  rows; rename to `download-llama-model.sh` (or merge into a single
+  `download-models.sh` umbrella). Decide at Step 6 implementation
+  time, not now.
 - `config/default.yaml` — drop `cfg.tts.voices[*].url` if any traces
   remain; tighten the voice-id schema docs.
 - `cmake/Dependencies.cmake` — no change (we never linked Piper as a
@@ -337,8 +369,13 @@ down to roughly its current count after Step 6 (Piper tests retire as
 
 1. `docker compose up -d` brings up `llama` + `speaches` only — no
    whisper, no piper containers.
-2. `acva demo tts` and `acva demo chat` produce indistinguishable
-   audio output to a listener compared to pre-M4B (same Piper voice).
+2. `acva demo tts` and `acva demo chat` produce **subjectively
+   indistinguishable** audio output to a listener compared to pre-M4B.
+   Speaches' Piper port is ~8% louder and ~340 ms shorter (tighter
+   silence trim) per sentence than `piper.http_server` direct — same
+   voice file, expected variation. A/B listen during acceptance; if a
+   noticeable artifact shows up, match Speaches' settings or document
+   the difference.
 3. `acva demo stt` transcribes a fixture WAV correctly.
 4. End-to-end voice loop: speak → VAD endpoint → STT (`FinalTranscript`)
    → LLM → TTS → speakers, **without** the fake driver synthesizing
@@ -347,9 +384,11 @@ down to roughly its current count after Step 6 (Piper tests retire as
    register against the same URL; supervisor handles them
    independently.
 6. `cfg.tts.voices` no longer has any `url` fields.
-7. No regression in `voice_tts_first_audio_ms` P95 vs M3 baseline (or
-   the regression is documented and accepted as the cost of the
-   second hop).
+7. **`voice_tts_first_audio_ms` P50 drops to ≤ 50 ms (smoke baseline:
+   10 ms median) compared to M3's ~600 ms with `piper.http_server`.**
+   This is the headline win of M4B — Speaches streams audio as it's
+   generated. If we measure a regression instead, the streaming
+   consumer in `TtsBridge` (Step 4) isn't actually streaming.
 8. `voice_stt_*` metric family ships (cumulative requests, latency,
    error counts).
 

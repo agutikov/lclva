@@ -70,8 +70,10 @@ plans/
   local_voice_ai_orchestrator_mvp_cpp_architecture_2026.md
                           original design draft
 packaging/
-  compose/                docker-compose.yml + local Dockerfiles for whisper/piper + fetch-assets.sh
+  compose/                docker-compose.yml + local Dockerfiles for whisper/piper
   systemd/                per-user systemd units (alternative production path)
+scripts/                  download-backend-assets.sh, download-silero-vad.sh,
+                          download-speaches-models.sh — fetch model files into XDG paths
 compose.yaml              top-level compose shim that include:s packaging/compose/docker-compose.yml
 .env.example              env override template (ACVA_MODELS_DIR, ACVA_LLM_MODEL, ...)
 CMakeLists.txt, CMakePresets.json
@@ -155,7 +157,7 @@ Total: **~14–16 weeks** for a single competent C++ developer to MVP.
 
 Total disk footprint with Qwen Q4_K_M + Whisper small + 1 Piper voice: **~5.0 GB**.
 
-The `packaging/compose/fetch-assets.sh` helper downloads the LLM, Whisper model, and one Piper voice to the standard host paths in one shot. Silero VAD is fetched lazily by the orchestrator once M4 lands.
+The `scripts/download-backend-assets.sh` helper downloads the LLM, Whisper model, and one Piper voice to the standard host paths in one shot. Silero VAD has its own helper at `scripts/download-silero-vad.sh`. Speaches manages its own STT/TTS model installs via `scripts/download-speaches-models.sh` (introduced in M4B).
 
 ### Optional
 
@@ -285,12 +287,12 @@ llama.cpp uses the upstream `ghcr.io/ggml-org/llama.cpp:server-cuda` image verba
     sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
     ```
 - User in the `docker` group (or rootless Docker).
-- Models and voices present on the host under `~/.local/share/acva/{models,voices}/`. The `fetch-assets.sh` helper below downloads the defaults.
+- Models and voices present on the host under `~/.local/share/acva/{models,voices}/`. The `scripts/download-backend-assets.sh` helper below downloads the defaults.
 
 ### 2. Download the default model assets
 
 ```sh
-bash packaging/compose/fetch-assets.sh
+bash scripts/download-backend-assets.sh
 ```
 
 Idempotent and resumable (curl `--continue-at -`). Default footprint ≈ 5.2 GB:

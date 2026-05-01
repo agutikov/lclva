@@ -6,11 +6,23 @@
 > ships a request/response STT client, and migrates the M3 TTS client to
 > the same Speaches base URL. M5 therefore picks up with **option B
 > already in production** and focuses on swapping the request/response
-> STT client for Speaches' streaming / Realtime endpoint plus the
+> STT client for Speaches' streaming endpoint plus the
 > Dialogue-Manager-side speculation work. See
 > `plans/milestones/m4b_speaches_consolidation.md` and `open_questions.md` L1.
 > Step 1 below is preserved for historical context but no longer drives
 > the milestone.
+>
+> **Streaming protocol correction (M4B Step 0 finding):** Speaches
+> exposes the streaming endpoint at `POST /v1/realtime` and the
+> implementation is **WebRTC** (`Realtime Webrtc` in the OpenAPI
+> spec), **not WebSocket** as Step 1 below speculated. M5's client
+> design therefore needs a WebRTC transport — `libdatachannel`
+> (~MIT, header-light, used by other voice projects) is the leading
+> candidate. This is a meaningful design point worth a small spike
+> at the start of M5 work. If `libdatachannel` integration looks
+> ugly, an alternative is to wrap the WebRTC negotiation in a tiny
+> in-image proxy or to depend on Speaches eventually shipping a
+> WebSocket fallback (none today, no announced plan).
 
 **Estimate:** 1.5–2 weeks (post-M4B). Was 1.5–3 weeks under the
 pre-M4B plan; the lower end of that range now applies because engine

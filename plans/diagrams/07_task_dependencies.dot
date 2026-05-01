@@ -76,7 +76,7 @@ digraph TaskDependencies {
   M1_B2 [label="M1.B.2\ncompose.yaml shim\n+ .env.example",       fillcolor="#9333EA", fontcolor=white];
   M1_B3 [label="M1.B.3\ndocker-compose.yml\nllama / whisper / piper", fillcolor="#9333EA", fontcolor=white];
   M1_B4 [label="M1.B.4\n.env docs",                               fillcolor="#9333EA", fontcolor=white];
-  M1_B5 [label="M1.B.5\nfetch-assets.sh\noperations",             fillcolor="#9333EA", fontcolor=white];
+  M1_B5 [label="M1.B.5\nbackend-assets script\n(scripts/download-backend-assets.sh)", fillcolor="#9333EA", fontcolor=white];
   M1_B6 [label="M1.B.6\nhealthchecks",                            fillcolor="#9333EA", fontcolor=white];
   M1_B7 [label="M1.B.7\nsmoke verification",                      fillcolor="#9333EA", fontcolor=white];
 

@@ -69,12 +69,14 @@ target_link_libraries(acva_unit_tests
 # ----- integration suite -----
 add_executable(acva_integration_tests
     ${_acva_test_main}
+    test_speaches_smoke.cpp
     test_vad.cpp
 )
 
 target_link_libraries(acva_integration_tests
     PRIVATE
         acva_core
+        acva_httplib
         doctest::doctest
         acva_warnings
 )

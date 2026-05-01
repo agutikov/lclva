@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
-# fetch-assets.sh — download the default LLM weights, Whisper model, and
-# Piper voice into the host paths the compose stack expects.
+# download-backend-assets.sh — download the default LLM weights,
+# whisper.cpp model, and Piper voice into the host paths the compose
+# stack expects.
+#
+# Was packaging/compose/fetch-assets.sh through M4; moved to scripts/
+# during M4B because asset downloads aren't compose-specific (the
+# systemd packaging path uses the same files). Sibling scripts:
+#   download-silero-vad.sh      — Silero VAD ONNX model (M4)
+#   download-speaches-models.sh — Speaches STT + TTS models (M4B)
+#
+# After M4B Step 6, the whisper.cpp + Piper voice rows below become
+# unused; Speaches owns those models and pulls them via its own
+# POST /v1/models/{id} endpoint. Until then this script keeps the
+# legacy stack functional alongside Speaches for the migration window.
 #
 # Idempotent: re-runs skip files that already exist with the expected
 # size. Resumable on partial downloads (curl --continue-at -).

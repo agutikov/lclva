@@ -68,7 +68,7 @@ tts:
   # Per-language voice routing. Upstream piper.http_server only loads
   # one voice per process, so each language gets its own Compose
   # service on its own port. The default below matches what
-  # `packaging/compose/fetch-assets.sh` downloads — the
+  # `scripts/download-backend-assets.sh` downloads — the
   # en_US-amy-medium voice running inside the `piper` Compose
   # service (single service today; per-language sprawl arrives only
   # if you add e.g. a `piper-ru` service in compose).

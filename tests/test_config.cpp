@@ -192,15 +192,15 @@ TEST_CASE("config: M3 defaults") {
     CHECK(cfg.dialogue.max_tts_queue_sentences == 3);
 }
 
-TEST_CASE("config: tts.voices map parses (legacy piper provider)") {
+TEST_CASE("config: tts.voices map parses") {
     constexpr auto yaml = R"(
 logging: {}
 control: {}
 tts:
-  provider: piper
+  base_url: "http://127.0.0.1:8090/v1"
   voices:
-    en: { url: "http://127.0.0.1:8083" }
-    ru: { url: "http://127.0.0.1:8084" }
+    en: { model_id: "speaches-ai/piper-en_US-amy-medium", voice_id: "amy" }
+    ru: { model_id: "speaches-ai/piper-ru_RU-irina-medium", voice_id: "irina" }
   fallback_lang: en
   request_timeout_seconds: 7
 )";
@@ -208,25 +208,25 @@ tts:
     REQUIRE(std::holds_alternative<Config>(r));
     auto& cfg = std::get<Config>(r);
     REQUIRE(cfg.tts.voices.size() == 2);
-    CHECK(cfg.tts.voices.at("en").url == "http://127.0.0.1:8083");
-    CHECK(cfg.tts.voices.at("ru").url == "http://127.0.0.1:8084");
+    CHECK(cfg.tts.voices.at("en").model_id == "speaches-ai/piper-en_US-amy-medium");
+    CHECK(cfg.tts.voices.at("ru").voice_id == "irina");
     CHECK(cfg.tts.fallback_lang == "en");
     CHECK(cfg.tts.request_timeout_seconds == 7);
 }
 
-TEST_CASE("config: tts.voices URL without scheme rejected (legacy piper)") {
+TEST_CASE("config: tts.base_url without scheme rejected") {
     constexpr auto yaml = R"(
 logging: {}
 control: {}
 tts:
-  provider: piper
+  base_url: "127.0.0.1:8090/v1"
   voices:
-    en: { url: "127.0.0.1:8083" }
+    en: { model_id: "speaches-ai/piper-en_US-amy-medium", voice_id: "amy" }
   fallback_lang: en
 )";
     auto r = load_from_string(yaml);
     REQUIRE(std::holds_alternative<LoadError>(r));
-    CHECK(std::get<LoadError>(r).message.find("tts.voices[en].url")
+    CHECK(std::get<LoadError>(r).message.find("tts.base_url")
           != std::string::npos);
     CHECK(std::get<LoadError>(r).message.find("scheme")
           != std::string::npos);
@@ -237,9 +237,9 @@ TEST_CASE("config: tts.fallback_lang must point to a configured voice") {
 logging: {}
 control: {}
 tts:
-  provider: piper
+  base_url: "http://127.0.0.1:8090/v1"
   voices:
-    ru: { url: "http://127.0.0.1:8084" }
+    ru: { model_id: "speaches-ai/piper-ru_RU-irina-medium", voice_id: "irina" }
   fallback_lang: en
 )";
     auto r = load_from_string(yaml);
@@ -260,35 +260,11 @@ tts:
     REQUIRE(std::holds_alternative<Config>(r));
 }
 
-TEST_CASE("config: M4B speaches shape parses (base_url + model_id + voice_id)") {
+TEST_CASE("config: tts.voices entry without voice_id rejected") {
     constexpr auto yaml = R"(
 logging: {}
 control: {}
 tts:
-  provider: speaches
-  base_url: "http://127.0.0.1:8090/v1"
-  voices:
-    en: { model_id: "speaches-ai/piper-en_US-amy-medium", voice_id: "amy" }
-    ru: { model_id: "speaches-ai/piper-ru_RU-irina-medium", voice_id: "irina" }
-  fallback_lang: en
-)";
-    auto r = load_from_string(yaml);
-    REQUIRE(std::holds_alternative<Config>(r));
-    auto& cfg = std::get<Config>(r);
-    CHECK(cfg.tts.provider == "speaches");
-    CHECK(cfg.tts.base_url == "http://127.0.0.1:8090/v1");
-    CHECK(cfg.tts.voices.at("en").model_id == "speaches-ai/piper-en_US-amy-medium");
-    CHECK(cfg.tts.voices.at("en").voice_id == "amy");
-    CHECK(cfg.tts.voices.at("ru").voice_id == "irina");
-    CHECK(cfg.tts.voices.at("en").url.empty());
-}
-
-TEST_CASE("config: M4B speaches without voice_id rejected") {
-    constexpr auto yaml = R"(
-logging: {}
-control: {}
-tts:
-  provider: speaches
   base_url: "http://127.0.0.1:8090/v1"
   voices:
     en: { model_id: "speaches-ai/piper-en_US-amy-medium" }
@@ -299,12 +275,26 @@ tts:
     CHECK(std::get<LoadError>(r).message.find("voice_id") != std::string::npos);
 }
 
-TEST_CASE("config: M4B speaches provider needs base_url when voices configured") {
+TEST_CASE("config: tts.voices entry without model_id rejected") {
     constexpr auto yaml = R"(
 logging: {}
 control: {}
 tts:
-  provider: speaches
+  base_url: "http://127.0.0.1:8090/v1"
+  voices:
+    en: { voice_id: "amy" }
+  fallback_lang: en
+)";
+    auto r = load_from_string(yaml);
+    REQUIRE(std::holds_alternative<LoadError>(r));
+    CHECK(std::get<LoadError>(r).message.find("model_id") != std::string::npos);
+}
+
+TEST_CASE("config: tts.base_url required when tts.voices is non-empty") {
+    constexpr auto yaml = R"(
+logging: {}
+control: {}
+tts:
   voices:
     en: { model_id: "speaches-ai/piper-en_US-amy-medium", voice_id: "amy" }
   fallback_lang: en
@@ -312,36 +302,6 @@ tts:
     auto r = load_from_string(yaml);
     REQUIRE(std::holds_alternative<LoadError>(r));
     CHECK(std::get<LoadError>(r).message.find("tts.base_url") != std::string::npos);
-}
-
-TEST_CASE("config: M4B mixing url + model_id on one voice rejected") {
-    constexpr auto yaml = R"(
-logging: {}
-control: {}
-tts:
-  provider: speaches
-  base_url: "http://127.0.0.1:8090/v1"
-  voices:
-    en: { url: "http://x", model_id: "speaches-ai/piper-en_US-amy-medium", voice_id: "amy" }
-  fallback_lang: en
-)";
-    auto r = load_from_string(yaml);
-    REQUIRE(std::holds_alternative<LoadError>(r));
-    CHECK(std::get<LoadError>(r).message.find("EITHER model_id OR url") != std::string::npos);
-}
-
-TEST_CASE("config: M4B unknown tts.provider rejected") {
-    constexpr auto yaml = R"(
-logging: {}
-control: {}
-tts:
-  provider: rhubarb
-  voices: {}
-  fallback_lang: en
-)";
-    auto r = load_from_string(yaml);
-    REQUIRE(std::holds_alternative<LoadError>(r));
-    CHECK(std::get<LoadError>(r).message.find("tts.provider") != std::string::npos);
 }
 
 TEST_CASE("config: zero audio.sample_rate_hz rejected") {

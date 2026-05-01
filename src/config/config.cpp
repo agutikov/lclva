@@ -158,59 +158,26 @@ std::optional<LoadError> validate(const Config& cfg) {
             return LoadError{"config: stt.request_timeout_seconds: must be > 0"};
         }
     }
-    // M4B introduces tts.provider + tts.base_url + per-voice model_id
-    // alongside the legacy per-voice url. Every voice entry must
-    // populate exactly one shape: either `url` (legacy Piper) or
-    // `model_id` (Speaches). `voice_id` is optional and used by
-    // multi-speaker models.
-    static constexpr std::array kProviders{
-        std::string_view{"speaches"}, std::string_view{"piper"},
-    };
-    if (!contains(cfg.tts.provider, kProviders)) {
-        return LoadError{"config: tts.provider: must be 'speaches' or 'piper' (got '"
-                          + cfg.tts.provider + "')"};
-    }
-    if (cfg.tts.provider == "speaches" && !cfg.tts.voices.empty()
-        && cfg.tts.base_url.empty()) {
-        return LoadError{"config: tts.base_url: must be set when tts.provider='speaches'"};
+    // TTS goes through Speaches' OpenAI-API-compatible endpoint. Every
+    // configured voice needs a non-empty model_id + voice_id (Speaches
+    // returns HTTP 422 when the request is missing the `voice` field —
+    // catch it at config load instead).
+    if (!cfg.tts.voices.empty() && cfg.tts.base_url.empty()) {
+        return LoadError{"config: tts.base_url: must be set when tts.voices is non-empty"};
     }
     if (!cfg.tts.base_url.empty()
         && cfg.tts.base_url.find("://") == std::string::npos) {
         return LoadError{"config: tts.base_url: must include scheme (http://...)"};
     }
     for (const auto& [lang, voice] : cfg.tts.voices) {
-        const bool has_url      = !voice.url.empty();
-        const bool has_model_id = !voice.model_id.empty();
-        if (!has_url && !has_model_id) {
-            return LoadError{"config: tts.voices[" + lang
-                + "]: must set either model_id (provider=speaches) or url (provider=piper)"};
+        if (voice.model_id.empty()) {
+            return LoadError{"config: tts.voices[" + lang + "].model_id: required"};
         }
-        if (has_url && has_model_id) {
+        if (voice.voice_id.empty()) {
             return LoadError{"config: tts.voices[" + lang
-                + "]: set EITHER model_id OR url, not both"};
-        }
-        if (has_url && voice.url.find("://") == std::string::npos) {
-            return LoadError{"config: tts.voices[" + lang
-                + "].url: must include scheme (http://...)"};
-        }
-        if (cfg.tts.provider == "speaches" && has_url) {
-            return LoadError{"config: tts.voices[" + lang
-                + "]: provider='speaches' but voice carries url=... — set model_id instead"};
-        }
-        if (cfg.tts.provider == "piper" && has_model_id) {
-            return LoadError{"config: tts.voices[" + lang
-                + "]: provider='piper' but voice carries model_id=... — set url instead"};
-        }
-        // Speaches' OpenAI-compatible TTS endpoint rejects requests
-        // missing the `voice` field with HTTP 422 — even Piper voices
-        // with a single speaker need *some* string. Catch it at config
-        // load instead of at first request.
-        if (cfg.tts.provider == "speaches" && has_model_id
-            && voice.voice_id.empty()) {
-            return LoadError{"config: tts.voices[" + lang
-                + "].voice_id: required when provider='speaches' (Speaches' "
-                + "/v1/audio/speech requires a 'voice' field; for Piper voices "
-                + "it's typically the speaker name, e.g. 'amy')"};
+                + "].voice_id: required (Speaches' /v1/audio/speech needs the "
+                + "'voice' field; for single-speaker Piper voices it's the "
+                + "speaker name, e.g. 'amy')"};
         }
     }
     // If tts.voices is non-empty, the fallback_lang must point to one

@@ -5,7 +5,7 @@
 #include "event/bus.hpp"
 #include "event/event.hpp"
 #include "playback/queue.hpp"
-#include "tts/piper_client.hpp"   // re-uses TtsRequest + TtsCallbacks
+#include "tts/types.hpp"
 
 #include <atomic>
 #include <condition_variable>

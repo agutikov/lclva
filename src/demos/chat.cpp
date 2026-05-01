@@ -13,7 +13,6 @@
 #include "playback/engine.hpp"
 #include "playback/queue.hpp"
 #include "tts/openai_tts_client.hpp"
-#include "tts/piper_client.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -98,23 +97,7 @@ int run_chat(const config::Config& orig_cfg) {
     dialogue::Manager        manager(cfg, bus, pb, client, turns);
 
     playback::PlaybackQueue  queue(cfg.playback.max_queue_chunks);
-
-    // Pick the TTS client to mirror main.cpp's runtime path.
-    // "speaches" → OpenAiTtsClient (M4B default); "piper" → legacy.
-    std::unique_ptr<tts::PiperClient>     piper;
-    std::unique_ptr<tts::OpenAiTtsClient> openai_tts;
-    dialogue::TtsBridge::SubmitFn         tts_submit;
-    if (cfg.tts.provider == "speaches") {
-        openai_tts = std::make_unique<tts::OpenAiTtsClient>(cfg.tts);
-        tts_submit = [c = openai_tts.get()](tts::TtsRequest r, tts::TtsCallbacks cb) {
-            c->submit(std::move(r), std::move(cb));
-        };
-    } else {
-        piper = std::make_unique<tts::PiperClient>(cfg.tts);
-        tts_submit = [c = piper.get()](tts::TtsRequest r, tts::TtsCallbacks cb) {
-            c->submit(std::move(r), std::move(cb));
-        };
-    }
+    tts::OpenAiTtsClient     tts_client(cfg.tts);
 
     // Track the turn id the Manager mints for the LLM run. The
     // PlaybackEngine needs to know which turn's chunks are "live" so
@@ -130,7 +113,10 @@ int run_chat(const config::Config& orig_cfg) {
 
     playback::PlaybackEngine engine(cfg.audio, queue, bus,
                                       [&]{ return playback_turn.load(std::memory_order_acquire); });
-    dialogue::TtsBridge      bridge(cfg, bus, std::move(tts_submit), queue);
+    dialogue::TtsBridge      bridge(cfg, bus,
+        [&](tts::TtsRequest r, tts::TtsCallbacks cb) {
+            tts_client.submit(std::move(r), std::move(cb));
+        }, queue);
 
     // Echo every sentence to stdout for the user, mirroring how
     // `--stdin` mode prints them.

@@ -15,12 +15,13 @@ int run_fsm     (const config::Config&);
 int run_health  (const config::Config&);
 int run_llm     (const config::Config&);
 int run_loopback(const config::Config&);
+int run_stt     (const config::Config&);
 int run_tone    (const config::Config&);
 int run_tts     (const config::Config&);
 
 namespace {
 
-constexpr std::array<Demo, 8> kDemos{{
+constexpr std::array<Demo, 9> kDemos{{
     {"fsm",      "M0",
      "synthetic FSM driver runs 3 turns end-to-end (no backends needed)",
      run_fsm},
@@ -31,13 +32,13 @@ constexpr std::array<Demo, 8> kDemos{{
      "send a fixed prompt to llama and stream the reply to stdout",
      run_llm},
     {"tone",     "M3",
-     "play a 1.5 s 440 Hz tone through the audio device — no Piper",
+     "play a 1.5 s 440 Hz tone through the audio device — no TTS",
      run_tone},
-    {"tts",      "M3",
-     "synthesize 'Hello from acva.' via the configured voice and play it",
+    {"tts",      "M3+M4B",
+     "synthesize 'Hello from acva.' via Speaches and play it",
      run_tts},
-    {"chat",     "M1+M3",
-     "full text-in → speech-out loop with a fixed prompt (like --stdin, no input)",
+    {"chat",     "M1+M3+M4B",
+     "full text-in → speech-out loop (text → LLM → Speaches TTS → speakers)",
      run_chat},
     {"loopback", "M4",
      "5 s mic → speakers passthrough through the SPSC ring + 48↔16 kHz resampler",
@@ -45,6 +46,9 @@ constexpr std::array<Demo, 8> kDemos{{
     {"capture",  "M4",
      "5 s mic capture + Silero VAD endpointing report (no STT)",
      run_capture},
+    {"stt",      "M4B",
+     "self-contained STT smoke: TTS-fixture audio → Speaches /v1/audio/transcriptions",
+     run_stt},
 }};
 
 } // namespace

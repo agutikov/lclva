@@ -56,83 +56,9 @@ services:
       - "--metrics"
 
   # ---------------------------------------------------------------------
-  # whisper.cpp — STT. Built locally because upstream publishes neither a
-  # server image nor a `.devops/server.Dockerfile`. Sync request/response
-  # transcription is enough through M4; M5 may swap this for a streaming
-  # backend (Speaches / faster-whisper / custom wrapper — see
-  # m5_streaming_stt.md).
-  # ---------------------------------------------------------------------
-  whisper:
-    build:
-      context: ./whisper
-      args:
-        WHISPER_REF: v1.8.4
-    image: acva/whisper.cpp:server-v1.8.4
-    container_name: acva-whisper
-    ports:
-      - "127.0.0.1:8082:8082"
-    volumes:
-      - ${ACVA_MODELS_DIR:-${HOME}/.local/share/acva/models}:/models:ro
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8082/health"]
-      interval: 5s
-      timeout: 2s
-      retries: 12
-      start_period: 15s
-    restart: unless-stopped
-    command:
-      - "--host"
-      - "0.0.0.0"
-      - "--port"
-      - "8082"
-      - "--model"
-      - "/models/${ACVA_WHISPER_MODEL:-ggml-small.bin}"
-
-  # ---------------------------------------------------------------------
-  # Piper — TTS. Built locally because the rhasspy project does not yet
-  # publish an HTTP-server image. The Dockerfile bakes `piper-tts` into
-  # `python:3.12-slim` so there is no per-boot pip install.
-  # ---------------------------------------------------------------------
-  piper:
-    build:
-      context: ./piper
-      args:
-        PIPER_VERSION: 1.4.2
-    image: acva/piper:1.4.2
-    container_name: acva-piper
-    ports:
-      - "127.0.0.1:8083:8083"
-    volumes:
-      - ${ACVA_VOICES_DIR:-${HOME}/.local/share/acva/voices}:/voices:ro
-    # piper.http_server only accepts `POST /` with a JSON body — no GET `/`
-    # or `/health` route. Use a plain TCP probe to confirm the server is
-    # bound and accepting connections.
-    healthcheck:
-      test:
-        - "CMD"
-        - "python"
-        - "-c"
-        - "import socket; socket.create_connection(('127.0.0.1', 8083), timeout=2).close()"
-      interval: 5s
-      timeout: 3s
-      retries: 12
-      start_period: 15s
-    restart: unless-stopped
-    command:
-      - "--host"
-      - "0.0.0.0"
-      - "--port"
-      - "8083"
-      - "--model"
-      - "/voices/${ACVA_PIPER_VOICE:-en_US-amy-medium.onnx}"
-
-  # ---------------------------------------------------------------------
-  # Speaches — combined STT + TTS, OpenAI-API-compatible. Replaces both
-  # the standalone whisper.cpp/server and piper.http_server services
-  # once M4B is fully landed; runs alongside them during the migration
-  # so the orchestrator can be migrated one client at a time. See
-  # plans/milestones/m4b_speaches_consolidation.md for the cutover
-  # plan.
+  # Speaches — combined STT + TTS, OpenAI-API-compatible. Replaced
+  # standalone whisper.cpp/server (port 8082) and piper.http_server
+  # (port 8083) during M4B Step 6.
   #
   # Model storage: Speaches owns its own HuggingFace cache layout
   # (`models--<owner>--<repo>/`). We bind-mount a host subdir to the

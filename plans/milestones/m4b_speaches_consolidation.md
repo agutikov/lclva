@@ -1,5 +1,7 @@
 # M4B — Voice-Backend Consolidation onto Speaches
 
+**Status:** ✅ landed. All 7 steps + the Step 0 smoke gate complete on the dev workstation. Compose is `llama` + `speaches` only; `OpenAiTtsClient` + `OpenAiSttClient` ship; `acva demo {tts,chat,stt}` exercise the new wiring; 207 unit + 8 integration tests green. One known follow-up captured: streaming-TTS playback jitter (M4B follow-up task) — pre-buffer threshold in `PlaybackEngine` lands before M5 starts.
+
 **Estimate:** 4–6 days.
 
 **Depends on:** M4 landed (this is a refactor of the existing
@@ -87,7 +89,7 @@ and revisit option A (custom whisper.cpp wrapper) at M5 start.
 
 ---
 
-## Step 1 — Compose: add `speaches` alongside existing services
+## Step 1 ✅ — Compose: add `speaches` alongside existing services
 
 **Files:**
 - `packaging/compose/docker-compose.yml`
@@ -122,7 +124,7 @@ After Step 1: `docker compose up -d` brings up four containers. Existing
 M3/M4 paths keep running through `whisper`/`piper`. The orchestrator
 hasn't changed.
 
-## Step 2 — Asset downloader for Speaches
+## Step 2 ✅ — Asset downloader for Speaches
 
 **Files:**
 - `scripts/download-speaches-models.sh` (new)
@@ -158,7 +160,7 @@ copy the existing Piper `.onnx` files we already have under
 `~/.local/share/acva/voices/` into the trash; Speaches' registry
 mirrors them.
 
-## Step 3 — Smoke tests against the running stack
+## Step 3 ✅ — Smoke tests against the running stack
 
 **Files:**
 - `packaging/compose/SMOKE.md` (new) — manual checklist
@@ -181,7 +183,7 @@ Tests `* doctest::skip` cleanly when the container isn't running so a
 teammate without Compose up still gets a passing run. The dev env (per
 the project memory note) has the stack running, so no skip there.
 
-## Step 4 — Adapt the orchestrator: TTS first
+## Step 4 ✅ — Adapt the orchestrator: TTS first
 
 **Files:**
 - `src/tts/openai_tts_client.cpp` (new)
@@ -240,7 +242,7 @@ the Piper code path — no carried debt.
 After Step 4: `acva demo tts` and `acva demo chat` pass against the new
 client; old M3 tests still link until Step 6.
 
-## Step 5 — Adapt the orchestrator: STT (request/response)
+## Step 5 ✅ — Adapt the orchestrator: STT (request/response)
 
 **Files:**
 - `src/stt/openai_stt_client.cpp` (new)
@@ -268,7 +270,7 @@ The fake driver's `FinalTranscript` synthesis stays available behind
 `cfg.pipeline.fake_driver_enabled` for headless tests / `acva demo
 fsm`.
 
-## Step 6 — Remove obsolete infra
+## Step 6 ✅ — Remove obsolete infra
 
 After Steps 4 + 5 land and the new clients have been driven through a
 day of bench testing, delete:
@@ -299,7 +301,7 @@ day of bench testing, delete:
 After Step 6: only one runtime backend service besides llama, and only
 one HTTP-client style in tree (OpenAI-compatible).
 
-## Step 7 — Update demos + docs
+## Step 7 ✅ — Update demos + docs
 
 **Files:**
 - `src/demos/tts.cpp` — re-target to the new client. Demo behavior is

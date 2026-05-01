@@ -40,8 +40,11 @@ echo "  /health 200 OK"
 # Format: one model id per line; blank lines and lines starting with
 # '#' are skipped.
 MODELS=$(cat <<'EOF'
-# STT — multilingual faster-whisper, ~1.5 GB on disk.
-Systran/faster-whisper-large-v3
+# STT — multilingual faster-whisper-large-v3-turbo (~1.6 GB float16).
+# Smaller distilled decoder over the same large-v3 encoder; fits
+# alongside llama-7B-Q4 on an 8 GB GPU. See config/default.yaml's
+# stt.model comment for the rationale.
+deepdml/faster-whisper-large-v3-turbo-ct2
 # TTS — Piper voices, one per language we support.
 speaches-ai/piper-en_US-amy-medium
 EOF

@@ -6,14 +6,13 @@
 #include "playback/engine.hpp"
 #include "playback/queue.hpp"
 #include "tts/openai_tts_client.hpp"
-#include "tts/piper_client.hpp"
 
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
-#include <memory>
 #include <mutex>
+#include <utility>
 
 namespace acva::demos {
 
@@ -26,16 +25,8 @@ int run_tts(const config::Config& cfg) {
         return EXIT_FAILURE;
     }
     const auto& fb = cfg.tts.fallback_lang;
-    // Describe the route to stdout. Speaches uses one base_url +
-    // model_id; Piper uses per-language url.
-    std::string route_desc;
-    if (cfg.tts.provider == "speaches") {
-        route_desc = "speaches " + cfg.tts.base_url + " model_id=";
-        if (cfg.tts.voices.contains(fb)) route_desc += cfg.tts.voices.at(fb).model_id;
-    } else {
-        route_desc = "piper url=";
-        if (cfg.tts.voices.contains(fb)) route_desc += cfg.tts.voices.at(fb).url;
-    }
+    std::string route_desc = cfg.tts.base_url + " model_id=";
+    if (cfg.tts.voices.contains(fb)) route_desc += cfg.tts.voices.at(fb).model_id;
 
     constexpr event::TurnId   kTurn = 1;
     constexpr event::SequenceNo kSeq  = 0;
@@ -49,24 +40,13 @@ int run_tts(const config::Config& cfg) {
     event::EventBus bus;
     playback::PlaybackQueue queue(cfg.playback.max_queue_chunks);
 
-    // Pick the client to mirror main.cpp's runtime path.
-    std::unique_ptr<tts::PiperClient>      piper;
-    std::unique_ptr<tts::OpenAiTtsClient>  openai;
-    dialogue::TtsBridge::SubmitFn submit_fn;
-    if (cfg.tts.provider == "speaches") {
-        openai = std::make_unique<tts::OpenAiTtsClient>(cfg.tts);
-        submit_fn = [c = openai.get()](tts::TtsRequest r, tts::TtsCallbacks cb) {
-            c->submit(std::move(r), std::move(cb));
-        };
-    } else {
-        piper = std::make_unique<tts::PiperClient>(cfg.tts);
-        submit_fn = [c = piper.get()](tts::TtsRequest r, tts::TtsCallbacks cb) {
-            c->submit(std::move(r), std::move(cb));
-        };
-    }
+    tts::OpenAiTtsClient client(cfg.tts);
     playback::PlaybackEngine engine(cfg.audio, queue, bus,
                                       []{ return kTurn; });
-    dialogue::TtsBridge     bridge(cfg, bus, std::move(submit_fn), queue);
+    dialogue::TtsBridge     bridge(cfg, bus,
+        [&](tts::TtsRequest r, tts::TtsCallbacks cb) {
+            client.submit(std::move(r), std::move(cb));
+        }, queue);
 
     // Capture the first TtsAudioChunk for latency reporting; capture
     // any error the bridge surfaces.
@@ -88,8 +68,7 @@ int run_tts(const config::Config& cfg) {
         [&](const event::TtsFinished&) { finished.store(true); });
     auto sub_error = bus.subscribe<event::ErrorEvent>({},
         [&](const event::ErrorEvent& e) {
-            if (e.component == "tts_bridge" || e.component == "piper"
-                || e.component == "openai_tts") {
+            if (e.component == "tts_bridge" || e.component == "openai_tts") {
                 errors.fetch_add(1);
                 std::fprintf(stderr,
                     "demo[tts] bridge error: %s\n", e.message.c_str());

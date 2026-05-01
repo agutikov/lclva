@@ -1,7 +1,7 @@
 #pragma once
 
 #include "config/config.hpp"
-#include "tts/piper_client.hpp"  // re-uses TtsRequest + TtsCallbacks types
+#include "tts/types.hpp"
 
 #include <string_view>
 

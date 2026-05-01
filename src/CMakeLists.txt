@@ -16,6 +16,7 @@ add_library(acva_core STATIC
     demos/health.cpp
     demos/llm.cpp
     demos/loopback.cpp
+    demos/stt.cpp
     demos/tone.cpp
     demos/tts.cpp
     dialogue/fsm.cpp
@@ -47,7 +48,6 @@ add_library(acva_core STATIC
     supervisor/service.cpp
     supervisor/supervisor.cpp
     tts/openai_tts_client.cpp
-    tts/piper_client.cpp
 )
 
 target_include_directories(acva_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

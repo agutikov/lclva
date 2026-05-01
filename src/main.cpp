@@ -29,7 +29,6 @@
 #include "supervisor/service.hpp"
 #include "supervisor/supervisor.hpp"
 #include "tts/openai_tts_client.hpp"
-#include "tts/piper_client.hpp"
 
 #include <fmt/format.h>
 #include <unistd.h>
@@ -337,7 +336,6 @@ int main(int argc, char** argv) {
     // M2 behaviour. The stack lives at function scope so its lifetime
     // brackets the FSM/Manager (started after, stopped before).
     std::unique_ptr<acva::playback::PlaybackQueue>  playback_queue;
-    std::unique_ptr<acva::tts::PiperClient>         piper_client;
     std::unique_ptr<acva::tts::OpenAiTtsClient>     openai_tts_client;
     std::unique_ptr<acva::playback::PlaybackEngine> playback_engine;
     std::unique_ptr<acva::dialogue::TtsBridge>      tts_bridge;
@@ -369,28 +367,18 @@ int main(int argc, char** argv) {
                 return playback_active_turn->load(std::memory_order_acquire);
             });
 
-        // M4B: pick the TTS client based on cfg.tts.provider.
-        //   "speaches" → OpenAiTtsClient against cfg.tts.base_url
-        //   "piper"    → legacy PiperClient (pre-M4B path; deleted in Step 6)
-        // The bridge takes a generic submit callable so neither client
-        // class leaks beyond this block.
-        acva::dialogue::TtsBridge::SubmitFn submit_fn;
-        if (cfg.tts.provider == "speaches") {
-            openai_tts_client = std::make_unique<acva::tts::OpenAiTtsClient>(cfg.tts);
-            submit_fn = [c = openai_tts_client.get()]
-                          (acva::tts::TtsRequest r, acva::tts::TtsCallbacks cb) {
+        // M4B: TTS goes through Speaches via OpenAiTtsClient. The
+        // bridge takes a generic submit callable so the client class
+        // doesn't leak beyond this block.
+        openai_tts_client = std::make_unique<acva::tts::OpenAiTtsClient>(cfg.tts);
+        acva::dialogue::TtsBridge::SubmitFn submit_fn =
+            [c = openai_tts_client.get()](acva::tts::TtsRequest r,
+                                            acva::tts::TtsCallbacks cb) {
                 c->submit(std::move(r), std::move(cb));
             };
-            acva::log::info("main", fmt::format(
-                "tts provider=speaches, base_url={}", cfg.tts.base_url));
-        } else {
-            piper_client = std::make_unique<acva::tts::PiperClient>(cfg.tts);
-            submit_fn = [c = piper_client.get()]
-                          (acva::tts::TtsRequest r, acva::tts::TtsCallbacks cb) {
-                c->submit(std::move(r), std::move(cb));
-            };
-            acva::log::info("main", "tts provider=piper (legacy)");
-        }
+        acva::log::info("main", fmt::format(
+            "tts (speaches): base_url={}", cfg.tts.base_url));
+
         tts_bridge = std::make_unique<acva::dialogue::TtsBridge>(
             cfg, bus, std::move(submit_fn), *playback_queue);
 

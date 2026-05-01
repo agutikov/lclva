@@ -57,7 +57,14 @@ stt:
   # The `health` block still points at the legacy whisper.cpp service
   # (port 8082) until M4B Step 6 retires that container.
   base_url: "http://127.0.0.1:8090/v1"
-  model: "Systran/faster-whisper-large-v3"
+  # `large-v3-turbo` is a smaller distilled decoder over the same
+  # large-v3 encoder. ~1.6 GB float16 vs ~3.1 GB for plain large-v3 —
+  # fits alongside llama-7B-Q4 on an 8 GB card. Quality is very close
+  # to large-v3 on multilingual benchmarks; the WER gap is well under
+  # mic + room noise variability for our use case. Switch to plain
+  # `Systran/faster-whisper-large-v3` when the workstation has enough
+  # VRAM headroom (>= 12 GB) for both models in float16.
+  model: "deepdml/faster-whisper-large-v3-turbo-ct2"
   request_timeout_seconds: 30
   health:
     health_url: "http://127.0.0.1:8090/health"
@@ -67,12 +74,9 @@ stt:
     degraded_max_failures: 3
 
 tts:
-  # M4B default: TTS goes through the Speaches container. One base_url
-  # serves every language; per-language `model_id` picks the Piper
-  # voice via Speaches' OpenAI-API-compatible POST /v1/audio/speech.
-  # Switch provider=piper to fall back to the M3 per-language
-  # piper.http_server path (slated for removal in M4B Step 6).
-  provider: speaches
+  # TTS goes through Speaches. One base_url serves every language;
+  # per-language `model_id` + `voice_id` route the request via
+  # Speaches' OpenAI-API-compatible POST /v1/audio/speech.
   base_url: "http://127.0.0.1:8090/v1"
   health:
     health_url: "http://127.0.0.1:8090/health"

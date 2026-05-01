@@ -9,8 +9,8 @@ Detailed per-milestone plans. The high-level table lives in `../project_design.m
 | M2  | `m2_supervision.md` | ✅ landed   |
 | M3  | `m3_tts_playback.md` | ✅ landed   |
 | M4  | `m4_audio_vad.md` | ✅ landed   |
-| M4B | `m4b_speaches_consolidation.md` | next |
-| M5  | `m5_streaming_stt.md` | planned (depends on M4B) |
+| M4B | `m4b_speaches_consolidation.md` | ✅ landed |
+| M5  | `m5_streaming_stt.md` | next |
 | M6  | `m6_aec.md` | planned     |
 | M7  | `m7_barge_in.md` | planned     |
 | M8  | `m8_hardening.md` | planned    |
@@ -21,14 +21,17 @@ Every landed milestone exposes a `acva demo <name>` subcommand that
 exercises its headline deliverable end-to-end with no user input. Run
 `acva demo` (no name) for the catalog:
 
-| Demo     | Milestone | What it verifies |
-|----------|-----------|------------------|
-| `fsm`    | M0        | synthetic FSM driver runs through 3 turns, outcome counters increment |
-| `llm`    | M1        | `LlmClient` reaches llama-server, streams a fixed prompt's reply to stdout |
-| `health` | M2        | `HttpProbe` hits each configured backend's `/health`, prints `ok / status / latency` |
-| `tone`   | M3        | playback engine renders a 1.5 s 440 Hz sine through `cfg.audio.output_device` (no Piper) |
-| `tts`    | M3        | a fixed `LlmSentence` flows through `TtsBridge` → `PiperClient` → `PlaybackEngine` |
-| `chat`   | M1+M3     | full text-in → speech-out loop: fixed prompt → LLM → SentenceSplitter → TTS → speakers |
+| Demo       | Milestone   | What it verifies |
+|------------|-------------|------------------|
+| `fsm`      | M0          | synthetic FSM driver runs through 3 turns, outcome counters increment |
+| `llm`      | M1          | `LlmClient` reaches llama-server, streams a fixed prompt's reply to stdout |
+| `health`   | M2          | `HttpProbe` hits each configured backend's `/health`, prints `ok / status / latency` |
+| `tone`     | M3          | playback engine renders a 1.5 s 440 Hz sine through `cfg.audio.output_device` (no TTS) |
+| `tts`      | M3+M4B      | a fixed `LlmSentence` flows through `TtsBridge` → `OpenAiTtsClient` (Speaches) → `PlaybackEngine` |
+| `chat`     | M1+M3+M4B   | full text-in → speech-out loop: fixed prompt → LLM → SentenceSplitter → TTS → speakers |
+| `loopback` | M4          | mic → speakers passthrough through the SPSC ring + 48↔16 kHz resampler |
+| `capture`  | M4          | mic capture + Silero VAD endpointing report (no STT) |
+| `stt`      | M4B         | self-contained STT smoke: TTS-fixture audio → Speaches `/v1/audio/transcriptions` |
 
 Each demo exits with `0` on success and non-zero with a clear failure
 line on stderr. They use the same config-resolution path as `acva`
@@ -164,27 +167,30 @@ Two no-input demos cover the M4 surface:
 ./_build/dev/acva demo capture    # mic + VAD endpointing report; tunes thresholds
 ```
 
-### M4B (planned) — voice-backend consolidation onto Speaches
+### M4B ✅ — voice-backend consolidation onto Speaches
 
 One Speaches container replaces the separate `whisper.cpp/server` and
 `piper.http_server` Compose services. Same audio output to a listener,
-same `acva demo tts` and `acva demo chat` behaviour — but now over an
+same `acva demo tts` / `acva demo chat` behaviour — but now over an
 OpenAI-compatible HTTP surface, and the synthetic-`FinalTranscript`
 hole in M4 is closed: real STT lands on the bus.
 
 ```sh
-# Bring up the new container alongside the old ones (Step 1):
-docker compose -f packaging/compose/docker-compose.yml up -d speaches
-./scripts/download-speaches-models.sh
-# Smoke endpoints directly:
-curl -fsS http://127.0.0.1:8090/health
-# After Step 5 the orchestrator wires real STT:
-./_build/dev/acva --config config/default.yaml
-# Speak. Watch `event:"final_transcript"` lines from a real engine.
-./_build/dev/acva demo stt        # one-shot STT smoke against a fixture WAV
+# Compose stack is now `llama` + `speaches`:
+docker compose -f packaging/compose/docker-compose.yml up -d
+./scripts/download-speaches-models.sh        # idempotent
+curl -fsS http://127.0.0.1:8090/health        # 200
+
+./_build/dev/acva --config config/default.yaml --stdin
+> what's the moon doing?                      # → LLM → Speaches TTS → speakers
+
+./_build/dev/acva demo stt                    # self-contained STT smoke
+./_build/dev/acva demo tts                    # streaming TTS via Speaches
 ```
 
-After Step 6 the Compose stack is just `llama` + `speaches`.
+Streaming TTS (the new TTFB win) currently produces playback
+underruns until the M4B follow-up `PlaybackEngine` pre-buffer threshold
+lands — see memory note `project_m4b_tts_underruns.md`.
 
 ### M5 (planned) — streaming STT + speculation
 

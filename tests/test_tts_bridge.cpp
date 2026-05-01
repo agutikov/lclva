@@ -3,7 +3,7 @@
 #include "event/bus.hpp"
 #include "event/event.hpp"
 #include "playback/queue.hpp"
-#include "tts/piper_client.hpp"
+#include "tts/openai_tts_client.hpp"
 
 #include <doctest/doctest.h>
 #include <httplib.h>
@@ -22,52 +22,33 @@ using acva::event::TtsAudioChunk;
 using acva::event::TtsFinished;
 using acva::event::TtsStarted;
 using acva::playback::PlaybackQueue;
-using acva::tts::PiperClient;
+using acva::tts::OpenAiTtsClient;
 
 namespace {
 
-// Build the same RIFF/PCM mono int16 byte stream as test_piper_client
-// (kept inline so the two test files stay independent).
-std::string make_wav(std::span<const std::int16_t> samples, std::uint32_t rate) {
-    auto u32 = [](std::uint32_t v) {
-        std::string s(4, '\0');
-        for (int i = 0; i < 4; ++i) s[static_cast<std::size_t>(i)] =
-            static_cast<char>((v >> (i * 8)) & 0xFF);
-        return s;
-    };
-    auto u16 = [](std::uint16_t v) {
-        std::string s(2, '\0');
-        s[0] = static_cast<char>(v & 0xFF);
-        s[1] = static_cast<char>((v >> 8) & 0xFF);
-        return s;
-    };
-    const std::uint32_t bps = 2;
-    const std::uint32_t db  = static_cast<std::uint32_t>(samples.size()) * bps;
-    const std::uint32_t fmt = 16;
-    std::string out;
-    out.append("RIFF"); out.append(u32(4 + 8 + fmt + 8 + db));
-    out.append("WAVE");
-    out.append("fmt "); out.append(u32(fmt));
-    out.append(u16(1)); out.append(u16(1));
-    out.append(u32(rate)); out.append(u32(rate * bps));
-    out.append(u16(static_cast<std::uint16_t>(bps)));
-    out.append(u16(16));
-    out.append("data"); out.append(u32(db));
-    out.append(reinterpret_cast<const char*>(samples.data()), db);
-    return out;
-}
-
-class FakePiper {
+// In-process Speaches stub: answers `POST /v1/audio/speech` with bare
+// int16 mono 22050 Hz PCM (the same `response_format=pcm` shape the
+// production OpenAiTtsClient consumes). `/health` answers 200 so the
+// probe path is exercised too.
+class FakeSpeaches {
 public:
-    FakePiper(std::uint32_t rate_hz = 22050, std::size_t n_samples = 256,
-               std::chrono::milliseconds delay = {})
+    FakeSpeaches(std::uint32_t rate_hz = 22050, std::size_t n_samples = 256,
+                  std::chrono::milliseconds delay = {})
         : rate_(rate_hz), n_(n_samples), delay_(delay) {
-        srv_.Post("/", [this](const httplib::Request&, httplib::Response& res) {
-            if (delay_.count() > 0) std::this_thread::sleep_for(delay_);
-            std::vector<std::int16_t> s(n_, static_cast<std::int16_t>(7000));
+        srv_.Get("/health", [](const httplib::Request&, httplib::Response& res) {
             res.status = 200;
-            res.set_content(make_wav(s, rate_), "audio/wav");
+            res.set_content("{\"status\":\"ok\"}", "application/json");
         });
+        srv_.Post("/v1/audio/speech",
+            [this](const httplib::Request&, httplib::Response& res) {
+                if (delay_.count() > 0) std::this_thread::sleep_for(delay_);
+                std::vector<std::int16_t> s(n_, static_cast<std::int16_t>(7000));
+                res.status = 200;
+                res.set_content(
+                    std::string(reinterpret_cast<const char*>(s.data()),
+                                s.size() * sizeof(std::int16_t)),
+                    "application/octet-stream");
+            });
         port_ = srv_.bind_to_any_port("127.0.0.1");
         REQUIRE(port_ > 0);
         thread_ = std::thread([this]{ srv_.listen_after_bind(); });
@@ -75,13 +56,14 @@ public:
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
     }
-    ~FakePiper() {
+    ~FakeSpeaches() {
         srv_.stop();
         if (thread_.joinable()) thread_.join();
     }
-    [[nodiscard]] std::string url() const {
-        return "http://127.0.0.1:" + std::to_string(port_);
+    [[nodiscard]] std::string base_url() const {
+        return "http://127.0.0.1:" + std::to_string(port_) + "/v1";
     }
+    [[nodiscard]] std::uint32_t rate() const { return rate_; }
 
 private:
     httplib::Server srv_;
@@ -92,10 +74,13 @@ private:
     std::chrono::milliseconds delay_{};
 };
 
-Config make_cfg(const std::string& voice_url) {
+Config make_cfg(const std::string& base_url) {
     Config c;
-    c.tts.provider = "piper";   // legacy path under test in this file
-    c.tts.voices["en"] = TtsVoice{.url = voice_url, .model_id = "", .voice_id = ""};
+    c.tts.base_url = base_url;
+    c.tts.voices["en"] = TtsVoice{
+        .model_id = "speaches-ai/piper-en_US-amy-medium",
+        .voice_id = "amy",
+    };
     c.tts.fallback_lang = "en";
     c.tts.request_timeout_seconds = 5;
     c.audio.sample_rate_hz = 48000;
@@ -146,10 +131,10 @@ std::size_t drain_samples(PlaybackQueue& q, acva::dialogue::TurnId turn) {
 } // namespace
 
 TEST_CASE("TtsBridge: LlmSentence drives Piper synth → resampled audio in queue + events") {
-    FakePiper piper(22050, 220);   // ~10ms of audio at 22050 Hz
-    auto cfg = make_cfg(piper.url());
+    FakeSpeaches piper(22050, 220);   // ~10ms of audio at 22050 Hz
+    auto cfg = make_cfg(piper.base_url());
     EventBus bus;
-    PiperClient client(cfg.tts);
+    OpenAiTtsClient client(cfg.tts);
     PlaybackQueue queue(64);
     Sink<TtsStarted>    started(bus);
     Sink<TtsAudioChunk> chunks(bus);
@@ -187,10 +172,10 @@ TEST_CASE("TtsBridge: LlmSentence drives Piper synth → resampled audio in queu
 }
 
 TEST_CASE("TtsBridge: multiple sentences serialize through one I/O thread") {
-    FakePiper piper(22050, 100);
-    auto cfg = make_cfg(piper.url());
+    FakeSpeaches piper(22050, 100);
+    auto cfg = make_cfg(piper.base_url());
     EventBus bus;
-    PiperClient client(cfg.tts);
+    OpenAiTtsClient client(cfg.tts);
     PlaybackQueue queue(64);
     Sink<TtsFinished> finished(bus);
 
@@ -220,10 +205,10 @@ TEST_CASE("TtsBridge: multiple sentences serialize through one I/O thread") {
 TEST_CASE("TtsBridge: UserInterrupted cancels in-flight, drains queue, drops pending") {
     // Slow server so the bridge has a sentence in flight when the
     // interrupt arrives.
-    FakePiper piper(22050, 100, std::chrono::milliseconds(150));
-    auto cfg = make_cfg(piper.url());
+    FakeSpeaches piper(22050, 100, std::chrono::milliseconds(150));
+    auto cfg = make_cfg(piper.base_url());
     EventBus bus;
-    PiperClient client(cfg.tts);
+    OpenAiTtsClient client(cfg.tts);
     PlaybackQueue queue(64);
     Sink<TtsFinished> finished(bus);
 
@@ -262,10 +247,10 @@ TEST_CASE("TtsBridge: UserInterrupted cancels in-flight, drains queue, drops pen
 }
 
 TEST_CASE("TtsBridge: drops sentences arriving after their turn is cancelled") {
-    FakePiper piper(22050, 100);
-    auto cfg = make_cfg(piper.url());
+    FakeSpeaches piper(22050, 100);
+    auto cfg = make_cfg(piper.base_url());
     EventBus bus;
-    PiperClient client(cfg.tts);
+    OpenAiTtsClient client(cfg.tts);
     PlaybackQueue queue(64);
 
     TtsBridge bridge(cfg, bus,
@@ -294,10 +279,10 @@ TEST_CASE("TtsBridge: drops sentences arriving after their turn is cancelled") {
 }
 
 TEST_CASE("TtsBridge: lang miss falls back to fallback voice") {
-    FakePiper piper(22050, 100);
-    auto cfg = make_cfg(piper.url());        // fallback = "en"
+    FakeSpeaches piper(22050, 100);
+    auto cfg = make_cfg(piper.base_url());        // fallback = "en"
     EventBus bus;
-    PiperClient client(cfg.tts);
+    OpenAiTtsClient client(cfg.tts);
     PlaybackQueue queue(32);
     Sink<TtsFinished> finished(bus);
 
@@ -318,10 +303,10 @@ TEST_CASE("TtsBridge: lang miss falls back to fallback voice") {
 }
 
 TEST_CASE("TtsBridge: stop while in-flight aborts cleanly") {
-    FakePiper piper(22050, 100, std::chrono::milliseconds(200));
-    auto cfg = make_cfg(piper.url());
+    FakeSpeaches piper(22050, 100, std::chrono::milliseconds(200));
+    auto cfg = make_cfg(piper.base_url());
     EventBus bus;
-    PiperClient client(cfg.tts);
+    OpenAiTtsClient client(cfg.tts);
     PlaybackQueue queue(32);
 
     TtsBridge bridge(cfg, bus,

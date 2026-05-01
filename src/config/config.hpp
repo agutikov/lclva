@@ -148,6 +148,14 @@ struct AudioConfig {
     // PortAudio device selector. "default" → host default; otherwise
     // matched by name substring (case-insensitive). Empty == "default".
     std::string output_device = "default";
+    // M4 — capture device. "default" picks the host default; "none"
+    // disables capture entirely. Same matching rules as output.
+    std::string input_device = "default";
+    // Master flag for the M4 capture path. When false, the
+    // CaptureEngine + AudioPipeline are not constructed and the fake
+    // driver continues to publish synthetic Speech* events when
+    // enabled.
+    bool capture_enabled = false;
     uint32_t sample_rate_hz = 48000;
     // Frames-per-callback for the PortAudio output stream. 480 frames
     // = 10 ms at 48 kHz. Larger = more headroom against underruns;
@@ -164,6 +172,27 @@ struct PlaybackConfig {
     uint32_t underrun_log_throttle_ms = 1000;
 };
 
+// M4 — Silero VAD knobs. `provider` is currently a label (silero is
+// the only option); reserved for future per-provider routing.
+struct VadConfig {
+    std::string provider = "silero";
+    // Path to the ONNX model file. Empty disables the VAD; the audio
+    // pipeline still publishes Speech* events but the endpointer will
+    // never fire on real speech (probability is fixed at 0).
+    std::string model_path;
+    float onset_threshold  = 0.5F;
+    float offset_threshold = 0.35F;
+    uint32_t min_speech_ms  = 200;
+    uint32_t hangover_ms    = 600;
+    uint32_t pre_padding_ms = 300;
+    uint32_t post_padding_ms = 100;
+};
+
+struct UtteranceConfig {
+    uint32_t max_in_flight    = 3;
+    uint32_t max_duration_ms  = 60000; // safety cap for long monologues
+};
+
 struct Config {
     LoggingConfig logging;
     ControlConfig control;
@@ -176,6 +205,8 @@ struct Config {
     DialogueConfig dialogue;
     AudioConfig audio;
     PlaybackConfig playback;
+    VadConfig vad;
+    UtteranceConfig utterance;
 };
 
 struct LoadError {

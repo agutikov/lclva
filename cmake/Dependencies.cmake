@@ -21,6 +21,18 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(portaudio REQUIRED IMPORTED_TARGET portaudio-2.0)
 pkg_check_modules(soxr      REQUIRED IMPORTED_TARGET soxr)
 
+# M4 — Silero VAD via ONNX Runtime. Optional; if the package isn't
+# installed the VAD wrapper is omitted and the M4 capture demos fall
+# back to a no-op probability of 0. The voice agent itself logs a
+# warning at startup and disables the dialogue path's capture trigger.
+find_package(onnxruntime CONFIG QUIET)
+if(onnxruntime_FOUND)
+    set(ACVA_HAVE_ONNXRUNTIME TRUE)
+else()
+    set(ACVA_HAVE_ONNXRUNTIME FALSE)
+    message(STATUS "onnxruntime not found — Silero VAD will be a no-op stub")
+endif()
+
 # cpp-httplib is vendored as a single header in third_party/cpp-httplib.
 # Used for the HTTP control plane — civetweb symbols inside prometheus-cpp
 # aren't exported, so we run our own HTTP server. Marked SYSTEM so the

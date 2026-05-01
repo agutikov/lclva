@@ -3,8 +3,11 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <variant>
+
+namespace acva::audio { class AudioSlice; }
 
 namespace acva::event {
 
@@ -26,6 +29,16 @@ struct SpeechStarted {
 struct SpeechEnded {
     TurnId turn = kNoTurn;
     std::chrono::steady_clock::time_point ts{};
+};
+
+// Emitted by the M4 audio pipeline when an utterance has been
+// assembled. Carries a shared_ptr to the AudioSlice so STT (M5) and
+// other consumers can hold the buffer for as long as they need it. The
+// audio pipeline itself drops its reference once the event is
+// published.
+struct UtteranceReady {
+    TurnId turn = kNoTurn;
+    std::shared_ptr<acva::audio::AudioSlice> slice;
 };
 
 // ----- STT events -----
@@ -143,6 +156,7 @@ struct HealthChanged {
 using Event = std::variant<
     SpeechStarted,
     SpeechEnded,
+    UtteranceReady,
     PartialTranscript,
     FinalTranscript,
     LlmStarted,

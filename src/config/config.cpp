@@ -179,6 +179,31 @@ std::optional<LoadError> validate(const Config& cfg) {
     if (cfg.dialogue.max_tts_queue_sentences == 0) {
         return LoadError{"config: dialogue.max_tts_queue_sentences: must be > 0"};
     }
+
+    // M4 — VAD / utterance.
+    if (cfg.vad.onset_threshold < 0.0F || cfg.vad.onset_threshold > 1.0F) {
+        return LoadError{"config: vad.onset_threshold: must be in [0, 1]"};
+    }
+    if (cfg.vad.offset_threshold < 0.0F || cfg.vad.offset_threshold > 1.0F) {
+        return LoadError{"config: vad.offset_threshold: must be in [0, 1]"};
+    }
+    if (cfg.vad.offset_threshold > cfg.vad.onset_threshold) {
+        return LoadError{
+            "config: vad.offset_threshold must be <= vad.onset_threshold "
+            "(otherwise the hysteresis band collapses)"};
+    }
+    if (cfg.vad.min_speech_ms == 0) {
+        return LoadError{"config: vad.min_speech_ms: must be > 0"};
+    }
+    if (cfg.vad.hangover_ms == 0) {
+        return LoadError{"config: vad.hangover_ms: must be > 0"};
+    }
+    if (cfg.utterance.max_in_flight == 0) {
+        return LoadError{"config: utterance.max_in_flight: must be > 0"};
+    }
+    if (cfg.utterance.max_duration_ms == 0) {
+        return LoadError{"config: utterance.max_duration_ms: must be > 0"};
+    }
     return std::nullopt;
 }
 

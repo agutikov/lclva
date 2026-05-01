@@ -1,3 +1,6 @@
+#include "audio/capture.hpp"
+#include "audio/clock.hpp"
+#include "audio/pipeline.hpp"
 #include "config/config.hpp"
 #include "config/paths.hpp"
 #include "demos/demo.hpp"
@@ -161,6 +164,22 @@ int main(int argc, char** argv) {
     // later (e.g. /status, log lines) sees the canonical absolute path.
     cfg.memory.db_path =
         acva::config::resolve_data_path(cfg.memory.db_path, "acva.db").string();
+
+    // M4 — resolve the Silero VAD model path against XDG_DATA_HOME.
+    // Empty → ${XDG_DATA_HOME}/acva/models/silero_vad.onnx (the path
+    // scripts/download-silero-vad.sh writes to). If the file isn't
+    // there, AudioPipeline catches the load failure and disables VAD
+    // with a warning — so leaving model_path unset is safe.
+    if (cfg.vad.model_path.empty()) {
+        const auto resolved = acva::config::resolve_data_path(
+            "", "models/silero_vad.onnx");
+        if (std::filesystem::exists(resolved)) {
+            cfg.vad.model_path = resolved.string();
+        }
+    } else {
+        cfg.vad.model_path =
+            acva::config::resolve_data_path(cfg.vad.model_path, "silero_vad.onnx").string();
+    }
 
     // ----- 2. Initialize logging -----
     acva::log::init(cfg.logging);
@@ -423,6 +442,52 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
+    // ----- M4: capture + VAD pipeline -----
+    // Constructed conditionally on cfg.audio.capture_enabled. When
+    // disabled the M4 path stays dormant; the rest of the orchestrator
+    // (M0–M3) behaves as before. When enabled, the fake driver
+    // suppresses its synthetic SpeechStarted/SpeechEnded events so the
+    // real VAD owns them — the rest of the synthetic pipeline still
+    // runs (FinalTranscript / LlmSentence / TTS) until M5+ replaces it.
+    std::unique_ptr<acva::audio::MonotonicAudioClock> audio_clock;
+    std::unique_ptr<acva::audio::CaptureRing>          capture_ring;
+    std::unique_ptr<acva::audio::CaptureEngine>        capture_engine;
+    std::unique_ptr<acva::audio::AudioPipeline>        audio_pipeline;
+    if (cfg.audio.capture_enabled) {
+        audio_clock  = std::make_unique<acva::audio::MonotonicAudioClock>();
+        capture_ring = std::make_unique<acva::audio::CaptureRing>();
+        capture_engine = std::make_unique<acva::audio::CaptureEngine>(
+            cfg.audio, *capture_ring, *audio_clock);
+
+        acva::audio::AudioPipeline::Config apc;
+        apc.input_sample_rate     = cfg.audio.sample_rate_hz;
+        apc.output_sample_rate    = 16000;
+        apc.endpointer.onset_threshold  = cfg.vad.onset_threshold;
+        apc.endpointer.offset_threshold = cfg.vad.offset_threshold;
+        apc.endpointer.min_speech_ms    = std::chrono::milliseconds{cfg.vad.min_speech_ms};
+        apc.endpointer.hangover_ms      = std::chrono::milliseconds{cfg.vad.hangover_ms};
+        apc.endpointer.pre_padding_ms   = std::chrono::milliseconds{cfg.vad.pre_padding_ms};
+        apc.endpointer.post_padding_ms  = std::chrono::milliseconds{cfg.vad.post_padding_ms};
+        apc.pre_padding_ms       = std::chrono::milliseconds{cfg.vad.pre_padding_ms};
+        apc.post_padding_ms      = std::chrono::milliseconds{cfg.vad.post_padding_ms};
+        apc.max_in_flight        = cfg.utterance.max_in_flight;
+        apc.max_duration_ms      = std::chrono::milliseconds{cfg.utterance.max_duration_ms};
+        apc.vad_model_path       = cfg.vad.model_path;
+
+        audio_pipeline = std::make_unique<acva::audio::AudioPipeline>(
+            std::move(apc), *capture_ring, *audio_clock, bus);
+
+        capture_engine->start();
+        audio_pipeline->start();
+        acva::log::info("main", fmt::format(
+            "audio capture enabled (input='{}', headless={}, vad={})",
+            cfg.audio.input_device,
+            capture_engine->headless(),
+            audio_pipeline->vad_enabled() ? "silero" : "off"));
+    } else {
+        acva::log::info("main", "audio capture disabled");
+    }
+
     // Optional fake pipeline driver (M0). Mutually exclusive with the
     // M1 LLM stack — see below.
     std::unique_ptr<acva::pipeline::FakeDriver> fake_driver;
@@ -431,6 +496,7 @@ int main(int argc, char** argv) {
         opts.sentences_per_turn = cfg.pipeline.fake_sentences_per_turn;
         opts.idle_between_turns = std::chrono::milliseconds{cfg.pipeline.fake_idle_between_turns_ms};
         opts.barge_in_probability = cfg.pipeline.fake_barge_in_probability;
+        opts.suppress_speech_events = cfg.audio.capture_enabled;
         fake_driver = std::make_unique<acva::pipeline::FakeDriver>(bus, opts);
         fake_driver->start();
         acva::log::info("main", "fake pipeline driver enabled");
@@ -548,6 +614,10 @@ int main(int argc, char** argv) {
     if (fake_driver) {
         fake_driver->stop();
     }
+    // M4: stop capture before the pipeline so no more frames land in
+    // the SPSC ring while the worker thread is winding down.
+    if (capture_engine) capture_engine->stop();
+    if (audio_pipeline) audio_pipeline->stop();
     if (keep_alive)  keep_alive->stop();   // before llm_client teardown
     if (manager)     manager->stop();
     if (turn_writer) turn_writer->stop();

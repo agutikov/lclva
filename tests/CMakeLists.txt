@@ -3,6 +3,7 @@ add_executable(acva_tests
     test_bus.cpp
     test_config.cpp
     test_db.cpp
+    test_endpointer.cpp
     test_fsm.cpp
     test_json_sink.cpp
     test_keep_alive.cpp
@@ -16,6 +17,7 @@ add_executable(acva_tests
     test_probe.cpp
     test_prompt_builder.cpp
     test_service_monitor.cpp
+    test_spsc_ring.cpp
     test_supervisor.cpp
     test_queue.cpp
     test_sse_parser.cpp
@@ -26,6 +28,8 @@ add_executable(acva_tests
     test_sentence_splitter.cpp
     test_tts_bridge.cpp
     test_turn_writer.cpp
+    test_utterance.cpp
+    test_vad.cpp
 )
 
 target_link_libraries(acva_tests

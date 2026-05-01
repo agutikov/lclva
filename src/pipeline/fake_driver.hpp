@@ -25,6 +25,12 @@ struct FakeDriverOptions {
     double barge_in_probability = 0.0;
     // Random seed for reproducibility. 0 = use steady_clock.
     std::uint64_t seed = 0;
+    // M4 — when true, the fake driver does NOT publish SpeechStarted /
+    // SpeechEnded. The real M4 audio pipeline owns those events. The
+    // driver still produces FinalTranscript / LlmSentence / TTS /
+    // playback synthetic events so M0–M3 functionality remains
+    // exercisable without a mic.
+    bool suppress_speech_events = false;
 };
 
 // Synthetic event generator used in M0 to drive the FSM end-to-end before the

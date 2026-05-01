@@ -9,34 +9,42 @@ namespace acva::demos {
 // Forward declarations of each demo's entry point. Definitions live in
 // the per-demo TUs so adding a new demo is one entry in this table +
 // one new file under src/demos/.
-int run_chat  (const config::Config&);
-int run_fsm   (const config::Config&);
-int run_health(const config::Config&);
-int run_llm   (const config::Config&);
-int run_tone  (const config::Config&);
-int run_tts   (const config::Config&);
+int run_capture (const config::Config&);
+int run_chat    (const config::Config&);
+int run_fsm     (const config::Config&);
+int run_health  (const config::Config&);
+int run_llm     (const config::Config&);
+int run_loopback(const config::Config&);
+int run_tone    (const config::Config&);
+int run_tts     (const config::Config&);
 
 namespace {
 
-constexpr std::array<Demo, 6> kDemos{{
-    {"fsm",    "M0",
+constexpr std::array<Demo, 8> kDemos{{
+    {"fsm",      "M0",
      "synthetic FSM driver runs 3 turns end-to-end (no backends needed)",
      run_fsm},
-    {"health", "M2",
+    {"health",   "M2",
      "probe every configured backend's /health and print the result",
      run_health},
-    {"llm",    "M1",
+    {"llm",      "M1",
      "send a fixed prompt to llama and stream the reply to stdout",
      run_llm},
-    {"tone",   "M3",
+    {"tone",     "M3",
      "play a 1.5 s 440 Hz tone through the audio device — no Piper",
      run_tone},
-    {"tts",    "M3",
+    {"tts",      "M3",
      "synthesize 'Hello from acva.' via the configured voice and play it",
      run_tts},
-    {"chat",   "M1+M3",
+    {"chat",     "M1+M3",
      "full text-in → speech-out loop with a fixed prompt (like --stdin, no input)",
      run_chat},
+    {"loopback", "M4",
+     "5 s mic → speakers passthrough through the SPSC ring + 48↔16 kHz resampler",
+     run_loopback},
+    {"capture",  "M4",
+     "5 s mic capture + Silero VAD endpointing report (no STT)",
+     run_capture},
 }};
 
 } // namespace

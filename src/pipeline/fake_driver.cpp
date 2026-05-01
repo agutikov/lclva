@@ -93,19 +93,23 @@ void FakeDriver::run_loop() {
 }
 
 void FakeDriver::run_one_turn(event::TurnId turn) {
-    // SpeechStarted
-    bus_.publish(event::SpeechStarted{
-        .turn = turn,
-        .ts = std::chrono::steady_clock::now(),
-    });
+    // SpeechStarted (skipped when M4 capture owns these events).
+    if (!opts_.suppress_speech_events) {
+        bus_.publish(event::SpeechStarted{
+            .turn = turn,
+            .ts = std::chrono::steady_clock::now(),
+        });
+    }
 
     sleep_for_or_stop(opts_.user_speech_duration, running_);
     if (!running_.load(std::memory_order_acquire)) return;
 
-    bus_.publish(event::SpeechEnded{
-        .turn = turn,
-        .ts = std::chrono::steady_clock::now(),
-    });
+    if (!opts_.suppress_speech_events) {
+        bus_.publish(event::SpeechEnded{
+            .turn = turn,
+            .ts = std::chrono::steady_clock::now(),
+        });
+    }
 
     sleep_for_or_stop(opts_.stt_processing, running_);
     if (!running_.load(std::memory_order_acquire)) return;
@@ -156,14 +160,18 @@ void FakeDriver::run_one_turn(event::TurnId turn) {
 void FakeDriver::run_one_turn_with_barge_in(event::TurnId turn) {
     // Run the turn until the first sentence has played. Then fire
     // UserInterrupted while still Speaking. Skip the rest of the turn.
-    bus_.publish(event::SpeechStarted{
-        .turn = turn,
-        .ts = std::chrono::steady_clock::now(),
-    });
+    if (!opts_.suppress_speech_events) {
+        bus_.publish(event::SpeechStarted{
+            .turn = turn,
+            .ts = std::chrono::steady_clock::now(),
+        });
+    }
     sleep_for_or_stop(opts_.user_speech_duration, running_);
     if (!running_.load(std::memory_order_acquire)) return;
 
-    bus_.publish(event::SpeechEnded{ .turn = turn, .ts = std::chrono::steady_clock::now() });
+    if (!opts_.suppress_speech_events) {
+        bus_.publish(event::SpeechEnded{ .turn = turn, .ts = std::chrono::steady_clock::now() });
+    }
     sleep_for_or_stop(opts_.stt_processing, running_);
     if (!running_.load(std::memory_order_acquire)) return;
 

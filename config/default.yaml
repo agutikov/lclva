@@ -77,16 +77,39 @@ tts:
   fallback_lang: en
   request_timeout_seconds: 10
 
-# M3 — audio output + playback queue tuning. Capture lives in audio.input
-# under M4; only output knobs ship in M3.
+# M3 — audio output + M4 audio capture. Output knobs ship in M3;
+# input_device + capture_enabled are M4 additions. capture_enabled
+# defaults to false so existing M0–M3 setups keep working unchanged;
+# flip to true to bring up the mic + VAD path.
 audio:
   output_device: default     # "default" | substring of device name | "none" (skips PortAudio init)
+  input_device: default      # M4 — capture device, same matching rules as output
+  capture_enabled: false     # M4 — opt in to the mic + VAD pipeline
   sample_rate_hz: 48000
   buffer_frames: 480         # 10 ms @ 48 kHz
 
 playback:
   max_queue_chunks: 64       # ~640 ms ahead of the audio cb
   underrun_log_throttle_ms: 1000
+
+# M4 — Silero VAD + utterance assembly.
+vad:
+  provider: silero
+  # Empty path disables the VAD; the audio pipeline runs but never
+  # endpoints real speech. Use scripts/download-silero-vad.sh to
+  # fetch the model into ~/.local/share/acva/models/silero_vad.onnx
+  # and set this path accordingly.
+  model_path: ""
+  onset_threshold: 0.5
+  offset_threshold: 0.35
+  min_speech_ms: 200
+  hangover_ms: 600
+  pre_padding_ms: 300
+  post_padding_ms: 100
+
+utterance:
+  max_in_flight: 3
+  max_duration_ms: 60000     # safety cap for long monologues
 
 supervisor:
   pipeline_fail_grace_seconds: 30

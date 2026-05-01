@@ -6,6 +6,7 @@ const char* event_name(const Event& e) noexcept {
     return std::visit([]<class T>(const T&) -> const char* {
         if constexpr (std::is_same_v<T, SpeechStarted>)     return "speech_started";
         if constexpr (std::is_same_v<T, SpeechEnded>)       return "speech_ended";
+        if constexpr (std::is_same_v<T, UtteranceReady>)    return "utterance_ready";
         if constexpr (std::is_same_v<T, PartialTranscript>) return "partial_transcript";
         if constexpr (std::is_same_v<T, FinalTranscript>)   return "final_transcript";
         if constexpr (std::is_same_v<T, LlmStarted>)        return "llm_started";

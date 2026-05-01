@@ -70,21 +70,58 @@ struct LlmConfig {
 };
 
 struct SttConfig {
+    // M4B: OpenAI-API-compatible base URL. Empty disables real STT
+    // (the orchestrator falls back to whatever drives FinalTranscript
+    // events — e.g. the synthetic FakeDriver). When set, OpenAiSttClient
+    // POSTs each UtteranceReady's audio to {base_url}/audio/transcriptions
+    // and publishes the resulting FinalTranscript on the bus.
+    std::string base_url;
+    // Speaches model id for transcription, e.g.
+    // "Systran/faster-whisper-large-v3". Required when base_url is set.
+    std::string model;
+    // Per-request timeout for the transcription POST.
+    uint32_t request_timeout_seconds = 30;
     ServiceHealthConfig health;
 };
 
 // One Piper service per language. Upstream `piper.http_server` only
 // loads one voice per process, so each language gets its own port and
 // container. The PiperClient picks the URL by detected language.
+// Per-language TTS voice descriptor.
+//
+// The `url` field is the M3 / pre-M4B shape: per-language Piper
+// container, one URL each. The `voice_id` + `model_id` fields are the
+// M4B / Speaches shape: one Speaches base URL serves every language,
+// distinguished by an OpenAI-style `model` parameter and an optional
+// `voice` parameter. Both shapes coexist during M4B's migration
+// window; OpenAiTtsClient prefers `model_id`, PiperClient still
+// reads `url`. Validators in config.cpp enforce that exactly one of
+// the two shapes is populated per voice.
 struct TtsVoice {
+    // Pre-M4B: per-voice URL pointing at one piper.http_server.
     std::string url;
+    // M4B: model id for Speaches' `POST /v1/audio/speech` request.
+    // Typically "speaches-ai/piper-en_US-amy-medium" or a Kokoro id.
+    std::string model_id;
+    // M4B: voice id within the model. Optional — Piper voices have a
+    // single speaker; Kokoro models name voices like "af_bella".
+    std::string voice_id;
 };
 
 struct TtsConfig {
     ServiceHealthConfig health;
-    // Map of BCP-47 language code → voice service. Empty in default
-    // config; populated explicitly by the user / packaging script as
-    // each language gets a Piper container.
+    // M4B: single OpenAI-API-compatible base URL. When non-empty,
+    // OpenAiTtsClient routes every voice request through it; PiperClient
+    // is bypassed. Empty preserves M3 behavior (per-voice url field).
+    std::string base_url;
+    // Provider tag — drives client selection. "speaches" (default for
+    // M4B) routes through OpenAiTtsClient; "piper" routes through the
+    // legacy PiperClient. After M4B Step 6 the "piper" branch is
+    // removed.
+    std::string provider = "speaches";
+    // Map of BCP-47 language code → voice descriptor. Under M4B every
+    // entry should have model_id (and optional voice_id) populated;
+    // url is dead. Validators warn if both url and model_id are set.
     std::map<std::string, TtsVoice> voices;
     // Used when the detected language has no entry in `voices`.
     std::string fallback_lang = "en";

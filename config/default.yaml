@@ -48,32 +48,45 @@ llm:
 # STT and TTS sections will be expanded in M5 / M3. M2 only consumes the
 # health knobs to keep the supervisor model uniform across services.
 stt:
+  # M4B: STT goes through Speaches' OpenAI-compatible
+  # POST /v1/audio/transcriptions. Setting `base_url` enables real
+  # transcription on every UtteranceReady event from the M4 audio
+  # pipeline; leaving it empty preserves the synthetic-FinalTranscript
+  # path for M0–M2 demos.
+  #
+  # The `health` block still points at the legacy whisper.cpp service
+  # (port 8082) until M4B Step 6 retires that container.
+  base_url: "http://127.0.0.1:8090/v1"
+  model: "Systran/faster-whisper-large-v3"
+  request_timeout_seconds: 30
   health:
-    health_url: "http://127.0.0.1:8082/health"
+    health_url: "http://127.0.0.1:8090/health"
     fail_pipeline_if_down: false   # becomes true in M5 once the dialogue path needs STT
     probe_interval_healthy_ms: 5000
     probe_interval_degraded_ms: 1000
     degraded_max_failures: 3
 
 tts:
+  # M4B default: TTS goes through the Speaches container. One base_url
+  # serves every language; per-language `model_id` picks the Piper
+  # voice via Speaches' OpenAI-API-compatible POST /v1/audio/speech.
+  # Switch provider=piper to fall back to the M3 per-language
+  # piper.http_server path (slated for removal in M4B Step 6).
+  provider: speaches
+  base_url: "http://127.0.0.1:8090/v1"
   health:
-    # Piper exposes no /health route — the M1.B compose stack uses a TCP
-    # probe inside the container. The orchestrator skips probing TTS
-    # until M3 wires either a custom /health route or HEAD-against-/.
-    health_url: ""
+    health_url: "http://127.0.0.1:8090/health"
     fail_pipeline_if_down: false
     probe_interval_healthy_ms: 5000
     probe_interval_degraded_ms: 1000
     degraded_max_failures: 3
-  # Per-language voice routing. Upstream piper.http_server only loads
-  # one voice per process, so each language gets its own Compose
-  # service on its own port. The default below matches what
-  # `scripts/download-backend-assets.sh` downloads — the
-  # en_US-amy-medium voice running inside the `piper` Compose
-  # service (single service today; per-language sprawl arrives only
-  # if you add e.g. a `piper-ru` service in compose).
   voices:
-    en: { url: "http://127.0.0.1:8083" }
+    # `model_id` is the registry id Speaches loads via
+    # `scripts/download-speaches-models.sh`. `voice_id` is required —
+    # for single-speaker Piper voices it's just the speaker name
+    # (e.g. "amy" for piper-en_US-amy-medium); for Kokoro models
+    # use the published voice id like "af_bella".
+    en: { model_id: "speaches-ai/piper-en_US-amy-medium", voice_id: "amy" }
   fallback_lang: en
   request_timeout_seconds: 10
 

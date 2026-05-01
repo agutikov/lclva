@@ -12,9 +12,10 @@ namespace acva::dialogue {
 
 TtsBridge::TtsBridge(const config::Config& cfg,
                       event::EventBus& bus,
-                      tts::PiperClient& client,
+                      SubmitFn submit_fn,
                       playback::PlaybackQueue& queue)
-    : cfg_(cfg), bus_(bus), client_(client), queue_(queue) {}
+    : cfg_(cfg), bus_(bus),
+      submit_fn_(std::move(submit_fn)), queue_(queue) {}
 
 TtsBridge::~TtsBridge() {
     stop();
@@ -257,7 +258,7 @@ void TtsBridge::run_one(Job job) {
         err_msg = std::move(m);
     };
 
-    client_.submit(tts::TtsRequest{
+    submit_fn_(tts::TtsRequest{
         .turn   = job.sentence.turn,
         .seq    = job.sentence.seq,
         .text   = job.sentence.text,

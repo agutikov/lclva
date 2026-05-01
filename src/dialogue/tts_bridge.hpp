@@ -5,12 +5,13 @@
 #include "event/bus.hpp"
 #include "event/event.hpp"
 #include "playback/queue.hpp"
-#include "tts/piper_client.hpp"
+#include "tts/piper_client.hpp"   // re-uses TtsRequest + TtsCallbacks
 
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -52,9 +53,16 @@ namespace acva::dialogue {
 // for /metrics + observability.
 class TtsBridge {
 public:
+    // Generic submit callable: matches the signature of both
+    // PiperClient::submit and OpenAiTtsClient::submit. main.cpp picks
+    // the right client based on cfg.tts.provider and binds its
+    // submit method into this callback. Keeps the bridge decoupled
+    // from any particular client class.
+    using SubmitFn = std::function<void(tts::TtsRequest, tts::TtsCallbacks)>;
+
     TtsBridge(const config::Config& cfg,
                event::EventBus& bus,
-               tts::PiperClient& client,
+               SubmitFn submit_fn,
                playback::PlaybackQueue& queue);
     ~TtsBridge();
 
@@ -100,7 +108,7 @@ private:
 
     const config::Config&    cfg_;
     event::EventBus&         bus_;
-    tts::PiperClient&        client_;
+    SubmitFn                 submit_fn_;
     playback::PlaybackQueue& queue_;
 
     event::SubscriptionHandle sub_;

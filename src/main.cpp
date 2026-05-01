@@ -23,10 +23,12 @@
 #include "pipeline/fake_driver.hpp"
 #include "playback/engine.hpp"
 #include "playback/queue.hpp"
+#include "stt/openai_stt_client.hpp"
 #include "supervisor/keep_alive.hpp"
 #include "supervisor/probe.hpp"
 #include "supervisor/service.hpp"
 #include "supervisor/supervisor.hpp"
+#include "tts/openai_tts_client.hpp"
 #include "tts/piper_client.hpp"
 
 #include <fmt/format.h>
@@ -34,11 +36,14 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <csignal>
 #include <cstdlib>
+#include <deque>
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <variant>
@@ -331,10 +336,11 @@ int main(int argc, char** argv) {
     // LlmSentence events flow with no audio side-effect, identical to
     // M2 behaviour. The stack lives at function scope so its lifetime
     // brackets the FSM/Manager (started after, stopped before).
-    std::unique_ptr<acva::playback::PlaybackQueue> playback_queue;
-    std::unique_ptr<acva::tts::PiperClient>        piper_client;
+    std::unique_ptr<acva::playback::PlaybackQueue>  playback_queue;
+    std::unique_ptr<acva::tts::PiperClient>         piper_client;
+    std::unique_ptr<acva::tts::OpenAiTtsClient>     openai_tts_client;
     std::unique_ptr<acva::playback::PlaybackEngine> playback_engine;
-    std::unique_ptr<acva::dialogue::TtsBridge>     tts_bridge;
+    std::unique_ptr<acva::dialogue::TtsBridge>      tts_bridge;
     std::thread                                     playback_metrics_thread;
     std::atomic<bool>                               playback_metrics_stop{false};
 
@@ -357,14 +363,36 @@ int main(int argc, char** argv) {
     if (tts_enabled) {
         playback_queue = std::make_unique<acva::playback::PlaybackQueue>(
             cfg.playback.max_queue_chunks);
-        piper_client = std::make_unique<acva::tts::PiperClient>(cfg.tts);
         playback_engine = std::make_unique<acva::playback::PlaybackEngine>(
             cfg.audio, *playback_queue, bus,
             [playback_active_turn]{
                 return playback_active_turn->load(std::memory_order_acquire);
             });
+
+        // M4B: pick the TTS client based on cfg.tts.provider.
+        //   "speaches" → OpenAiTtsClient against cfg.tts.base_url
+        //   "piper"    → legacy PiperClient (pre-M4B path; deleted in Step 6)
+        // The bridge takes a generic submit callable so neither client
+        // class leaks beyond this block.
+        acva::dialogue::TtsBridge::SubmitFn submit_fn;
+        if (cfg.tts.provider == "speaches") {
+            openai_tts_client = std::make_unique<acva::tts::OpenAiTtsClient>(cfg.tts);
+            submit_fn = [c = openai_tts_client.get()]
+                          (acva::tts::TtsRequest r, acva::tts::TtsCallbacks cb) {
+                c->submit(std::move(r), std::move(cb));
+            };
+            acva::log::info("main", fmt::format(
+                "tts provider=speaches, base_url={}", cfg.tts.base_url));
+        } else {
+            piper_client = std::make_unique<acva::tts::PiperClient>(cfg.tts);
+            submit_fn = [c = piper_client.get()]
+                          (acva::tts::TtsRequest r, acva::tts::TtsCallbacks cb) {
+                c->submit(std::move(r), std::move(cb));
+            };
+            acva::log::info("main", "tts provider=piper (legacy)");
+        }
         tts_bridge = std::make_unique<acva::dialogue::TtsBridge>(
-            cfg, bus, *piper_client, *playback_queue);
+            cfg, bus, std::move(submit_fn), *playback_queue);
 
         playback_engine->start();
         tts_bridge->start();
@@ -515,6 +543,72 @@ int main(int argc, char** argv) {
         acva::log::info("main", "audio capture disabled");
     }
 
+    // ----- M4B: STT — UtteranceReady → POST /v1/audio/transcriptions -----
+    //
+    // Constructed conditionally on cfg.stt.base_url. When set, every
+    // UtteranceReady from the M4 pipeline is dispatched to a
+    // single-thread STT executor and the resulting FinalTranscript is
+    // republished on the bus. The dialogue Manager already consumes
+    // FinalTranscript — no FSM changes needed.
+    //
+    // M4B uses request/response (Speaches'
+    // /v1/audio/transcriptions). M5 will swap the inner client for
+    // /v1/realtime streaming.
+    std::unique_ptr<acva::stt::OpenAiSttClient> stt_client;
+    std::thread                                  stt_worker;
+    std::atomic<bool>                            stt_stop{false};
+    std::mutex                                   stt_mu;
+    std::condition_variable                      stt_cv;
+    std::deque<acva::stt::SttRequest>            stt_queue;
+    if (!cfg.stt.base_url.empty()) {
+        stt_client = std::make_unique<acva::stt::OpenAiSttClient>(cfg.stt);
+
+        auto stt_sub = bus.subscribe<acva::event::UtteranceReady>({},
+            [&](const acva::event::UtteranceReady& e) {
+                if (!e.slice) return;
+                std::lock_guard lk(stt_mu);
+                stt_queue.push_back(acva::stt::SttRequest{
+                    .turn  = e.turn,
+                    .slice = e.slice,
+                    .cancel = std::make_shared<acva::dialogue::CancellationToken>(),
+                    .lang_hint = "",
+                });
+                stt_cv.notify_one();
+            });
+        metric_subs.push_back(stt_sub);
+
+        stt_worker = std::thread([&] {
+            while (!stt_stop.load(std::memory_order_acquire)) {
+                acva::stt::SttRequest req;
+                {
+                    std::unique_lock lk(stt_mu);
+                    stt_cv.wait(lk, [&]{
+                        return stt_stop.load(std::memory_order_acquire)
+                                || !stt_queue.empty();
+                    });
+                    if (stt_stop.load(std::memory_order_acquire)) break;
+                    req = std::move(stt_queue.front());
+                    stt_queue.pop_front();
+                }
+                acva::stt::SttCallbacks cb;
+                cb.on_final = [&bus](acva::event::FinalTranscript ft) {
+                    bus.publish(std::move(ft));
+                };
+                cb.on_error = [](std::string err) {
+                    acva::log::warn("stt",
+                        fmt::format("transcription failed: {}", err));
+                };
+                stt_client->submit(std::move(req), std::move(cb));
+            }
+        });
+
+        acva::log::info("main", fmt::format(
+            "stt enabled (base_url={}, model={})",
+            cfg.stt.base_url, cfg.stt.model));
+    } else {
+        acva::log::info("main", "stt disabled (cfg.stt.base_url empty)");
+    }
+
     // Optional fake pipeline driver (M0). Mutually exclusive with the
     // M1 LLM stack — see below.
     std::unique_ptr<acva::pipeline::FakeDriver> fake_driver;
@@ -650,6 +744,13 @@ int main(int argc, char** argv) {
     if (audio_metrics_thread.joinable()) {
         audio_metrics_stop.store(true, std::memory_order_release);
         audio_metrics_thread.join();
+    }
+    // M4B: stop the STT worker after the pipeline so no late
+    // UtteranceReady events queue up unprocessed.
+    if (stt_worker.joinable()) {
+        stt_stop.store(true, std::memory_order_release);
+        stt_cv.notify_all();
+        stt_worker.join();
     }
     if (keep_alive)  keep_alive->stop();   // before llm_client teardown
     if (manager)     manager->stop();

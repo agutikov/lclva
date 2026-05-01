@@ -94,7 +94,8 @@ private:
 
 Config make_cfg(const std::string& voice_url) {
     Config c;
-    c.tts.voices["en"] = TtsVoice{.url = voice_url};
+    c.tts.provider = "piper";   // legacy path under test in this file
+    c.tts.voices["en"] = TtsVoice{.url = voice_url, .model_id = "", .voice_id = ""};
     c.tts.fallback_lang = "en";
     c.tts.request_timeout_seconds = 5;
     c.audio.sample_rate_hz = 48000;
@@ -154,7 +155,10 @@ TEST_CASE("TtsBridge: LlmSentence drives Piper synth → resampled audio in queu
     Sink<TtsAudioChunk> chunks(bus);
     Sink<TtsFinished>   finished(bus);
 
-    TtsBridge bridge(cfg, bus, client, queue);
+    TtsBridge bridge(cfg, bus,
+        [&](acva::tts::TtsRequest r, acva::tts::TtsCallbacks cb) {
+            client.submit(std::move(r), std::move(cb));
+        }, queue);
     bridge.start();
 
     bus.publish(acva::event::LlmStarted{ .turn = 7 });
@@ -190,7 +194,10 @@ TEST_CASE("TtsBridge: multiple sentences serialize through one I/O thread") {
     PlaybackQueue queue(64);
     Sink<TtsFinished> finished(bus);
 
-    TtsBridge bridge(cfg, bus, client, queue);
+    TtsBridge bridge(cfg, bus,
+        [&](acva::tts::TtsRequest r, acva::tts::TtsCallbacks cb) {
+            client.submit(std::move(r), std::move(cb));
+        }, queue);
     bridge.start();
 
     bus.publish(acva::event::LlmStarted{ .turn = 1 });
@@ -220,7 +227,10 @@ TEST_CASE("TtsBridge: UserInterrupted cancels in-flight, drains queue, drops pen
     PlaybackQueue queue(64);
     Sink<TtsFinished> finished(bus);
 
-    TtsBridge bridge(cfg, bus, client, queue);
+    TtsBridge bridge(cfg, bus,
+        [&](acva::tts::TtsRequest r, acva::tts::TtsCallbacks cb) {
+            client.submit(std::move(r), std::move(cb));
+        }, queue);
     bridge.start();
 
     bus.publish(acva::event::LlmStarted{ .turn = 9 });
@@ -258,7 +268,10 @@ TEST_CASE("TtsBridge: drops sentences arriving after their turn is cancelled") {
     PiperClient client(cfg.tts);
     PlaybackQueue queue(64);
 
-    TtsBridge bridge(cfg, bus, client, queue);
+    TtsBridge bridge(cfg, bus,
+        [&](acva::tts::TtsRequest r, acva::tts::TtsCallbacks cb) {
+            client.submit(std::move(r), std::move(cb));
+        }, queue);
     bridge.start();
 
     bus.publish(acva::event::LlmStarted{ .turn = 5 });
@@ -288,7 +301,10 @@ TEST_CASE("TtsBridge: lang miss falls back to fallback voice") {
     PlaybackQueue queue(32);
     Sink<TtsFinished> finished(bus);
 
-    TtsBridge bridge(cfg, bus, client, queue);
+    TtsBridge bridge(cfg, bus,
+        [&](acva::tts::TtsRequest r, acva::tts::TtsCallbacks cb) {
+            client.submit(std::move(r), std::move(cb));
+        }, queue);
     bridge.start();
 
     bus.publish(acva::event::LlmStarted{ .turn = 1 });
@@ -308,7 +324,10 @@ TEST_CASE("TtsBridge: stop while in-flight aborts cleanly") {
     PiperClient client(cfg.tts);
     PlaybackQueue queue(32);
 
-    TtsBridge bridge(cfg, bus, client, queue);
+    TtsBridge bridge(cfg, bus,
+        [&](acva::tts::TtsRequest r, acva::tts::TtsCallbacks cb) {
+            client.submit(std::move(r), std::move(cb));
+        }, queue);
     bridge.start();
     bus.publish(acva::event::LlmStarted{ .turn = 1 });
     bus.publish(acva::event::LlmSentence{

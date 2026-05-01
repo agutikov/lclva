@@ -133,8 +133,9 @@ private:
 TtsConfig make_tts_cfg(std::initializer_list<std::pair<std::string, std::string>> voices,
                        std::string fallback = "en") {
     TtsConfig c;
+    c.provider = "piper";
     for (const auto& [lang, url] : voices) {
-        c.voices[lang] = TtsVoice{.url = url};
+        c.voices[lang] = TtsVoice{.url = url, .model_id = "", .voice_id = ""};
     }
     c.fallback_lang = std::move(fallback);
     c.request_timeout_seconds = 5;

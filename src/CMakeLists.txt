@@ -41,10 +41,12 @@ add_library(acva_core STATIC
     pipeline/fake_driver.cpp
     playback/engine.cpp
     playback/queue.cpp
+    stt/openai_stt_client.cpp
     supervisor/keep_alive.cpp
     supervisor/probe.cpp
     supervisor/service.cpp
     supervisor/supervisor.cpp
+    tts/openai_tts_client.cpp
     tts/piper_client.cpp
 )
 

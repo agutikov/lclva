@@ -5,12 +5,14 @@
 #include "event/event.hpp"
 #include "playback/engine.hpp"
 #include "playback/queue.hpp"
+#include "tts/openai_tts_client.hpp"
 #include "tts/piper_client.hpp"
 
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <mutex>
 
 namespace acva::demos {
@@ -24,24 +26,47 @@ int run_tts(const config::Config& cfg) {
         return EXIT_FAILURE;
     }
     const auto& fb = cfg.tts.fallback_lang;
-    const std::string fb_url =
-        cfg.tts.voices.contains(fb) ? cfg.tts.voices.at(fb).url : "";
+    // Describe the route to stdout. Speaches uses one base_url +
+    // model_id; Piper uses per-language url.
+    std::string route_desc;
+    if (cfg.tts.provider == "speaches") {
+        route_desc = "speaches " + cfg.tts.base_url + " model_id=";
+        if (cfg.tts.voices.contains(fb)) route_desc += cfg.tts.voices.at(fb).model_id;
+    } else {
+        route_desc = "piper url=";
+        if (cfg.tts.voices.contains(fb)) route_desc += cfg.tts.voices.at(fb).url;
+    }
 
     constexpr event::TurnId   kTurn = 1;
     constexpr event::SequenceNo kSeq  = 0;
     constexpr std::string_view kText = "Hello from acva.";
 
     std::printf(
-        "demo[tts] synthesizing \"%.*s\" via lang='%s' url='%s'\n",
+        "demo[tts] synthesizing \"%.*s\" via lang='%s' [%s]\n",
         static_cast<int>(kText.size()), kText.data(),
-        fb.c_str(), fb_url.c_str());
+        fb.c_str(), route_desc.c_str());
 
     event::EventBus bus;
     playback::PlaybackQueue queue(cfg.playback.max_queue_chunks);
-    tts::PiperClient        client(cfg.tts);
+
+    // Pick the client to mirror main.cpp's runtime path.
+    std::unique_ptr<tts::PiperClient>      piper;
+    std::unique_ptr<tts::OpenAiTtsClient>  openai;
+    dialogue::TtsBridge::SubmitFn submit_fn;
+    if (cfg.tts.provider == "speaches") {
+        openai = std::make_unique<tts::OpenAiTtsClient>(cfg.tts);
+        submit_fn = [c = openai.get()](tts::TtsRequest r, tts::TtsCallbacks cb) {
+            c->submit(std::move(r), std::move(cb));
+        };
+    } else {
+        piper = std::make_unique<tts::PiperClient>(cfg.tts);
+        submit_fn = [c = piper.get()](tts::TtsRequest r, tts::TtsCallbacks cb) {
+            c->submit(std::move(r), std::move(cb));
+        };
+    }
     playback::PlaybackEngine engine(cfg.audio, queue, bus,
                                       []{ return kTurn; });
-    dialogue::TtsBridge     bridge(cfg, bus, client, queue);
+    dialogue::TtsBridge     bridge(cfg, bus, std::move(submit_fn), queue);
 
     // Capture the first TtsAudioChunk for latency reporting; capture
     // any error the bridge surfaces.
@@ -63,7 +88,8 @@ int run_tts(const config::Config& cfg) {
         [&](const event::TtsFinished&) { finished.store(true); });
     auto sub_error = bus.subscribe<event::ErrorEvent>({},
         [&](const event::ErrorEvent& e) {
-            if (e.component == "tts_bridge" || e.component == "piper") {
+            if (e.component == "tts_bridge" || e.component == "piper"
+                || e.component == "openai_tts") {
                 errors.fetch_add(1);
                 std::fprintf(stderr,
                     "demo[tts] bridge error: %s\n", e.message.c_str());
@@ -119,15 +145,15 @@ int run_tts(const config::Config& cfg) {
     if (errors.load() > 0) {
         std::fprintf(stderr,
             "demo[tts] FAIL: %d error event(s) on the bus — see logs above. "
-            "Is the Piper container at %s reachable?\n",
-            errors.load(), fb_url.c_str());
+            "Is the configured TTS backend reachable? (%s)\n",
+            errors.load(), route_desc.c_str());
         return EXIT_FAILURE;
     }
     if (!finished.load()) {
         std::fprintf(stderr,
             "demo[tts] FAIL: TtsFinished never fired (timeout). "
-            "Is `docker compose up -d` running and Piper alive on the "
-            "configured URL?\n");
+            "Is `docker compose up -d` running and the TTS backend alive? "
+            "(%s)\n", route_desc.c_str());
         return EXIT_FAILURE;
     }
 

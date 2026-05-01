@@ -9,6 +9,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace acva::config {
 
@@ -102,6 +103,34 @@ std::optional<LoadError> validate(const Config& cfg) {
     }
     if (cfg.dialogue.max_assistant_sentences == 0) {
         return LoadError{"config: dialogue.max_assistant_sentences: must be > 0"};
+    }
+
+    // Per-service health probes. Empty health_url disables a service's
+    // probe entirely — no need to validate the rest of the knobs in that
+    // case. Each tuple: (logical name, ServiceHealthConfig ref).
+    using Hpair = std::pair<std::string_view, const ServiceHealthConfig*>;
+    const std::array<Hpair, 3> health_sections{{
+        {"llm", &cfg.llm.health},
+        {"stt", &cfg.stt.health},
+        {"tts", &cfg.tts.health},
+    }};
+    for (const auto& [name, h] : health_sections) {
+        if (h->health_url.empty()) continue;
+        if (h->probe_interval_healthy_ms == 0) {
+            return LoadError{std::string{"config: "} + std::string{name}
+                + ".health.probe_interval_healthy_ms: must be > 0"};
+        }
+        if (h->probe_interval_degraded_ms == 0) {
+            return LoadError{std::string{"config: "} + std::string{name}
+                + ".health.probe_interval_degraded_ms: must be > 0"};
+        }
+        if (h->degraded_max_failures == 0) {
+            return LoadError{std::string{"config: "} + std::string{name}
+                + ".health.degraded_max_failures: must be > 0"};
+        }
+    }
+    if (cfg.supervisor.probe_timeout_ms == 0) {
+        return LoadError{"config: supervisor.probe_timeout_ms: must be > 0"};
     }
     // Only enforce fallback_language presence when *any* system_prompts are
     // configured. An empty map is allowed for tests / minimal configs;

@@ -21,6 +21,9 @@ add_library(acva_core STATIC
     memory/summarizer.cpp
     metrics/registry.cpp
     pipeline/fake_driver.cpp
+    supervisor/probe.cpp
+    supervisor/service.cpp
+    supervisor/supervisor.cpp
 )
 
 target_include_directories(acva_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

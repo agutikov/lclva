@@ -35,6 +35,37 @@ llm:
   max_prompt_tokens: 3000
   request_timeout_seconds: 60
   keep_alive_interval_seconds: 60
+  health:
+    health_url: "http://127.0.0.1:8081/health"
+    fail_pipeline_if_down: true
+    probe_interval_healthy_ms: 5000
+    probe_interval_degraded_ms: 1000
+    degraded_max_failures: 3
+
+# STT and TTS sections will be expanded in M5 / M3. M2 only consumes the
+# health knobs to keep the supervisor model uniform across services.
+stt:
+  health:
+    health_url: "http://127.0.0.1:8082/health"
+    fail_pipeline_if_down: false   # becomes true in M5 once the dialogue path needs STT
+    probe_interval_healthy_ms: 5000
+    probe_interval_degraded_ms: 1000
+    degraded_max_failures: 3
+
+tts:
+  health:
+    # Piper exposes no /health route — the M1.B compose stack uses a TCP
+    # probe inside the container. The orchestrator skips probing TTS
+    # until M3 wires either a custom /health route or HEAD-against-/.
+    health_url: ""
+    fail_pipeline_if_down: false
+    probe_interval_healthy_ms: 5000
+    probe_interval_degraded_ms: 1000
+    degraded_max_failures: 3
+
+supervisor:
+  pipeline_fail_grace_seconds: 30
+  probe_timeout_ms: 3000
 
 memory:
   # Resolved relative to CWD if not absolute. Production deployments should

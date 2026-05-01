@@ -40,6 +40,23 @@ struct PipelineConfig {
     double fake_barge_in_probability = 0.0;
 };
 
+// Per-service health probe knobs. Embedded in each backend's config
+// section (llm/stt/tts) so the user can tune services independently. The
+// Supervisor (M2) reads these to drive ServiceMonitor.
+struct ServiceHealthConfig {
+    // Empty disables this service's probe entirely (the Supervisor still
+    // registers it with state=NotConfigured for /status visibility).
+    std::string health_url;
+    // If true and the service stays Unhealthy past the supervisor's grace
+    // window, the dialogue path is gated and refuses new turns.
+    bool fail_pipeline_if_down = true;
+    uint32_t probe_interval_healthy_ms = 5000;
+    uint32_t probe_interval_degraded_ms = 1000;
+    // Consecutive probe failures from Healthy before transitioning to
+    // Unhealthy. Failures within [1, this) sit in Degraded.
+    uint32_t degraded_max_failures = 3;
+};
+
 struct LlmConfig {
     std::string base_url = "http://127.0.0.1:8081/v1";
     std::string model = "qwen2.5-7b-instruct";
@@ -49,6 +66,24 @@ struct LlmConfig {
     uint32_t max_prompt_tokens = 3000;
     uint32_t request_timeout_seconds = 60;
     uint32_t keep_alive_interval_seconds = 60;
+    ServiceHealthConfig health;
+};
+
+struct SttConfig {
+    ServiceHealthConfig health;
+};
+
+struct TtsConfig {
+    ServiceHealthConfig health;
+};
+
+struct SupervisorConfig {
+    // How long the LLM may stay Unhealthy before pipeline_state flips to
+    // failed. Counts from the Unhealthy transition, not from the first
+    // failed probe.
+    uint32_t pipeline_fail_grace_seconds = 30;
+    // Per-probe HTTP timeout. Applied uniformly across services.
+    uint32_t probe_timeout_ms = 3000;
 };
 
 struct MemorySummaryConfig {
@@ -92,6 +127,9 @@ struct Config {
     ControlConfig control;
     PipelineConfig pipeline;
     LlmConfig llm;
+    SttConfig stt;
+    TtsConfig tts;
+    SupervisorConfig supervisor;
     MemoryConfig memory;
     DialogueConfig dialogue;
 };

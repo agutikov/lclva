@@ -71,6 +71,16 @@ services:
     container_name: acva-speaches
     ports:
       - "127.0.0.1:8090:8000"
+    # LOOPBACK_HOST_URL: when the realtime endpoint commits an
+    # audio buffer, Speaches calls its own `/v1/audio/transcriptions`
+    # to do the actual STT. Without this env var, it uses an
+    # in-process ASGI transport that doesn't share the WhisperModel
+    # manager state with the live FastAPI app — calls return 404
+    # and committed utterances never produce transcripts. Setting
+    # it to the container's own listener forces a real loopback
+    # HTTP request and the route resolves correctly.
+    environment:
+      LOOPBACK_HOST_URL: http://localhost:8000
     volumes:
       - ${ACVA_MODELS_DIR:-${HOME}/.local/share/acva/models}/speaches:/home/ubuntu/.cache/huggingface/hub
     deploy:

@@ -340,12 +340,9 @@ Decisions that surfaced during M0/M1 implementation, post-interview. These super
 - Decision: `RealtimeSttClient` owns one long-lived `rtc::PeerConnection` per app run. The public per-utterance API (`begin/push_audio/end`) — landing in M5 Step 2.b — translates each utterance into `input_audio_buffer.append` + `commit` on the shared session. Reconnect-on-failure is the supervisor's job; the client surfaces `State::Failed` on disconnect.
 - Consequence: `start()` is a one-shot bring-up at orchestrator startup, not a per-turn cost. The 15 s default timeout includes ICE gathering + SDP exchange + DTLS + `session.updated` round-trip; measured ~2 s end-to-end on the dev workstation.
 
-**L5. Server-side VAD stays on under Speaches realtime.** *(open)*
-- Speaches' `PartialSession` (the schema for `session.update`) types `turn_detection` as `TurnDetection | NotGiven` — `null` is rejected at validation time, and there is no "off" / "none" variant. There is no API path to disable server-side VAD without a Speaches PR.
-- Current behavior: server-side VAD runs with Speaches' defaults (threshold 0.9, silence 550 ms, `create_response: true`); our M4 Silero pipeline still owns bus-level `SpeechStarted` / `SpeechEnded`. Speaches' `input_audio_buffer.speech_started` / `.speech_stopped` events arrive on the data channel but are ignored by the orchestrator.
-- Risk: when M5 Step 2.b wires `input_audio_buffer.commit` to our M4 `SpeechEnded`, server VAD may also auto-commit on its own threshold and create a duplicate transcription window. Need to validate empirically.
-- Options if duplication shows up:
-  - (a) Send `session.update` with `turn_detection.threshold = 1.0` (effectively disables server VAD without removing it).
-  - (b) Drop our explicit commit and rely on server VAD entirely.
-  - (c) PR Speaches to accept `null` / `{"type":"none"}`.
-- Resolve: at M5 Step 2.b acceptance.
+**L5. Server-side VAD stays on under Speaches realtime; we don't send explicit commit.** *(resolved)*
+- Speaches' `PartialSession` (the schema for `session.update`) types `turn_detection` as `TurnDetection | NotGiven` — `null` is rejected at validation time, and there is no "off" / "none" variant.
+- During M5 Step 2.b implementation we discovered Speaches' server VAD doesn't just *detect* speech-stop, it actively *publishes* `input_audio_buffer.committed` for the old buffer and rotates a fresh empty buffer into place. An explicit client-side `input_audio_buffer.commit` therefore lands on the new (empty) buffer and the server returns "buffer too small" or transcribes near-silence.
+- Decision: option **(b)** — `RealtimeSttClient::end_utterance()` does NOT send `input_audio_buffer.commit`. Callers arrange a sufficient trailing silence window before invoking `end_utterance()` (the M4 Silero endpointer's hangover provides this in production; the M5 smoke test pads the synthesized fixture with explicit silence).
+- Speaches' `input_audio_buffer.speech_started` / `.speech_stopped` events arrive on the data channel but are ignored by the orchestrator — our M4 Silero owns the bus-level `SpeechStarted` / `SpeechEnded` events that drive the dialogue FSM.
+- Trade-off: server VAD trims the leading ~50 ms below its 0.9 threshold, so the very first phoneme is sometimes lost (e.g. "Hello" → "below"). This is acceptable for the smoke test (assertion checks model-stable suffix). If real users report dropped first phonemes, lower the threshold via `session.update` (still a valid TurnDetection object) or PR Speaches to accept `null` for `turn_detection`.

@@ -182,32 +182,75 @@ any error transitions to `Failed`; `stop()` transitions to `Closed`.
 `PartialSession` schema rejects `null` and has no "disable" variant
 (see `open_questions.md` L5).
 
-### Step 2.b — Per-utterance audio + transcripts (next slice)
+### Step 2.b — Per-utterance audio + transcripts (✅ landed 2026-05-02)
 
-**Files (planned):**
-- Extend `realtime_stt_client.{hpp,cpp}` with:
-  ```cpp
-  void begin_utterance(dialogue::TurnId turn,
-                       std::shared_ptr<dialogue::CancellationToken> cancel,
-                       UtteranceCallbacks cb);
-  void push_audio(std::span<const std::int16_t> samples_16k);
-  void end_utterance();
-  ```
-- Audio path: 16 kHz int16 PCM in → resample to 48 kHz (Opus rate) →
-  Opus encoder (libopus, ships separately on Manjaro) → RTP packets
-  on the existing audio track.
-- Event subscriptions: parse the `oai-events` data channel for
-  `conversation.item.input_audio_transcription.delta` →
-  `PartialTranscript`, `…transcription.completed` → `FinalTranscript`.
-- `begin_utterance` resets the input buffer (`input_audio_buffer.clear`);
-  `end_utterance` commits it (`input_audio_buffer.commit`) and waits
-  for the matching `transcription.completed` event.
+**Audio transport: data channel, not RTP.** The original sketch
+called for Opus + RTP on the WebRTC audio track. We discovered
+during implementation that Speaches accepts a parallel
+`input_audio_buffer.append` path on the data channel (see
+`realtime/input_audio_buffer_event_router.py` line 124), in which
+the audio is base64-encoded raw 24 kHz int16 mono PCM. Both routes
+funnel into the same internal pubsub. We use the data-channel
+route — it skips libopus, RTP packetization, and the real-time
+pacer entirely. Net savings: ~3-4 days of implementation, one
+fewer C++ dep.
 
-I/O threading: libdatachannel callbacks run on its internal thread
-and serialize per channel; `RealtimeSttClient` synchronizes state
-transitions with a single mutex + condition variable. `push_audio` is
-called from the M4 audio-pipeline worker; it enqueues encoded packets
-onto the audio track and returns immediately.
+**Files:**
+- `src/stt/realtime_event_dispatch.{hpp,cpp}` — typed dispatcher
+  for OpenAI-Realtime events (delta / completed / committed /
+  session.updated / error). 11 unit tests in
+  `tests/test_realtime_event_dispatch.cpp`.
+- `src/stt/realtime_envelope.{hpp,cpp}` extended with
+  `base64_encode`, `build_input_audio_buffer_append_json`,
+  `build_simple_event_json`. Outgoing direction is unwrapped
+  (no fragmentation envelope — server expects raw client-event JSON).
+- `src/stt/realtime_stt_client.{hpp,cpp}` extended with the
+  per-utterance API and a `clear_active_locked()` helper.
+
+**API:**
+```cpp
+void begin_utterance(dialogue::TurnId turn,
+                     std::shared_ptr<dialogue::CancellationToken> cancel,
+                     UtteranceCallbacks cb);
+void push_audio(std::span<const std::int16_t> samples_16k);
+void end_utterance();
+```
+- `begin_utterance` sends `input_audio_buffer.clear` to discard any
+  residual audio from a prior turn.
+- `push_audio` resamples 16 kHz → 24 kHz via the existing
+  `audio::Resampler` (soxr High quality), base64-encodes, sends
+  one `input_audio_buffer.append` per chunk on `oai-events`.
+- `end_utterance` flushes the resampler tail and **does NOT** send
+  `input_audio_buffer.commit` — see open question L5. Callers
+  must arrange a trailing silence window (M4 Silero hangover does
+  this in production; the test pads explicit silence). Server VAD
+  detects speech-stop and auto-commits, the resulting transcript
+  fires on the user's `on_final` callback.
+
+**Events parsed:**
+- `conversation.item.input_audio_transcription.delta` →
+  `event::PartialTranscript` with running concatenation of deltas.
+- `conversation.item.input_audio_transcription.completed` →
+  `event::FinalTranscript` (turn id, text, lang).
+- `input_audio_buffer.committed` → records the server-assigned
+  `item_id` so subsequent transcription events route to the
+  correct turn.
+- `error` → user `on_error` callback.
+
+**I/O threading:** libdatachannel `onMessage` callbacks run on its
+internal thread and serialize per channel. `RealtimeSttClient` uses
+one mutex + cv for state transitions. User callbacks are invoked
+*outside* the lock so they can re-enter the client safely. Per-utterance
+state (`active_turn`, `active_item_id`, `partial_text`, resampler) is
+guarded by the same mutex.
+
+**Live integration test:**
+`tests/test_speaches_realtime_smoke.cpp::"RealtimeSttClient: WAV
+fixture round-trip"` synthesizes a known phrase via Speaches TTS,
+pushes 200 ms chunks (matching the M4 production cadence), pads
+800 ms of trailing silence, and asserts the model-stable suffix
+("smoke test") arrives in `on_final`. 10/10 stable on the dev
+workstation.
 
 ## Step 3 — Wire VAD → Whisper
 

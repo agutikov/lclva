@@ -16,6 +16,9 @@
 
 using acva::stt::realtime::EnvelopeReassembler;
 using acva::stt::realtime::base64_decode;
+using acva::stt::realtime::base64_encode;
+using acva::stt::realtime::build_input_audio_buffer_append_json;
+using acva::stt::realtime::build_simple_event_json;
 
 namespace {
 
@@ -72,6 +75,36 @@ TEST_CASE("base64_decode: empty, ascii, padding variants") {
     CHECK(base64_decode("aGVsbG8h").value() == "hello!");         // 0 pad
     CHECK(base64_decode("aGVsbG8sIHdvcmxk").value() == "hello, world");
     CHECK(base64_decode("YQ==").value() == "a");                  // 2 pad
+}
+
+TEST_CASE("base64_encode round-trips through base64_decode") {
+    const std::string_view cases[] = {
+        std::string_view{""},
+        std::string_view{"a"},
+        std::string_view{"ab"},
+        std::string_view{"abc"},
+        std::string_view{"abcd"},
+        std::string_view{"hello, world"},
+        std::string_view{"\x00\x01\x02\xff", 4},
+    };
+    for (auto s : cases) {
+        const std::string encoded = base64_encode(s);
+        const auto decoded = base64_decode(encoded);
+        REQUIRE(decoded.has_value());
+        CHECK(*decoded == std::string(s));
+    }
+}
+
+TEST_CASE("build_input_audio_buffer_append_json shapes the OpenAI Realtime event") {
+    const std::string j = build_input_audio_buffer_append_json("evt_abc", "AAAA");
+    CHECK(j == R"({"event_id":"evt_abc","type":"input_audio_buffer.append","audio":"AAAA"})");
+}
+
+TEST_CASE("build_simple_event_json carries event_id + type only") {
+    CHECK(build_simple_event_json("e1", "input_audio_buffer.commit")
+          == R"({"event_id":"e1","type":"input_audio_buffer.commit"})");
+    CHECK(build_simple_event_json("e2", "input_audio_buffer.clear")
+          == R"({"event_id":"e2","type":"input_audio_buffer.clear"})");
 }
 
 TEST_CASE("base64_decode: malformed input returns nullopt") {

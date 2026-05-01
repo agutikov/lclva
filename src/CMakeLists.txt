@@ -44,6 +44,7 @@ add_library(acva_core STATIC
     playback/queue.cpp
     stt/openai_stt_client.cpp
     stt/realtime_envelope.cpp
+    stt/realtime_event_dispatch.cpp
     stt/realtime_stt_client.cpp
     supervisor/keep_alive.cpp
     supervisor/probe.cpp

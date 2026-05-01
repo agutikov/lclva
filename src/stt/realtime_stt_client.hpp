@@ -1,9 +1,15 @@
 #pragma once
 
 #include "config/config.hpp"
+#include "dialogue/turn.hpp"
+#include "event/event.hpp"
 
 #include <chrono>
+#include <cstdint>
+#include <functional>
 #include <memory>
+#include <span>
+#include <string>
 
 namespace acva::stt {
 
@@ -63,6 +69,51 @@ public:
     void stop();
 
     [[nodiscard]] State state() const;
+
+    // ---- Per-utterance API (M5 Step 2.b) ----
+    //
+    // The orchestrator calls these between an M4 `SpeechStarted` and
+    // `SpeechEnded`. Multi-second silences within an utterance may
+    // trigger Speaches' default server-side VAD to auto-commit — see
+    // `open_questions.md` L5; the client tolerates extra
+    // `input_audio_buffer.committed` events by tracking only the most
+    // recent item id.
+    struct UtteranceCallbacks {
+        // Fires repeatedly as transcription deltas arrive. `text` is
+        // the running concatenation of all deltas observed so far —
+        // a stable prefix in OpenAI Realtime semantics; the full
+        // utterance only arrives once on `on_final`.
+        std::function<void(event::PartialTranscript)> on_partial;
+        // Fires exactly once after `end_utterance()` (or sooner if
+        // server VAD commits early). `text` is the final transcript.
+        std::function<void(event::FinalTranscript)>   on_final;
+        // Fires on data-channel-side errors (server `error` event,
+        // unparseable response, transcription_failed). Mutually
+        // exclusive with `on_final` for the same turn.
+        std::function<void(std::string err)>          on_error;
+    };
+
+    // Open a new utterance scoped to `turn`. Sends
+    // `input_audio_buffer.clear` to the server to discard any
+    // residual audio from a prior turn. Idempotent: calling
+    // `begin_utterance` again replaces the active callbacks before
+    // any partial/final fires for the new id.
+    void begin_utterance(dialogue::TurnId turn,
+                         std::shared_ptr<dialogue::CancellationToken> cancel,
+                         UtteranceCallbacks cb);
+
+    // Push a chunk of 16 kHz mono int16 PCM. Resampled to 24 kHz
+    // mono internally and sent as `input_audio_buffer.append`. Safe
+    // to call from the M4 audio-pipeline worker thread; the data
+    // channel send is non-blocking (libdatachannel's SCTP buffer
+    // owns backpressure).
+    void push_audio(std::span<const std::int16_t> samples_16k);
+
+    // Signal end-of-utterance. Flushes the resampler tail, sends
+    // `input_audio_buffer.commit`, and returns immediately. The
+    // matching `on_final` arrives asynchronously when the server
+    // finishes transcribing.
+    void end_utterance();
 
     // HEAD against the configured `/health` for startup probes —
     // shares the path with OpenAiSttClient so the supervisor's

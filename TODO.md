@@ -1,6 +1,11 @@
 
 
 
+ready to use and higly customizable
+modular experimental platform
+local-first
+Voice UX
+
 
 Sound filters cheep way to make voice more natural
 
@@ -27,11 +32,13 @@ fast restart to apply params - save context with timestamp, restart, load contex
 ?? Interleaving with players (music, browser, etc)
 
 multi-user conversation
-    - detect users by voice
-    - remember
+    - detect users by voice and remember
 
-multi-context per model
-and multi-model runtime
+generate copy of user personality
+
+multi-context with single model
+multi-model runtime
+
 
 different database, vector database, graph database
 
@@ -41,7 +48,8 @@ reasoning
 temperature
 person state from memory to promt
 style post processing
-
+drift policy
+2-stage generation
 
 
 
@@ -59,4 +67,7 @@ gh pages
 
 Compare with other tools
 analyze target audiences, usage patterns, required functions
+
+
+tg on-call assistent
 

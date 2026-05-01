@@ -34,6 +34,53 @@ constexpr std::array<std::int8_t, 256> kBase64Lookup = [] {
 
 } // namespace
 
+std::string base64_encode(std::string_view bytes) {
+    static constexpr std::string_view alpha =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve(((bytes.size() + 2) / 3) * 4);
+    for (std::size_t i = 0; i < bytes.size(); i += 3) {
+        const auto a = static_cast<unsigned char>(bytes[i]);
+        const auto b = i + 1 < bytes.size()
+            ? static_cast<unsigned char>(bytes[i + 1]) : 0;
+        const auto c = i + 2 < bytes.size()
+            ? static_cast<unsigned char>(bytes[i + 2]) : 0;
+        const std::uint32_t triple =
+            (static_cast<std::uint32_t>(a) << 16) |
+            (static_cast<std::uint32_t>(b) <<  8) |
+             static_cast<std::uint32_t>(c);
+        out.push_back(alpha[(triple >> 18) & 0x3F]);
+        out.push_back(alpha[(triple >> 12) & 0x3F]);
+        out.push_back(i + 1 < bytes.size() ? alpha[(triple >>  6) & 0x3F] : '=');
+        out.push_back(i + 2 < bytes.size() ? alpha[(triple      ) & 0x3F] : '=');
+    }
+    return out;
+}
+
+std::string build_input_audio_buffer_append_json(std::string_view event_id,
+                                                 std::string_view base64_audio) {
+    std::string s;
+    s.reserve(64 + base64_audio.size());
+    s += R"({"event_id":")";
+    s += event_id;
+    s += R"(","type":"input_audio_buffer.append","audio":")";
+    s += base64_audio;
+    s += R"("})";
+    return s;
+}
+
+std::string build_simple_event_json(std::string_view event_id,
+                                    std::string_view type) {
+    std::string s;
+    s.reserve(64 + type.size());
+    s += R"({"event_id":")";
+    s += event_id;
+    s += R"(","type":")";
+    s += type;
+    s += R"("})";
+    return s;
+}
+
 std::optional<std::string> base64_decode(std::string_view input) {
     if (input.size() % 4 != 0) return std::nullopt;
     std::string out;

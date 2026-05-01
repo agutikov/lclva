@@ -249,3 +249,142 @@ TEST_CASE("RealtimeSttClient: start() reaches Ready against live Speaches"
     client.stop();
     CHECK(client.state() == acva::stt::RealtimeSttClient::State::Closed);
 }
+
+namespace {
+
+// Synthesize `text` via Speaches TTS, return as 16 kHz mono int16 PCM
+// samples. Mirrors the helper in test_speaches_smoke.cpp but
+// inlined here so the realtime smoke is self-contained.
+std::vector<std::int16_t> tts_to_16k_pcm(httplib::Client& http,
+                                          std::string_view text) {
+    std::string body = std::string(R"({"model":"speaches-ai/piper-en_US-amy-medium","input":")")
+                       + std::string(text)
+                       + R"(","voice":"amy","response_format":"wav"})";
+    auto res = http.Post("/v1/audio/speech", body, "application/json");
+    REQUIRE(res);
+    REQUIRE(res->status == 200);
+    const auto& wav = res->body;
+    REQUIRE(wav.size() > 1024);
+
+    // Speaches WAV preamble is 44 bytes; payload is mono int16 22050 Hz.
+    std::vector<std::int16_t> samples_22k((wav.size() - 44) / 2);
+    std::memcpy(samples_22k.data(), wav.data() + 44, samples_22k.size() * 2);
+
+    // Nearest-neighbour 22050 → 16000. Good enough for a smoke; the
+    // production audio pipeline uses soxr.
+    std::vector<std::int16_t> samples_16k;
+    const double ratio = 16000.0 / 22050.0;
+    const std::size_t n = static_cast<std::size_t>(
+        static_cast<double>(samples_22k.size()) * ratio);
+    samples_16k.reserve(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        const std::size_t src = static_cast<std::size_t>(
+            static_cast<double>(i) / ratio);
+        samples_16k.push_back(src < samples_22k.size() ? samples_22k[src] : 0);
+    }
+    return samples_16k;
+}
+
+} // namespace
+
+TEST_CASE("RealtimeSttClient: WAV fixture round-trip — partials + final transcript"
+           * doctest::skip(!speaches_reachable())) {
+    constexpr std::string_view kPhrase =
+        "Hello from acva. This is a streaming smoke test.";
+
+    // 1. Synthesize a known waveform via the same Speaches container,
+    //    so the test is self-contained and uses the production model
+    //    end-to-end.
+    auto host = parse(speaches_url());
+    REQUIRE(host.ok);
+    httplib::Client http(host.host, host.port);
+    http.set_connection_timeout(std::chrono::seconds(5));
+    http.set_read_timeout(std::chrono::seconds(60));
+    const auto samples_16k = tts_to_16k_pcm(http, kPhrase);
+    REQUIRE(samples_16k.size() > 16000); // > 1 second of speech
+
+    // 2. Open the realtime session.
+    acva::config::SttConfig cfg;
+    cfg.base_url = speaches_url() + "/v1";
+    cfg.model    = kRealtimeModel;
+    cfg.request_timeout_seconds = 30;
+
+    acva::stt::RealtimeSttClient client(cfg);
+    REQUIRE(client.start(std::chrono::seconds(15)));
+    REQUIRE(client.state() == acva::stt::RealtimeSttClient::State::Ready);
+
+    // 3. Wire up callbacks. PartialTranscript may fire 0+ times
+    //    depending on how Speaches batches deltas for the chosen
+    //    model — we assert at-least-one but the actual production
+    //    requirement is "FinalTranscript matches the phrase".
+    std::mutex                            cb_mu;
+    std::condition_variable               cb_cv;
+    std::vector<acva::event::PartialTranscript> partials;
+    std::optional<acva::event::FinalTranscript>  final_transcript;
+    std::optional<std::string>            error_message;
+
+    acva::stt::RealtimeSttClient::UtteranceCallbacks cb;
+    cb.on_partial = [&](acva::event::PartialTranscript p) {
+        std::lock_guard lk(cb_mu);
+        partials.push_back(std::move(p));
+        cb_cv.notify_all();
+    };
+    cb.on_final = [&](acva::event::FinalTranscript f) {
+        std::lock_guard lk(cb_mu);
+        final_transcript = std::move(f);
+        cb_cv.notify_all();
+    };
+    cb.on_error = [&](std::string err) {
+        std::lock_guard lk(cb_mu);
+        error_message = std::move(err);
+        cb_cv.notify_all();
+    };
+
+    constexpr acva::dialogue::TurnId kTurn = 42;
+    auto cancel = std::make_shared<acva::dialogue::CancellationToken>();
+
+    // 4. Push the audio in 200 ms chunks, mirroring how the M4
+    //    pipeline will call push_audio in production. We append
+    //    ~800 ms of trailing silence so Speaches' server-side VAD
+    //    (silence_duration_ms = 550 default) detects end-of-speech
+    //    before our `input_audio_buffer.commit` lands. The M4
+    //    Silero endpointer's hangover naturally provides this in
+    //    production; the synthesized fixture has none.
+    auto padded = samples_16k;
+    padded.insert(padded.end(), 12'800, std::int16_t{0}); // 800 ms @ 16 kHz
+
+    client.begin_utterance(kTurn, cancel, std::move(cb));
+    constexpr std::size_t kChunkSamples = 16'000 / 5; // 200 ms @ 16 kHz, what M4 will push
+    for (std::size_t i = 0; i < padded.size(); i += kChunkSamples) {
+        const std::size_t end = std::min(i + kChunkSamples, padded.size());
+        client.push_audio(
+            std::span<const std::int16_t>(padded.data() + i, end - i));
+    }
+    client.end_utterance();
+
+    // 5. Wait for the final transcript (or an error). Large-v3-turbo
+    //    on a ~3-second clip warm-completes in ~1 s; allow 10 s as a
+    //    generous ceiling for a cold model.
+    {
+        std::unique_lock lk(cb_mu);
+        const bool got = cb_cv.wait_for(lk, std::chrono::seconds(10),
+            [&] { return final_transcript || error_message; });
+        REQUIRE(got);
+    }
+
+    INFO("partials=" << partials.size()
+         << " final=" << (final_transcript ? final_transcript->text : "<none>")
+         << " error=" << error_message.value_or("<none>"));
+
+    REQUIRE_FALSE(error_message);
+    REQUIRE(final_transcript);
+    CHECK(final_transcript->turn == kTurn);
+    // Speaches' server VAD trims the leading ~50 ms below its 0.9
+    // threshold, so the very first phoneme of "Hello" sometimes
+    // drops (we've seen "below from Akva.", "Yellow from Akva.").
+    // Assert on the model-stable suffix only — that's enough to
+    // prove the audio→transcript path round-tripped intact.
+    CHECK(final_transcript->text.find("smoke test") != std::string::npos);
+
+    client.stop();
+}

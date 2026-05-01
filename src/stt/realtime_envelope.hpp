@@ -63,4 +63,24 @@ private:
 // expected. Returns std::nullopt on malformed input.
 std::optional<std::string> base64_decode(std::string_view input);
 
+// Standard base64 encoder, padded. Used to wrap PCM samples into the
+// `audio` field of `input_audio_buffer.append` events sent to
+// Speaches over the data channel.
+std::string base64_encode(std::string_view bytes);
+
+// Build an `input_audio_buffer.append` event JSON containing
+// `pcm16le_24khz_mono` already base64-encoded. The payload is sent
+// to the server unwrapped (no fragmentation envelope — the
+// asymmetry is documented in the EnvelopeReassembler header).
+std::string build_input_audio_buffer_append_json(
+    std::string_view event_id,
+    std::string_view base64_audio);
+
+// Build a body-less control event (e.g., input_audio_buffer.commit /
+// input_audio_buffer.clear). `type` is the OpenAI Realtime event
+// name verbatim.
+std::string build_simple_event_json(
+    std::string_view event_id,
+    std::string_view type);
+
 } // namespace acva::stt::realtime

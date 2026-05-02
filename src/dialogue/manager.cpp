@@ -170,7 +170,18 @@ void Manager::io_loop() {
 }
 
 void Manager::run_one(const event::FinalTranscript& e) {
-    TurnContext ctx = turns_.mint();
+    // Prefer the FSM-minted turn id (mic+STT path). Falls back to
+    // minting via the factory when the provider isn't set or returns
+    // kNoTurn (M1 stdin path with no SpeechStarted upstream).
+    TurnContext ctx;
+    if (active_turn_provider_) {
+        if (auto id = active_turn_provider_(); id != event::kNoTurn) {
+            ctx = turns_.adopt(id);
+        }
+    }
+    if (ctx.id == event::kNoTurn) {
+        ctx = turns_.mint();
+    }
     {
         std::lock_guard lk(active_mu_);
         active_ = ctx;
@@ -178,11 +189,19 @@ void Manager::run_one(const event::FinalTranscript& e) {
 
     auto lang = e.lang.empty() ? cfg_.dialogue.fallback_language : e.lang;
 
+    log::info("dialogue", fmt::format(
+        "manager: turn {} starting; user_text=\"{}\" lang={}",
+        ctx.id, e.text, lang));
+
     auto body = prompt_builder_.build({
         .session_id        = session_.load(std::memory_order_acquire),
         .lang              = lang,
         .current_user_text = e.text,
     });
+
+    log::info("dialogue", fmt::format(
+        "manager: turn {} prompt built ({} bytes); submitting to llm",
+        ctx.id, body.size()));
 
     bus_.publish(event::LlmStarted{ .turn = ctx.id });
 
@@ -251,6 +270,10 @@ void Manager::run_one(const event::FinalTranscript& e) {
         .on_token    = on_token,
         .on_finished = on_finished,
     });
+
+    log::info("dialogue", fmt::format(
+        "manager: turn {} llm submit returned (sentences emitted={})",
+        ctx.id, seq));
 
     {
         std::lock_guard lk(active_mu_);

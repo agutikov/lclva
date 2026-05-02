@@ -49,6 +49,14 @@ class TurnFactory {
 public:
     [[nodiscard]] TurnContext mint();
 
+    // Wrap an existing turn id in a fresh TurnContext (with its own
+    // CancellationToken). Used when one component minted the turn id
+    // and another needs a context binding to the same id — e.g.,
+    // M5's FSM mints on `speech_started` and the dialogue Manager
+    // adopts that id rather than minting its own. Does NOT bump the
+    // factory's internal counter.
+    [[nodiscard]] TurnContext adopt(TurnId id);
+
 private:
     std::atomic<TurnId> next_{1};
 };

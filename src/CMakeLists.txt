@@ -18,6 +18,7 @@ add_library(acva_core STATIC
     demos/loopback.cpp
     demos/stt.cpp
     demos/tone.cpp
+    demos/transcribe.cpp
     demos/tts.cpp
     dialogue/fsm.cpp
     dialogue/manager.cpp

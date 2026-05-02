@@ -265,6 +265,110 @@ int main(int argc, char** argv) {
         });
     metric_subs.push_back(fsm_metric_sub);
 
+    // ----- Event tracer (cfg.logging.trace_events) -----
+    //
+    // One bus subscriber that prints a structured log line for each
+    // interesting event in the dialogue/STT/LLM/TTS/playback path
+    // with the relevant payload. Per-token / per-chunk events are
+    // summarized rather than emitted individually. Useful for
+    // end-to-end debugging the half-duplex speakers pipeline.
+    if (cfg.logging.trace_events) {
+        // Per-utterance counters that accumulate between LlmStarted
+        // and LlmFinished / between PlaybackStarted and PlaybackFinished.
+        // Captured by reference into the lambda; cleared on
+        // start-of-stream events.
+        struct StreamTallies {
+            std::size_t llm_tokens   = 0;
+            std::size_t tts_chunks   = 0;
+            std::size_t tts_bytes    = 0;
+        };
+        auto tallies = std::make_shared<StreamTallies>();
+
+        auto truncate = [](std::string_view s, std::size_t max = 200) {
+            if (s.size() <= max) return std::string(s);
+            std::string out(s.substr(0, max));
+            out += "…";
+            return out;
+        };
+
+        acva::event::SubscribeOptions trace_opts;
+        trace_opts.name = "trace.events";
+        trace_opts.queue_capacity = 1024;
+        trace_opts.policy = acva::event::OverflowPolicy::DropOldest;
+        auto trace_sub = bus.subscribe_all(trace_opts,
+            [tallies, truncate](const acva::event::Event& e) {
+                std::visit([&]<class T>(const T& ev) {
+                    using namespace acva;
+                    if constexpr (std::is_same_v<T, event::SpeechStarted>) {
+                        log::event("trace", "speech_started", ev.turn, {});
+                    } else if constexpr (std::is_same_v<T, event::SpeechEnded>) {
+                        log::event("trace", "speech_ended", ev.turn, {});
+                    } else if constexpr (std::is_same_v<T, event::PartialTranscript>) {
+                        log::event("trace", "partial_transcript", ev.turn, {
+                            {"seq",  std::to_string(ev.seq)},
+                            {"lang", ev.lang},
+                            {"text", truncate(ev.text)},
+                        });
+                    } else if constexpr (std::is_same_v<T, event::FinalTranscript>) {
+                        log::event("trace", "final_transcript", ev.turn, {
+                            {"lang",                  ev.lang},
+                            {"audio_duration_ms",     std::to_string(ev.audio_duration.count())},
+                            {"processing_duration_ms", std::to_string(ev.processing_duration.count())},
+                            {"text",                  ev.text},
+                        });
+                    } else if constexpr (std::is_same_v<T, event::LlmStarted>) {
+                        tallies->llm_tokens = 0;
+                        log::event("trace", "llm_started", ev.turn, {});
+                    } else if constexpr (std::is_same_v<T, event::LlmToken>) {
+                        ++tallies->llm_tokens;
+                    } else if constexpr (std::is_same_v<T, event::LlmSentence>) {
+                        log::event("trace", "llm_sentence", ev.turn, {
+                            {"seq",  std::to_string(ev.seq)},
+                            {"lang", ev.lang},
+                            {"text", ev.text},
+                        });
+                    } else if constexpr (std::is_same_v<T, event::LlmFinished>) {
+                        log::event("trace", "llm_finished", ev.turn, {
+                            {"tokens",    std::to_string(tallies->llm_tokens)},
+                            {"cancelled", ev.cancelled ? "true" : "false"},
+                        });
+                    } else if constexpr (std::is_same_v<T, event::TtsStarted>) {
+                        log::event("trace", "tts_started", ev.turn, {
+                            {"seq", std::to_string(ev.seq)},
+                        });
+                    } else if constexpr (std::is_same_v<T, event::TtsAudioChunk>) {
+                        tallies->tts_chunks += 1;
+                        tallies->tts_bytes  += ev.bytes;
+                    } else if constexpr (std::is_same_v<T, event::TtsFinished>) {
+                        log::event("trace", "tts_finished", ev.turn, {
+                            {"seq",    std::to_string(ev.seq)},
+                            {"chunks", std::to_string(tallies->tts_chunks)},
+                            {"bytes",  std::to_string(tallies->tts_bytes)},
+                        });
+                        tallies->tts_chunks = 0;
+                        tallies->tts_bytes  = 0;
+                    } else if constexpr (std::is_same_v<T, event::PlaybackStarted>) {
+                        log::event("trace", "playback_started", ev.turn, {
+                            {"seq", std::to_string(ev.seq)},
+                        });
+                    } else if constexpr (std::is_same_v<T, event::PlaybackFinished>) {
+                        log::event("trace", "playback_finished", ev.turn, {
+                            {"seq", std::to_string(ev.seq)},
+                        });
+                    } else if constexpr (std::is_same_v<T, event::UserInterrupted>) {
+                        log::event("trace", "user_interrupted", ev.turn, {});
+                    } else if constexpr (std::is_same_v<T, event::CancelGeneration>) {
+                        log::event("trace", "cancel_generation", ev.turn, {});
+                    }
+                    // UtteranceReady / Pause / Resume / ErrorEvent /
+                    // HealthChanged are handled elsewhere or have low
+                    // signal value here.
+                }, e);
+            });
+        metric_subs.push_back(trace_sub);
+        acva::log::info("main", "event tracer enabled (cfg.logging.trace_events)");
+    }
+
     // ----- M2: Supervisor -----
     //
     // One HttpProbe shared by every ServiceMonitor — it carries no
@@ -697,7 +801,13 @@ int main(int argc, char** argv) {
         acva::log::info("main", "fake pipeline driver disabled");
     }
 
-    // ----- M1 stdin mode: real LLM stack driven by stdin lines -----
+    // ----- LLM / dialogue stack -----
+    //
+    // Constructed whenever an LLM is configured (cfg.llm.base_url non-empty).
+    // Drives the dialogue path for both `--stdin` text input AND the
+    // M5 capture+STT path that publishes FinalTranscript on the bus.
+    // Without this stack, FinalTranscript events have no consumer and
+    // the FSM gets stuck in `thinking` after the first transcript.
     std::unique_ptr<acva::llm::PromptBuilder> prompt_builder;
     std::unique_ptr<acva::llm::LlmClient> llm_client;
     std::unique_ptr<acva::dialogue::Manager> manager;
@@ -706,7 +816,7 @@ int main(int argc, char** argv) {
     std::unique_ptr<acva::supervisor::KeepAlive> keep_alive;
     std::thread stdin_reader;
 
-    if (args.stdin_mode) {
+    if (!cfg.llm.base_url.empty()) {
         auto sid_or = memory->read([](acva::memory::Repository& repo) {
             return repo.insert_session(acva::memory::now_ms(), std::nullopt);
         });
@@ -740,6 +850,16 @@ int main(int argc, char** argv) {
                 != acva::supervisor::PipelineState::Failed;
         });
 
+        // Manager adopts the FSM's already-minted turn id (the one
+        // minted on `speech_started`) so PlaybackFinished events that
+        // carry the id all the way back to the FSM match
+        // `Fsm::active_.id`. Without this, FSM and Manager mint
+        // separate ids for the same logical turn and FSM rejects
+        // every PlaybackFinished as stale.
+        manager->set_active_turn_provider([&fsm]{
+            return fsm.snapshot().active_turn;
+        });
+
         keep_alive = std::make_unique<acva::supervisor::KeepAlive>(
             acva::supervisor::KeepAlive::Options{
                 .interval = std::chrono::milliseconds(
@@ -763,14 +883,20 @@ int main(int argc, char** argv) {
         }
 
         // Echo streamed sentences to the terminal for visual confirmation.
+        // Useful in both stdin and mic-driven modes.
         auto stdout_sub = bus.subscribe<acva::event::LlmSentence>({},
             [](const acva::event::LlmSentence& e) {
                 std::cout << "  " << e.text << "\n" << std::flush;
             });
         metric_subs.push_back(stdout_sub);
+    } else {
+        acva::log::info("main", "llm disabled (cfg.llm.base_url empty); "
+                                "FinalTranscript events will have no consumer");
+    }
 
+    // ----- stdin text-input mode (M1 era) — only the line reader -----
+    if (args.stdin_mode) {
         std::cout << "acva stdin mode — type a line and press enter. Ctrl-D or Ctrl-C to exit.\n";
-
         stdin_reader = std::thread([&bus, &cfg]{
             std::string line;
             while (std::getline(std::cin, line)) {

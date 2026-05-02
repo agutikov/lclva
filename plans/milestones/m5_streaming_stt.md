@@ -489,3 +489,7 @@ Per option (steps 2-7 are mostly identical; Step 1 differs):
 | 6 Multilingual flow | 1 d | 1 d | 1 d |
 | 7 Tests + fixtures | 2 d | 2 d | 1.5 d |
 | **Total** | **~15 d (~3 wk)** | **~10 d (~2 wk)** | **~5 d (~1 wk)** |
+
+## TODOs / known issues to clean up before closing M5
+
+- **Flaky `AudioPipeline: forced VAD probability drives SpeechStarted + UtteranceReady`** in `tests/test_audio_pipeline.cpp`. Pre-existing (predates M5; reproduced on the M4 baseline). Fails roughly 1 in 5 runs because the test asserts on bus-delivered events within a wall-clock deadline, and the bus dispatcher thread sometimes lags under host load. Fix: replace the wall-clock wait with a synchronous bus drain (or lengthen the deadline). Not blocking; surfaces only intermittently in `./run_tests.sh`.

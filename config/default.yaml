@@ -15,6 +15,9 @@ logging:
   level: info        # trace | debug | info | warn | error | critical | off
   sink: stderr       # stderr | journal | file
   # file_path: /var/log/acva.log    # required when sink=file
+  # When true, log per-event details (transcripts, LLM sentences,
+  # TTS/playback timing) at info level for end-to-end debugging.
+  trace_events: true
 
 control:
   bind: "127.0.0.1"
@@ -105,15 +108,18 @@ tts:
 audio:
   output_device: default     # "default" | substring of device name | "none" (skips PortAudio init)
   input_device: default      # M4 — capture device, same matching rules as output
-  capture_enabled: false     # M4 — opt in to the mic + VAD pipeline
+  # M5 default = full speech-to-speech pipeline. The combination
+  # below (capture on + half-duplex on) is the working speakers
+  # mode pre-M6: mic captures, but is gated off while the assistant
+  # speaks so its own voice doesn't trigger VAD. Trade-off: no
+  # barge-in until M6 (AEC) + M7 land. Set capture_enabled: false
+  # for text-only mode (e.g. `acva --stdin` chat); set
+  # half_duplex_while_speaking: false on a headphones-only setup
+  # where speaker bleed isn't a concern.
+  capture_enabled: true
   sample_rate_hz: 48000
   buffer_frames: 480         # 10 ms @ 48 kHz
-  # M5 — half-duplex fallback for speakers-without-AEC. When true,
-  # the mic is gated off while the assistant is Speaking (plus a
-  # short hangover). Lets you use the agent on speakers immediately
-  # without M6 AEC, at the cost of barge-in (you can't interrupt the
-  # assistant). M6 + M7 supersede this once landed; defaults off.
-  half_duplex_while_speaking: false
+  half_duplex_while_speaking: true
   half_duplex_hangover_ms: 200
 
 playback:

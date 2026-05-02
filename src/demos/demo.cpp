@@ -9,19 +9,20 @@ namespace acva::demos {
 // Forward declarations of each demo's entry point. Definitions live in
 // the per-demo TUs so adding a new demo is one entry in this table +
 // one new file under src/demos/.
-int run_capture (const config::Config&);
-int run_chat    (const config::Config&);
-int run_fsm     (const config::Config&);
-int run_health  (const config::Config&);
-int run_llm     (const config::Config&);
-int run_loopback(const config::Config&);
-int run_stt     (const config::Config&);
-int run_tone    (const config::Config&);
-int run_tts     (const config::Config&);
+int run_capture   (const config::Config&);
+int run_chat      (const config::Config&);
+int run_fsm       (const config::Config&);
+int run_health    (const config::Config&);
+int run_llm       (const config::Config&);
+int run_loopback  (const config::Config&);
+int run_stt       (const config::Config&);
+int run_tone      (const config::Config&);
+int run_transcribe(const config::Config&);
+int run_tts       (const config::Config&);
 
 namespace {
 
-constexpr std::array<Demo, 9> kDemos{{
+constexpr std::array<Demo, 10> kDemos{{
     {"fsm",      "M0",
      "synthetic FSM driver runs 3 turns end-to-end (no backends needed)",
      run_fsm},
@@ -49,6 +50,9 @@ constexpr std::array<Demo, 9> kDemos{{
     {"stt",      "M4B",
      "self-contained STT smoke: TTS-fixture audio → Speaches /v1/audio/transcriptions",
      run_stt},
+    {"transcribe", "M5",
+     "30 s mic + Silero VAD + Speaches realtime STT — prints partial + final transcripts",
+     run_transcribe},
 }};
 
 } // namespace

@@ -65,22 +65,59 @@ std::string random_event_id() {
 // session.update payload pinning Speaches to STT-only mode with our
 // chosen transcription model.
 //
-// We deliberately do NOT touch `turn_detection` here. Speaches'
-// `PartialSession` schema (src/speaches/types/realtime.py) types it as
-// `TurnDetection | NotGiven` — null is rejected and there is no
-// "disable" variant. Server-side VAD therefore stays on with its
-// default thresholds. Our M4 Silero pipeline still owns the bus-level
-// `SpeechStarted`/`SpeechEnded` events and the orchestrator's
-// dialogue FSM ignores Speaches' `input_audio_buffer.speech_*` echoes.
-// (Open question for M5 — see plans/open_questions.md section L.)
+// `turn_detection.create_response: false` is the load-bearing flag.
+// With it true (the Speaches default), the realtime endpoint
+// auto-runs `generate_response` after every transcription —
+// Speaches' chat-completion path against its own loopback, which it
+// doesn't host, returns 500, and the failure cascades into a
+// duplicate-conversation-item error. We don't want that path at all
+// — our Manager owns LLM generation against llama directly. So we
+// send a fully-specified TurnDetection (the schema requires every
+// field), changing only create_response.
+//
+// `turn_detection: null` is NOT accepted by Speaches'
+// `PartialSession` schema; see open_questions.md L5.
 std::string build_session_update_json(const std::string& model_id) {
     std::string s;
-    s.reserve(256);
+    s.reserve(384);
     s += R"({"event_id":")";
     s += random_event_id();
     s += R"(","type":"session.update","session":{)";
     s += R"("modalities":["text"],)";
     s += R"("tools":[],)";
+    // Speaches' TurnDetection schema requires prefix_padding_ms (no
+    // default). Omitting it silently fails the union-validation
+    // against `TurnDetection | NotGiven` — Pydantic falls through to
+    // `NotGiven` and drops the entire turn_detection block from the
+    // update, including our `create_response: false`. So we MUST
+    // send all required fields. The session.update handler then
+    // broadcasts an `invalid_request_error` event for
+    // prefix_padding_ms specifically (it's marked unsupported via
+    // the dump's exclude argument); my dispatcher tolerates that
+    // error during bring-up. The session itself applies cleanly
+    // with create_response: false in effect — which is the actual
+    // goal: stop Speaches from auto-running chat-completion against
+    // its own (unhosted) /v1/chat/completions after every transcript.
+    // Effectively disable Speaches' server VAD: with threshold=1.0
+    // and Silero's confidence range [0,1], speech is never detected
+    // → audio_start_ms stays None → no auto speech_stopped, no
+    // auto-commit. Our M4 Silero owns utterance boundaries; we
+    // send `input_audio_buffer.commit` ourselves in end_utterance().
+    //
+    // Why we can't just send `turn_detection: null` (the obvious
+    // fix): Speaches' `PartialSession` schema rejects null. Why we
+    // can't keep server VAD on with sane thresholds: with the
+    // server-locked `prefix_padding_ms: 0`, server VAD fires
+    // rapid-fire speech_started/stopped pairs during real speech
+    // (at ~10 ms intervals) and the resulting auto-commit storm
+    // produces duplicate-item errors. See open_questions.md L5.
+    s += R"("turn_detection":{)";
+    s +=     R"("type":"server_vad",)";
+    s +=     R"("create_response":false,)";
+    s +=     R"("prefix_padding_ms":0,)";
+    s +=     R"("silence_duration_ms":550,)";
+    s +=     R"("threshold":1.0)";
+    s += R"(},)";
     s += R"("input_audio_transcription":{"model":")";
     s += model_id;
     s += R"("}}})";
@@ -189,14 +226,18 @@ struct RealtimeSttClient::Impl {
             if (user_cb) user_cb(std::move(ev));
         };
         cb.on_server_error = [this](std::string message) {
+            // Server-side error events are informational — Speaches
+            // broadcasts them for things like "unsupported field"
+            // alongside an actually-applied session.update. We don't
+            // fail the bring-up here; if the session.updated event
+            // never arrives, start()'s deadline catches it. Errors
+            // during an active utterance fail just that turn (the
+            // session itself stays alive — server typically recovers).
             log::warn("stt-realtime", std::string{"server error: "} + message);
             std::function<void(std::string)> user_cb;
             std::string err_copy;
             {
                 std::lock_guard lk(mu);
-                if (state == State::Configuring || state == State::Connecting) {
-                    set_state(State::Failed);
-                }
                 if (active) {
                     user_cb = std::move(active_cb.on_error);
                     err_copy = message;
@@ -492,20 +533,13 @@ void RealtimeSttClient::end_utterance() {
         dc->send(realtime::build_input_audio_buffer_append_json(
             random_event_id(), b64));
     }
-    // We deliberately do NOT send `input_audio_buffer.commit`.
-    // Speaches' server-side VAD auto-commits when it observes
-    // silence_duration_ms (default 550 ms) of silence after speech;
-    // when its `speech_stopped` event fires, the
-    // `handle_input_audio_buffer_speech_stopped` path itself
-    // publishes `input_audio_buffer.committed`. An explicit client
-    // commit lands on the server-allocated NEW buffer (which is
-    // empty, hence the "buffer too small" errors).
-    //
-    // The contract is therefore: callers must arrange for a
-    // sufficient trailing silence window before invoking
-    // end_utterance(). The M4 Silero endpointer's hangover provides
-    // this naturally; the M5 smoke test pads the synthesized
-    // fixture with explicit silence.
+    // Server VAD is parked at threshold=1.0 (effectively off — see
+    // build_session_update_json) so it never auto-commits. We commit
+    // explicitly here on each M4 SpeechEnded; the server publishes
+    // `input_audio_buffer.committed` and runs transcription on the
+    // buffer we've been appending to.
+    dc->send(realtime::build_simple_event_json(
+        random_event_id(), "input_audio_buffer.commit"));
 }
 
 #else // !ACVA_HAVE_LIBDATACHANNEL

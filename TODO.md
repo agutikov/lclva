@@ -1,19 +1,27 @@
 
 
 
-ready to use and higly customizable
-modular experimental platform
-local-first
-Voice UX
+M8: add cmdline memory crud tool
+
+VAD skips first letter-to-word, why? How to fix? Why it doesn't use sliding window?
+
+
+Long text speech cuts at some threshold, LLM is not aware of it
+
+
+--------------------------------------------------------------------------------
+
+
+Goals:
+    - ready to use and higly customizable
+    - modular experimental platform
+    - local-first
+    - Voice UX
 
 
 Sound filters cheep way to make voice more natural
 
 SSML
-
-
-cmdline memory crud (before webui)
-
 
 
 Followups:
@@ -23,9 +31,9 @@ Followups:
 - MacOS Metal
 - Windows
 
-Potential improvements ???
+Other potential improvements ???
 
-all-in-one C++ app ???
+all-in-one C++ app (llama.cpp + speeches, libs instead of servers) ???
 
 fast restart to apply params - save context with timestamp, restart, load context and continue
 
@@ -43,6 +51,8 @@ multi-model runtime
 different database, vector database, graph database
 
 llama.cpp vs ollama
+
+speeches systemd service ???
 
 reasoning
 temperature

@@ -20,6 +20,14 @@ struct LoggingConfig {
     std::string level = "info"; // trace | debug | info | warn | error | critical | off
     std::string sink = "stderr"; // "stderr" | "journal" | "file"
     std::optional<std::string> file_path;
+    // When true, main.cpp installs a bus subscriber that emits a
+    // structured log line for each transcript / LLM / TTS / playback
+    // event with the relevant payload (transcript text, sentence
+    // text, etc). Useful for end-to-end debugging; rate-limited
+    // events (LlmToken, TtsAudioChunk) are summarized rather than
+    // logged per-occurrence. Default on for the M5 default-config
+    // path that drives the full speech-to-speech pipeline.
+    bool trace_events = true;
 };
 
 struct ControlConfig {

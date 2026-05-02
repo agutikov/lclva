@@ -48,6 +48,10 @@ llm:
 # STT and TTS sections will be expanded in M5 / M3. M2 only consumes the
 # health knobs to keep the supervisor model uniform across services.
 stt:
+  # M5: streaming WebRTC realtime when true; M4B request/response when
+  # false. Production uses streaming; demos that synthesize fixture
+  # audio offline (e.g. acva demo stt) flip this off.
+  streaming: true
   # M4B: STT goes through Speaches' OpenAI-compatible
   # POST /v1/audio/transcriptions. Setting `base_url` enables real
   # transcription on every UtteranceReady event from the M4 audio

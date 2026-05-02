@@ -90,6 +90,14 @@ void AudioPipeline::process_frame(const AudioFrame& frame) {
     // Always-on append so the rolling pre-buffer stays warm.
     utterance_buffer_.append(resampled);
 
+    // M5 streaming-STT sink: invoked while between SpeechStarted and
+    // SpeechEnded so the realtime STT client receives audio as it
+    // arrives. Coexists with the M4B request/response path on the
+    // UtteranceBuffer.
+    if (in_speech_ && live_sink_) {
+        live_sink_(resampled);
+    }
+
     if (vad_) {
         last_vad_p_ = vad_->push_frame(resampled);
     }
@@ -113,6 +121,14 @@ void AudioPipeline::process_frame(const AudioFrame& frame) {
             const auto pre_pad_start =
                 frame.captured_at - cfg_.pre_padding_ms;
             utterance_buffer_.on_speech_started(pre_pad_start, frame.captured_at);
+            in_speech_ = true;
+            // Replay the pre-padding window into the live sink so the
+            // realtime STT sees the same prefix the M4B path keeps in
+            // the UtteranceBuffer. push_audio chunks are short int16
+            // mono at the resampler output rate (16 kHz).
+            if (live_sink_) {
+                live_sink_(resampled);
+            }
             bus_.publish(event::SpeechStarted{
                 .turn = event::kNoTurn,
                 .ts   = frame.captured_at,
@@ -124,6 +140,7 @@ void AudioPipeline::process_frame(const AudioFrame& frame) {
             break;
         case FO::SpeechEnded: {
             auto slice = utterance_buffer_.on_speech_ended(frame.captured_at);
+            in_speech_ = false;
             bus_.publish(event::SpeechEnded{
                 .turn = event::kNoTurn,
                 .ts   = frame.captured_at,

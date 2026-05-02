@@ -252,18 +252,53 @@ pushes 200 ms chunks (matching the M4 production cadence), pads
 ("smoke test") arrives in `on_final`. 10/10 stable on the dev
 workstation.
 
-## Step 3 — Wire VAD → Whisper
+## Step 3 — Wire VAD → Whisper (✅ landed 2026-05-02)
 
-In M4 we got `UtteranceReady` with an `AudioSlice` after `SpeechEnded`. For streaming, we need to push audio **as it arrives**, not at the end.
+**Pipeline live-audio sink.** `AudioPipeline` gained a
+`set_live_audio_sink(LiveAudioSink)` setter. Inside `process_frame`,
+the resampled 16 kHz chunk is pushed through the sink whenever the
+endpointer's `in_speech_` flag is true (between `SpeechStarted` and
+`SpeechEnded` outcomes, including the trigger frames at both
+boundaries). Sink calls coexist with the M4B `UtteranceBuffer`
+appends — both STT paths can run, in practice main.cpp picks one.
 
-**Change:** the audio-processing thread, in addition to assembling the utterance buffer, streams chunks directly to the WhisperClient between `SpeechStarted` and `SpeechEnded`. The full `AudioSlice` is still kept around for re-transcription on cancellation/restart.
+**main.cpp dispatch:** when `cfg.stt.streaming && cfg.stt.base_url
+&& cfg.audio.capture_enabled`, the orchestrator constructs a
+`RealtimeSttClient`, calls `start(15s)` synchronously at startup,
+wires:
 
-**Sequence:**
-- `SpeechStarted` → mint utterance id; FSM in `UserSpeaking`; `WhisperClient::begin`.
-- Each 32-ms VAD chunk → `WhisperClient::push_audio` (also appended to UtteranceBuffer for completeness).
-- `SpeechEnded` → `WhisperClient::end`; FSM transitions to `Transcribing` to wait for the `final` event.
-- Server emits `partial` events asynchronously throughout — they arrive on the bus as `PartialTranscript`.
-- Server emits `final` event → `FinalTranscript` on bus.
+- `audio_pipeline->set_live_audio_sink([](samples) { realtime_stt->push_audio(samples); })`
+- `bus.subscribe<SpeechStarted>` → `realtime_stt->begin_utterance(NoTurn, fresh cancel, callbacks)`
+- `bus.subscribe<SpeechEnded>` → `realtime_stt->end_utterance()`
+
+The `UtteranceCallbacks` registered per-utterance publish
+`PartialTranscript` / `FinalTranscript` straight onto the bus; the
+existing dialogue Manager subscription consumes them transparently —
+no FSM or Manager changes required.
+
+**Path selection:**
+
+| `stt.base_url` | `stt.streaming` | `audio.capture_enabled` | Path |
+|---|---|---|---|
+| empty | — | — | STT disabled |
+| set | true | true | M5 streaming (RealtimeSttClient + live sink) |
+| set | true | false | STT disabled (no audio source to stream) |
+| set | false | — | M4B request/response (UtteranceReady → OpenAiSttClient) |
+
+**No FSM changes** — `SpeechStarted` / `SpeechEnded` events drive the
+existing FSM transitions; the only new thing is that they ALSO drive
+the realtime client lifecycle in parallel.
+
+**Tests added:**
+- `tests/test_audio_pipeline.cpp::"AudioPipeline: live-audio sink fires
+  only inside the utterance window"` — synthetic VAD probability +
+  `pump_for_test`, asserts sink stays silent during pre-speech and
+  post-hangover phases, fires for every chunk in the utterance window.
+
+**Acceptance gate (manual):** flip `cfg.audio.capture_enabled: true`,
+flip `cfg.audio.half_duplex_while_speaking: true` (since we don't
+have AEC yet), run `./_build/dev/acva` with the compose stack up,
+speak into the mic — full mic→STT→LLM→TTS→speakers loop closes.
 
 ### Step 3.b — Half-duplex mic gate (✅ landed 2026-05-02)
 

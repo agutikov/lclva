@@ -24,6 +24,7 @@
 #include "playback/engine.hpp"
 #include "playback/queue.hpp"
 #include "stt/openai_stt_client.hpp"
+#include "stt/realtime_stt_client.hpp"
 #include "supervisor/keep_alive.hpp"
 #include "supervisor/probe.hpp"
 #include "supervisor/service.hpp"
@@ -554,24 +555,84 @@ int main(int argc, char** argv) {
         acva::log::info("main", "audio capture disabled");
     }
 
-    // ----- M4B: STT — UtteranceReady → POST /v1/audio/transcriptions -----
+    // ----- STT — two paths -----
     //
-    // Constructed conditionally on cfg.stt.base_url. When set, every
-    // UtteranceReady from the M4 pipeline is dispatched to a
-    // single-thread STT executor and the resulting FinalTranscript is
-    // republished on the bus. The dialogue Manager already consumes
-    // FinalTranscript — no FSM changes needed.
+    // M5 streaming (cfg.stt.streaming = true, default): RealtimeSttClient
+    // owns one long-lived WebRTC session against /v1/realtime. The
+    // capture pipeline pushes 16 kHz mono chunks into the live sink
+    // between SpeechStarted and SpeechEnded; the client publishes
+    // PartialTranscript / FinalTranscript on the bus.
     //
-    // M4B uses request/response (Speaches'
-    // /v1/audio/transcriptions). M5 will swap the inner client for
-    // /v1/realtime streaming.
-    std::unique_ptr<acva::stt::OpenAiSttClient> stt_client;
-    std::thread                                  stt_worker;
-    std::atomic<bool>                            stt_stop{false};
-    std::mutex                                   stt_mu;
-    std::condition_variable                      stt_cv;
-    std::deque<acva::stt::SttRequest>            stt_queue;
-    if (!cfg.stt.base_url.empty()) {
+    // M4B request/response (cfg.stt.streaming = false): OpenAiSttClient
+    // POSTs each UtteranceReady's audio buffer to
+    // /v1/audio/transcriptions. Used by fixture demos and as a
+    // fallback when libdatachannel isn't available.
+    //
+    // Both publish FinalTranscript on the same bus; the dialogue
+    // Manager consumes it without caring which path produced it.
+    std::unique_ptr<acva::stt::RealtimeSttClient> realtime_stt;
+    std::unique_ptr<acva::stt::OpenAiSttClient>   stt_client;
+    std::thread                                    stt_worker;
+    std::atomic<bool>                              stt_stop{false};
+    std::mutex                                     stt_mu;
+    std::condition_variable                        stt_cv;
+    std::deque<acva::stt::SttRequest>              stt_queue;
+
+    if (!cfg.stt.base_url.empty() && cfg.stt.streaming && cfg.audio.capture_enabled) {
+        realtime_stt = std::make_unique<acva::stt::RealtimeSttClient>(cfg.stt);
+        const bool ok = realtime_stt->start(std::chrono::seconds(15));
+        if (!ok) {
+            acva::log::warn("main",
+                "realtime stt failed to start; dialogue path will not "
+                "receive transcripts (check `acva demo health` for Speaches)");
+            realtime_stt.reset();
+        } else {
+            // Wire the live audio sink — pipeline pushes chunks, client
+            // bridges to Speaches over the data channel. Only when
+            // capture is enabled; otherwise the sink stays disconnected
+            // (the synthetic fake-driver path doesn't go through STT).
+            if (audio_pipeline) {
+                audio_pipeline->set_live_audio_sink(
+                    [&realtime_stt](std::span<const std::int16_t> samples) {
+                        if (realtime_stt) realtime_stt->push_audio(samples);
+                    });
+            }
+
+            // begin_utterance on SpeechStarted, end_utterance on
+            // SpeechEnded. Callbacks publish PartialTranscript /
+            // FinalTranscript on the bus so the dialogue Manager
+            // consumes them transparently. turn=NoTurn — the FSM
+            // doesn't validate turn ids on these events.
+            auto sub_started = bus.subscribe<acva::event::SpeechStarted>({},
+                [&realtime_stt, &bus](const acva::event::SpeechStarted&) {
+                    if (!realtime_stt) return;
+                    auto cancel = std::make_shared<acva::dialogue::CancellationToken>();
+                    acva::stt::RealtimeSttClient::UtteranceCallbacks cb;
+                    cb.on_partial = [&bus](acva::event::PartialTranscript p) {
+                        bus.publish(std::move(p));
+                    };
+                    cb.on_final = [&bus](acva::event::FinalTranscript f) {
+                        bus.publish(std::move(f));
+                    };
+                    cb.on_error = [](std::string err) {
+                        acva::log::warn("stt",
+                            fmt::format("realtime transcription failed: {}", err));
+                    };
+                    realtime_stt->begin_utterance(
+                        acva::event::kNoTurn, cancel, std::move(cb));
+                });
+            auto sub_ended = bus.subscribe<acva::event::SpeechEnded>({},
+                [&realtime_stt](const acva::event::SpeechEnded&) {
+                    if (realtime_stt) realtime_stt->end_utterance();
+                });
+            metric_subs.push_back(sub_started);
+            metric_subs.push_back(sub_ended);
+
+            acva::log::info("main", fmt::format(
+                "stt enabled (streaming, base_url={}, model={})",
+                cfg.stt.base_url, cfg.stt.model));
+        }
+    } else if (!cfg.stt.base_url.empty()) {
         stt_client = std::make_unique<acva::stt::OpenAiSttClient>(cfg.stt);
 
         auto stt_sub = bus.subscribe<acva::event::UtteranceReady>({},
@@ -614,7 +675,7 @@ int main(int argc, char** argv) {
         });
 
         acva::log::info("main", fmt::format(
-            "stt enabled (base_url={}, model={})",
+            "stt enabled (request/response, base_url={}, model={})",
             cfg.stt.base_url, cfg.stt.model));
     } else {
         acva::log::info("main", "stt disabled (cfg.stt.base_url empty)");
@@ -755,6 +816,11 @@ int main(int argc, char** argv) {
     if (audio_metrics_thread.joinable()) {
         audio_metrics_stop.store(true, std::memory_order_release);
         audio_metrics_thread.join();
+    }
+    // M5: tear down the realtime STT before the audio pipeline so no
+    // chunks try to push onto a dead data channel.
+    if (realtime_stt) {
+        realtime_stt->stop();
     }
     // M4B: stop the STT worker after the pipeline so no late
     // UtteranceReady events queue up unprocessed.

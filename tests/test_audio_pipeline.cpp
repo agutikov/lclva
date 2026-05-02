@@ -130,6 +130,70 @@ TEST_CASE("AudioPipeline: forced VAD probability drives SpeechStarted + Utteranc
     bus.shutdown();
 }
 
+TEST_CASE("AudioPipeline: live-audio sink fires only inside the utterance window") {
+    // Mirrors the M5 Step 3 streaming path: when a sink is set, the
+    // pipeline routes resampled 16 kHz chunks through it during the
+    // active utterance window. Outside that window — e.g. before
+    // speech onset and after the endpointer fires SpeechEnded — the
+    // sink must stay silent so RealtimeSttClient doesn't see noise
+    // outside utterances.
+    auto a_cfg = audio_cfg();
+    acva::event::EventBus bus;
+    MonotonicAudioClock clock;
+    CaptureRing ring;
+    CaptureEngine cap(a_cfg, ring, clock);
+    cap.force_headless();
+    cap.start();
+
+    AudioPipeline pipe(pipeline_cfg(), ring, clock, bus);
+
+    std::atomic<std::size_t> sink_calls{0};
+    pipe.set_live_audio_sink(
+        [&](std::span<const std::int16_t> samples) {
+            sink_calls.fetch_add(1);
+            CHECK(!samples.empty());
+        });
+
+    // Phase 1 — pre-speech silence. Sink must NOT fire.
+    pipe.set_test_probability(0.05F);
+    inject_and_pump(cap, pipe, 5);   // 50 ms of silence
+    const auto after_silence = sink_calls.load();
+    CHECK(after_silence == 0);
+
+    // Phase 2 — speech. The endpointer needs `min_speech_ms` of
+    // qualifying frames before it fires SpeechStarted (defaults to
+    // 60 ms = 6 frames of 10 ms each). The frames before SpeechStarted
+    // do NOT go through the sink — they're held in the
+    // UtteranceBuffer's pre-padding window. After SpeechStarted, the
+    // sink fires for every chunk including the one that triggered
+    // the transition.
+    pipe.set_test_probability(0.9F);
+    inject_and_pump(cap, pipe, 20);  // 200 ms of speech
+    const auto after_speech = sink_calls.load();
+    // Expect ~14 sink calls: 1 for the SpeechStarted-triggering
+    // chunk + ~13 for the remaining in-speech chunks. Allow slack
+    // for endpointer hysteresis.
+    CHECK(after_speech >= 10);
+
+    // Phase 3 — post-speech silence. Sink must STOP after the
+    // SpeechEnded outcome is processed inside the pipeline. The
+    // endpointer's hangover (100 ms) means the first ~10 frames of
+    // this phase are still classified as in-speech, so we do allow
+    // sink calls to continue briefly until the hangover expires.
+    // What we assert: the sink stops firing well before the phase
+    // ends.
+    pipe.set_test_probability(0.05F);
+    inject_and_pump(cap, pipe, 5);   // first 50 ms — still in hangover
+    inject_and_pump(cap, pipe, 10);  // next 100 ms — definitely past hangover
+    const auto mid_post = sink_calls.load();
+    inject_and_pump(cap, pipe, 5);   // additional 50 ms after the cliff
+    const auto end_post = sink_calls.load();
+    CHECK(mid_post == end_post);     // no further calls after hangover
+    CHECK(pipe.utterances_total() == 1);
+
+    bus.shutdown();
+}
+
 TEST_CASE("AudioPipeline: false start increments counter, no UtteranceReady") {
     auto a_cfg = audio_cfg();
     acva::event::EventBus bus;

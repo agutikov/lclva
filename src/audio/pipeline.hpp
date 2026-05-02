@@ -13,7 +13,9 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <span>
 #include <thread>
 
 namespace acva::audio {
@@ -78,6 +80,18 @@ public:
     // back to the real VAD path.
     void set_test_probability(float p) noexcept { test_probability_ = p; }
 
+    // M5 — sink for the streaming STT path. Called from the pipeline
+    // worker thread once per resampled chunk while between
+    // SpeechStarted and SpeechEnded with the 16 kHz mono int16
+    // samples. The chunk itself is also appended to the
+    // UtteranceBuffer for the M4B request/response client, so both
+    // STT paths can coexist (in practice main.cpp picks one). The
+    // sink runs synchronously inside the worker — it must not block
+    // (`RealtimeSttClient::push_audio` queues on libdatachannel's
+    // SCTP buffer and returns).
+    using LiveAudioSink = std::function<void(std::span<const std::int16_t>)>;
+    void set_live_audio_sink(LiveAudioSink sink) { live_sink_ = std::move(sink); }
+
 private:
     void run_loop();
     void process_frame(const AudioFrame& frame);
@@ -106,6 +120,12 @@ private:
 
     // Test override (-1 = inactive, otherwise replaces last_vad_p_).
     float test_probability_ = -1.0F;
+
+    // M5 streaming sink (see set_live_audio_sink). Set/queried only
+    // from the worker thread + the main thread before start(); no
+    // synchronization needed.
+    LiveAudioSink live_sink_;
+    bool          in_speech_ = false;
 };
 
 } // namespace acva::audio

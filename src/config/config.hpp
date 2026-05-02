@@ -81,6 +81,14 @@ struct SttConfig {
     std::string model;
     // Per-request timeout for the transcription POST.
     uint32_t request_timeout_seconds = 30;
+    // M5 — when true and base_url is set, the orchestrator uses
+    // RealtimeSttClient (WebRTC streaming on /v1/realtime) and wires
+    // it to the M4 capture pipeline's live-audio sink. When false,
+    // the M4B OpenAiSttClient (request/response on
+    // /v1/audio/transcriptions) is used instead — useful for fixture
+    // demos and when libdatachannel isn't available. Default true so
+    // a normal `acva` run uses streaming.
+    bool streaming = true;
     ServiceHealthConfig health;
 };
 

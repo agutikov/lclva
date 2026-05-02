@@ -271,19 +271,29 @@ bool PlaybackEngine::start() {
     // Headless fallback (or chosen explicitly).
     headless_.store(true, std::memory_order_release);
     running_.store(true, std::memory_order_release);
-    impl_->headless_thread = std::thread([this] {
-        std::vector<std::int16_t> scratch(frames_per_buffer_);
-        while (running_.load(std::memory_order_acquire)) {
-            render_into(scratch.data(), scratch.size());
-            std::unique_lock lk(impl_->headless_mu);
-            impl_->headless_cv.wait_for(lk, headless_tick_, [this]{
-                return !running_.load(std::memory_order_acquire);
-            });
-        }
-    });
-    log::info("playback", fmt::format(
-        "headless mode running (tick={} ms, buf={} frames)",
-        headless_tick_.count(), frames_per_buffer_));
+    // headless_tick_ == 0 → "don't spawn the ticker, just the
+    // publisher". Used by the unit test that drives render_into
+    // directly and otherwise loses to a tiny race where the ticker
+    // gets one render_into call in before its first sleep.
+    if (headless_tick_.count() > 0) {
+        impl_->headless_thread = std::thread([this] {
+            std::vector<std::int16_t> scratch(frames_per_buffer_);
+            while (running_.load(std::memory_order_acquire)) {
+                render_into(scratch.data(), scratch.size());
+                std::unique_lock lk(impl_->headless_mu);
+                impl_->headless_cv.wait_for(lk, headless_tick_, [this]{
+                    return !running_.load(std::memory_order_acquire);
+                });
+            }
+        });
+        log::info("playback", fmt::format(
+            "headless mode running (tick={} ms, buf={} frames)",
+            headless_tick_.count(), frames_per_buffer_));
+    } else {
+        log::info("playback", fmt::format(
+            "headless mode running (manual; tick=0; buf={} frames)",
+            frames_per_buffer_));
+    }
     return true;
 }
 

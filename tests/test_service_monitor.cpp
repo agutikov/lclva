@@ -212,10 +212,31 @@ TEST_CASE("ServiceMonitor: Unhealthy → Healthy on a single OK probe") {
     for (int i = 0; i < 3; ++i) {
         REQUIRE(mon.wait_for_probe(std::chrono::milliseconds(500)));
     }
-    CHECK(mon.state() == ServiceState::Unhealthy);
+    // Race: after the 3rd fail probe, state_ = Unhealthy, but the
+    // run_loop sleeps only `probe_interval_degraded` (= 2 ms) before
+    // pulling the next mock probe (which is OK) and flipping state
+    // to Healthy. Reading mon.state() here without first observing
+    // the OK probe was flaky (~1 in 5 runs). Read sink instead — bus
+    // events are deterministic and ordered with state transitions.
+    //
+    // Three fails produce two distinct health-changed events: the
+    // 1st flips Probing→Degraded, the 3rd flips Degraded→Unhealthy
+    // (the 2nd is a no-op stay-at-Degraded). The 4th probe (OK)
+    // flips Unhealthy→Healthy, total 3 events.
+    REQUIRE(wait_for_events(sink, 2));
+    {
+        const auto evs = sink.snapshot();
+        REQUIRE(evs.size() >= 2);
+        CHECK(evs[1].state == HealthState::Unhealthy);
+    }
 
     REQUIRE(mon.wait_for_probe(std::chrono::milliseconds(500)));
-    CHECK(mon.state() == ServiceState::Healthy);
+    REQUIRE(wait_for_events(sink, 3));
+    {
+        const auto evs = sink.snapshot();
+        REQUIRE(evs.size() >= 3);
+        CHECK(evs[2].state == HealthState::Healthy);
+    }
     mon.stop();
 }
 
@@ -289,8 +310,21 @@ TEST_CASE("ServiceMonitor: probe-fn exception is recorded as a failure") {
     for (int i = 0; i < 3; ++i) {
         REQUIRE(mon.wait_for_probe(std::chrono::milliseconds(500)));
     }
-    CHECK(mon.state() == ServiceState::Unhealthy);
+    // See the "Unhealthy → Healthy on a single OK probe" case for why
+    // we can't rely on `mon.state()` here without first observing the
+    // recovery probe. Read sink instead.
+    REQUIRE(wait_for_events(sink, 2));
+    {
+        const auto evs = sink.snapshot();
+        REQUIRE(evs.size() >= 2);
+        CHECK(evs[1].state == HealthState::Unhealthy);
+    }
     REQUIRE(mon.wait_for_probe(std::chrono::milliseconds(500))); // recovery
-    CHECK(mon.state() == ServiceState::Healthy);
+    REQUIRE(wait_for_events(sink, 3));
+    {
+        const auto evs = sink.snapshot();
+        REQUIRE(evs.size() >= 3);
+        CHECK(evs[2].state == HealthState::Healthy);
+    }
     mon.stop();
 }

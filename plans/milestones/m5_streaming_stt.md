@@ -499,14 +499,22 @@ Steps 4 & 5 moved to M9. Remaining M5 work, all under Option B
 
 ## TODOs / known issues to clean up before closing M5
 
-- **Flaky bus-timing tests** — both pre-existing (predate M5; reproduced
-  on the M4 baseline). Each fails roughly 1 in 5 runs of `./run_tests.sh`:
-  - `AudioPipeline: forced VAD probability drives SpeechStarted + UtteranceReady`
-    in `tests/test_audio_pipeline.cpp`.
+- ~~Flaky bus-timing tests~~ ✅ fixed 2026-05-02. Three pre-existing
+  flakes addressed:
+  - `AudioPipeline: forced VAD probability...` — wait predicate
+    exited on `speech_started || utterance_ready` going non-zero,
+    racing the `speech_ended` assertion. Fixed by waiting for all
+    three counters.
   - `ServiceMonitor: Unhealthy → Healthy on a single OK probe`
-    in `tests/test_service_monitor.cpp` (line 215).
-
-  Both assert on bus-delivered events within a wall-clock deadline,
-  and the bus dispatcher thread sometimes lags under host load. Fix:
-  replace the wall-clock wait with a synchronous bus drain (or
-  lengthen the deadline). Not blocking; surfaces intermittently.
+    + `ServiceMonitor: probe-fn exception is recorded as a failure` —
+    `mon.state()` raced the next probe at `probe_interval_degraded=2ms`.
+    Fixed by reading state via the `HealthSink` bus subscriber, which
+    captures the deterministic transition history.
+  - `PlaybackEngine: render_into is callable directly`
+    + `PlaybackEngine: prefill_ms=0 disables the gate`
+    + `PlaybackEngine: prefill threshold` — `force_headless(60s)` still
+    spawned the headless ticker, which got one `render_into` call in
+    before its first sleep, racing the test's manual call. Fixed by
+    treating `force_headless(0ms)` as "no ticker, manual mode" — the
+    publisher thread still runs (so PlaybackFinished events still
+    flow) but no other thread touches `render_into`.

@@ -2,6 +2,12 @@
 
 
 
+https://huggingface.co/MaziyarPanahi/openbuddy-zephyr-7b-v14.1-Mistral-7B-Instruct-v0.1-GGUF
+https://huggingface.co/MaziyarPanahi/openbuddy-mistral-7b-v13-base-Mistral-7B-Instruct-v0.1-GGUF
+https://huggingface.co/MaziyarPanahi/openbuddy-mistral-7b-v13.1-Mistral-7B-Instruct-v0.1-GGUF
+https://huggingface.co/Outlier-Ai/Outlier-Lite-7B-GGUF
+
+
 add cmdline memory crud tool in M8
 
 
@@ -14,6 +20,10 @@ BUG: VAD skips first letter-to-word, why? How to fix? Why it doesn't use sliding
 
 
 BUG: Long text speech cuts at some lenght threshold, LLM is not aware of it
+
+
+tolerate long pause in user monologue until user will finish his thinking
+another adaptaion - listen all, answer only questions addressed to the Assistent
 
 
 --------------------------------------------------------------------------------
@@ -37,6 +47,7 @@ sarcastic
 
 Followups:
 - tools integration
+    - first tool - own config modification and restart
 - web ui - plans/web_ui_architecture.md
 - docs, readme for advanced users plus arch overview, internals in docs
 - MacOS Metal

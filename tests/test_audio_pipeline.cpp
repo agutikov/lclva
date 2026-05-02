@@ -112,10 +112,16 @@ TEST_CASE("AudioPipeline: forced VAD probability drives SpeechStarted + Utteranc
     pipe.set_test_probability(0.05F);
     inject_and_pump(cap, pipe, 15);
 
-    // Bus subscriptions are async — wait for the dispatcher.
+    // Bus subscriptions are async — wait for the dispatcher to
+    // deliver ALL three events. The previous predicate exited as
+    // soon as `speech_started` was non-zero, which left the
+    // `speech_ended == 1` assertion racing with bus delivery
+    // (~1 flake in 5 runs).
     const auto deadline = std::chrono::steady_clock::now() + 2s;
     while (std::chrono::steady_clock::now() < deadline
-            && (speech_started.load() == 0 || utterance_ready.load() == 0)) {
+            && (speech_started.load() == 0
+                 || speech_ended.load() == 0
+                 || utterance_ready.load() == 0)) {
         std::this_thread::sleep_for(10ms);
     }
 

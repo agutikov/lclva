@@ -184,7 +184,7 @@ TEST_CASE("PlaybackEngine: render_into is callable directly (no thread needed)")
     // Manual mode — start the publisher but don't kick off either
     // PortAudio or the headless ticker. We need start() because that
     // spins up the publisher thread that reads the postbox.
-    eng.force_headless(std::chrono::seconds(60));   // effectively never tick
+    eng.force_headless(std::chrono::milliseconds(0)); // no ticker — manual mode
     REQUIRE(eng.start());
 
     REQUIRE(q.enqueue(chunk(1, 0, 4, 100)));
@@ -227,7 +227,7 @@ TEST_CASE("PlaybackEngine: prefill_ms gates the first turn until threshold met")
 
     std::atomic<TurnId> active{7};
     PlaybackEngine eng(cfg, pcfg, q, bus, [&]{ return active.load(); });
-    eng.force_headless(std::chrono::seconds(60));   // manual ticking
+    eng.force_headless(std::chrono::milliseconds(0)); // no ticker — manual
     REQUIRE(eng.start());
 
     // Below threshold (1000 < 4800) — engine must NOT consume yet.
@@ -263,7 +263,7 @@ TEST_CASE("PlaybackEngine: prefill_ms=0 disables the gate (legacy M3 behaviour)"
 
     std::atomic<TurnId> active{1};
     PlaybackEngine eng(cfg, pcfg, q, bus, [&]{ return active.load(); });
-    eng.force_headless(std::chrono::seconds(60));
+    eng.force_headless(std::chrono::milliseconds(0)); // no ticker — manual
     REQUIRE(eng.start());
 
     // A tiny chunk should be consumed immediately, no prefill silence.

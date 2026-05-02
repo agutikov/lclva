@@ -180,6 +180,14 @@ struct AudioConfig {
     // = 10 ms at 48 kHz. Larger = more headroom against underruns;
     // smaller = lower playback start latency.
     uint32_t buffer_frames = 480;
+    // M5 — half-duplex fallback for the speakers-without-AEC path.
+    // When true and `capture_enabled` is also true, the CaptureEngine
+    // drops mic samples while the dialogue FSM is in Speaking state
+    // (and for `half_duplex_hangover_ms` after it leaves), preventing
+    // the assistant's own voice from triggering VAD. Trade-off: no
+    // barge-in. M6 AEC + M7 barge-in supersede this once landed.
+    bool     half_duplex_while_speaking = false;
+    uint32_t half_duplex_hangover_ms    = 200;
 };
 
 struct PlaybackConfig {

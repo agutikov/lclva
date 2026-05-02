@@ -71,6 +71,14 @@ public:
         outcome_observer_ = std::move(obs);
     }
 
+    // Optional: called from the FSM event-handler thread on every
+    // state transition with the previous and next state. Used by the
+    // M5 half-duplex mic gate (see audio/half_duplex_gate.hpp) to
+    // know when the assistant is Speaking. Set before start().
+    void set_state_observer(std::function<void(State prev, State next)> obs) {
+        state_observer_ = std::move(obs);
+    }
+
     Fsm(const Fsm&) = delete;
     Fsm& operator=(const Fsm&) = delete;
     Fsm(Fsm&&) = delete;
@@ -112,7 +120,8 @@ private:
     std::uint64_t turns_interrupted_ = 0;
     std::uint64_t turns_discarded_ = 0;
 
-    std::function<void(const char*)> outcome_observer_;
+    std::function<void(const char*)>           outcome_observer_;
+    std::function<void(State, State)>          state_observer_;
 };
 
 } // namespace acva::dialogue

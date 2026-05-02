@@ -86,6 +86,12 @@ void Fsm::transition(State next, std::string_view reason) {
     }
     log::info("dialogue",
               fmt::format("fsm {} -> {} ({})", to_string(prev), to_string(next), reason));
+    if (state_observer_ && prev != next) {
+        // Call observer outside the FSM lock so observers can safely
+        // re-enter (e.g. the half-duplex gate is lock-free, but other
+        // future observers may not be).
+        state_observer_(prev, next);
+    }
 }
 
 void Fsm::on_event(const event::Event& evt) {

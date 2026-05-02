@@ -45,6 +45,18 @@ void CaptureEngine::on_input(const std::int16_t* input,
     const auto now = std::chrono::steady_clock::now();
     const std::size_t take = std::min(frame_count, kMaxCaptureSamples);
 
+    // Half-duplex gate: when the assistant is speaking (or within the
+    // hangover window after), drop samples instead of pushing them
+    // onto the ring. The clock still advances so the rest of the
+    // pipeline sees a continuous timeline.
+    if (const HalfDuplexGate* gate = gate_.load(std::memory_order_acquire);
+        gate && gate->should_drop_now()) {
+        frames_gated_.fetch_add(take, std::memory_order_relaxed);
+        clock_.on_capture_frames(static_cast<std::uint64_t>(take),
+                                  cfg_.sample_rate_hz);
+        return;
+    }
+
     AudioFrame frame{};
     frame.frame_index = clock_.total_frames();
     frame.count       = static_cast<std::uint32_t>(take);

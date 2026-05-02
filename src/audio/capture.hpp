@@ -2,6 +2,7 @@
 
 #include "audio/clock.hpp"
 #include "audio/frame.hpp"
+#include "audio/half_duplex_gate.hpp"
 #include "audio/spsc_ring.hpp"
 #include "config/config.hpp"
 
@@ -60,6 +61,20 @@ public:
     // Force-headless override for tests. Must be called before start().
     void force_headless();
 
+    // M5 half-duplex (speakers without AEC). When set, the gate is
+    // consulted on every audio callback; samples are dropped from
+    // the SPSC ring while the assistant is Speaking. The pointer
+    // must outlive the CaptureEngine (main.cpp owns the gate). Set
+    // before start(); a null gate means full-duplex (default).
+    void set_half_duplex_gate(const HalfDuplexGate* gate) noexcept {
+        gate_.store(gate, std::memory_order_release);
+    }
+
+    // Counter — frames dropped because the half-duplex gate was active.
+    [[nodiscard]] std::uint64_t frames_gated() const noexcept {
+        return frames_gated_.load(std::memory_order_relaxed);
+    }
+
     // Push a synthetic frame onto the ring. Used by the unit tests and
     // by the loopback / capture demos when running in headless mode.
     // Increments the clock as if a real callback fired.
@@ -91,8 +106,11 @@ private:
     std::atomic<bool> headless_{false};
     std::atomic<bool> force_headless_{false};
 
+    std::atomic<const HalfDuplexGate*> gate_{nullptr};
+
     std::atomic<std::uint64_t> frames_captured_{0};
     std::atomic<std::uint64_t> ring_overruns_{0};
+    std::atomic<std::uint64_t> frames_gated_{0};
 };
 
 } // namespace acva::audio

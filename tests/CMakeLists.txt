@@ -32,6 +32,7 @@ add_executable(acva_unit_tests
     test_db.cpp
     test_endpointer.cpp
     test_fsm.cpp
+    test_half_duplex_gate.cpp
     test_json_sink.cpp
     test_keep_alive.cpp
     test_llm_client.cpp

@@ -469,6 +469,7 @@ int main(int argc, char** argv) {
     std::unique_ptr<acva::audio::CaptureRing>          capture_ring;
     std::unique_ptr<acva::audio::CaptureEngine>        capture_engine;
     std::unique_ptr<acva::audio::AudioPipeline>        audio_pipeline;
+    std::unique_ptr<acva::audio::HalfDuplexGate>       half_duplex_gate;
     std::thread                                         audio_metrics_thread;
     std::atomic<bool>                                   audio_metrics_stop{false};
     if (cfg.audio.capture_enabled) {
@@ -476,6 +477,28 @@ int main(int argc, char** argv) {
         capture_ring = std::make_unique<acva::audio::CaptureRing>();
         capture_engine = std::make_unique<acva::audio::CaptureEngine>(
             cfg.audio, *capture_ring, *audio_clock);
+
+        // M5 half-duplex (speakers without AEC). When enabled, the
+        // FSM informs the gate of Speaking transitions and the
+        // capture engine drops mic samples while it's active. No-op
+        // unless cfg.audio.half_duplex_while_speaking is true.
+        if (cfg.audio.half_duplex_while_speaking) {
+            half_duplex_gate = std::make_unique<acva::audio::HalfDuplexGate>(
+                std::chrono::milliseconds{cfg.audio.half_duplex_hangover_ms});
+            capture_engine->set_half_duplex_gate(half_duplex_gate.get());
+            fsm.set_state_observer(
+                [g = half_duplex_gate.get()](acva::dialogue::State prev,
+                                              acva::dialogue::State next) {
+                    const bool was_speaking = (prev == acva::dialogue::State::Speaking);
+                    const bool is_speaking  = (next == acva::dialogue::State::Speaking);
+                    if (was_speaking != is_speaking) {
+                        g->set_speaking(is_speaking);
+                    }
+                });
+            acva::log::info("main", fmt::format(
+                "half-duplex mode enabled (hangover={}ms)",
+                cfg.audio.half_duplex_hangover_ms));
+        }
 
         acva::audio::AudioPipeline::Config apc;
         apc.input_sample_rate     = cfg.audio.sample_rate_hz;

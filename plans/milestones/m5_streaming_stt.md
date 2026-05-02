@@ -265,6 +265,38 @@ In M4 we got `UtteranceReady` with an `AudioSlice` after `SpeechEnded`. For stre
 - Server emits `partial` events asynchronously throughout — they arrive on the bus as `PartialTranscript`.
 - Server emits `final` event → `FinalTranscript` on bus.
 
+### Step 3.b — Half-duplex mic gate (✅ landed 2026-05-02)
+
+Speakers-without-AEC fallback so the agent is usable on speakers
+before M6 lands. When `cfg.audio.half_duplex_while_speaking` is true
+(default false), the FSM's state observer toggles a lock-free
+`HalfDuplexGate` whenever it enters/leaves `Speaking`; the
+`CaptureEngine::on_input` callback consults the gate and silently
+drops mic samples while it's active (plus a `half_duplex_hangover_ms`
+window after `Speaking` ends, default 200 ms, to absorb speaker tail
+and room reverb).
+
+**Trade-off:** no barge-in. The user can't interrupt the assistant
+because the mic isn't being listened to. This is the explicit
+alternative to M6 + M7 — both supersede this gate once they land
+(M6 keeps mic open via AEC; M7 wires barge-in proper). Defaults off
+because the project's stated UX is full-duplex.
+
+**Files:**
+- `src/audio/half_duplex_gate.hpp` — header-only template class on
+  `Clock` (defaults to `std::chrono::steady_clock`); `set_speaking`
+  + `should_drop_now`, both lock-free. 8 unit tests with an injected
+  manual clock in `tests/test_half_duplex_gate.cpp`.
+- `src/audio/capture.{hpp,cpp}` — `CaptureEngine::set_half_duplex_gate`
+  + `frames_gated()` counter; gate consulted in the realtime
+  `on_input` path.
+- `src/dialogue/fsm.{hpp,cpp}` — `Fsm::set_state_observer(prev, next)`
+  hook (mirrors the existing `set_turn_outcome_observer`).
+- `src/main.cpp` — when `capture_enabled && half_duplex_while_speaking`,
+  constructs the gate, wires it into both the FSM observer and the
+  capture engine.
+- `config/default.yaml` — documents the two new fields.
+
 ## Step 4 — FSM gains `SpeculativeThinking`
 
 M0 deferred this. Now we add a concurrent sub-state.

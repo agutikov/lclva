@@ -104,6 +104,13 @@ audio:
   capture_enabled: false     # M4 — opt in to the mic + VAD pipeline
   sample_rate_hz: 48000
   buffer_frames: 480         # 10 ms @ 48 kHz
+  # M5 — half-duplex fallback for speakers-without-AEC. When true,
+  # the mic is gated off while the assistant is Speaking (plus a
+  # short hangover). Lets you use the agent on speakers immediately
+  # without M6 AEC, at the cost of barge-in (you can't interrupt the
+  # assistant). M6 + M7 supersede this once landed; defaults off.
+  half_duplex_while_speaking: false
+  half_duplex_hangover_ms: 200
 
 playback:
   max_queue_chunks: 64       # ~640 ms ahead of the audio cb

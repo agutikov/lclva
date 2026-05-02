@@ -36,6 +36,7 @@ add_executable(acva_unit_tests
     test_json_sink.cpp
     test_keep_alive.cpp
     test_llm_client.cpp
+    test_loopback.cpp
     test_manager.cpp
     test_memory_thread.cpp
     test_paths.cpp

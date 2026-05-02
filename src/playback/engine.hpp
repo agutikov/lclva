@@ -15,6 +15,8 @@
 #include <string>
 #include <thread>
 
+namespace acva::audio { class LoopbackSink; }
+
 namespace acva::playback {
 
 // Drives a real PortAudio output stream from the PlaybackQueue, or a
@@ -75,6 +77,13 @@ public:
     // Sets the headless tick interval.
     void force_headless(std::chrono::milliseconds tick = std::chrono::milliseconds(10));
 
+    // M6 — install the AEC reference tap. The audio thread calls
+    // sink->on_emitted() on every chunk it hands to the device (or to
+    // the headless ticker), with the wall-clock instant the chunk
+    // begins playing. nullptr disables the tap. Must be called before
+    // start() to avoid a brief race with the audio callback.
+    void set_loopback_sink(audio::LoopbackSink* sink) noexcept { loopback_sink_ = sink; }
+
     // Counters (read by /metrics). All loads are relaxed.
     [[nodiscard]] std::uint64_t underruns()      const noexcept { return underruns_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t frames_played()  const noexcept { return frames_played_.load(std::memory_order_relaxed); }
@@ -132,6 +141,9 @@ private:
     // been crossed; while active_turn != primed_turn_ we render
     // silence and wait for the queue to fill.
     dialogue::TurnId primed_turn_ = event::kNoTurn;
+
+    // M6 — non-owning. nullptr disables the tap.
+    audio::LoopbackSink* loopback_sink_ = nullptr;
 };
 
 } // namespace acva::playback

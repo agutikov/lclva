@@ -45,6 +45,20 @@ else()
     message(STATUS "LibDataChannel not found — M5 realtime smoke will be skipped")
 endif()
 
+# M6 — WebRTC APM for AEC/NS/AGC. The Arch/Manjaro `webrtc-audio-processing-1`
+# package ships a stable pkg-config (BSD-3-Clause, Pulseaudio's maintained
+# fork). When present, audio/apm.cpp picks the real implementation; without
+# it the file compiles to a stub that disables AEC at config time. The
+# pkg-config exposes the WEBRTC_LIBRARY_IMPL / WEBRTC_POSIX / NOMINMAX
+# defines along with the absl::* deps the API headers transitively need.
+pkg_check_modules(webrtc_apm IMPORTED_TARGET webrtc-audio-processing-1)
+if(webrtc_apm_FOUND)
+    set(ACVA_HAVE_WEBRTC_APM TRUE)
+else()
+    set(ACVA_HAVE_WEBRTC_APM FALSE)
+    message(STATUS "webrtc-audio-processing-1 not found — M6 AEC will be a no-op stub")
+endif()
+
 # cpp-httplib is vendored as a single header in third_party/cpp-httplib.
 # Used for the HTTP control plane — civetweb symbols inside prometheus-cpp
 # aren't exported, so we run our own HTTP server. Marked SYSTEM so the

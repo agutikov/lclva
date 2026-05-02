@@ -3,6 +3,7 @@ add_library(acva_core STATIC
     audio/capture.cpp
     audio/clock.cpp
     audio/endpointer.cpp
+    audio/loopback.cpp
     audio/pipeline.cpp
     audio/resampler.cpp
     audio/utterance.cpp
@@ -87,6 +88,14 @@ endif()
 if(ACVA_HAVE_LIBDATACHANNEL)
     target_link_libraries(acva_core PRIVATE LibDataChannel::LibDataChannel)
     target_compile_definitions(acva_core PRIVATE ACVA_HAVE_LIBDATACHANNEL=1)
+endif()
+
+# M6 — link WebRTC APM when present and define the gate macro so
+# audio/apm.cpp picks the real implementation. Without it the file
+# compiles to a stub that reports aec_enabled() == false.
+if(ACVA_HAVE_WEBRTC_APM)
+    target_link_libraries(acva_core PRIVATE PkgConfig::webrtc_apm)
+    target_compile_definitions(acva_core PRIVATE ACVA_HAVE_WEBRTC_APM=1)
 endif()
 
 # Main executable

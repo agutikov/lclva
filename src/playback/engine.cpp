@@ -1,5 +1,6 @@
 #include "playback/engine.hpp"
 
+#include "audio/loopback.hpp"
 #include "log/log.hpp"
 
 #include <fmt/format.h>
@@ -146,6 +147,23 @@ void PlaybackEngine::render_into(std::int16_t* out, std::size_t frames) {
         filled    += take;
     }
     frames_played_.fetch_add(frames, std::memory_order_relaxed);
+
+    // M6 reference-signal tap. After `out` is fully populated (with
+    // either real samples or silence — both are what the device will
+    // emit), copy into the loopback ring with the current wall-clock
+    // instant. The APM wrapper later pulls `aligned(capture_time, …)`
+    // to recover the reference for AEC.
+    //
+    // We use steady_clock::now() rather than PortAudio's
+    // outputBufferDacTime because the conversion between PA stream-time
+    // and steady_clock costs another syscall; the worst-case error is
+    // one buffer length (~10 ms) which sits well under the APM's
+    // built-in delay-estimate tolerance.
+    if (loopback_sink_ != nullptr) {
+        loopback_sink_->on_emitted(
+            std::span<const std::int16_t>{out, frames},
+            std::chrono::steady_clock::now());
+    }
 }
 
 namespace {

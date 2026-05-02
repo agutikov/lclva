@@ -111,7 +111,7 @@ int run_stt(const config::Config& cfg) {
         stt.submit(stt::SttRequest{
             .turn = 1, .slice = slice,
             .cancel = std::make_shared<dialogue::CancellationToken>(),
-            .lang_hint = cfg.tts.fallback_lang,
+            .lang_hint = cfg.stt.language,
         }, scb);
         const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now() - t0).count();

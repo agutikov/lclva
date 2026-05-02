@@ -77,7 +77,8 @@ std::string random_event_id() {
 //
 // `turn_detection: null` is NOT accepted by Speaches'
 // `PartialSession` schema; see open_questions.md L5.
-std::string build_session_update_json(const std::string& model_id) {
+std::string build_session_update_json(const std::string& model_id,
+                                       const std::string& language) {
     std::string s;
     s.reserve(384);
     s += R"({"event_id":")";
@@ -120,6 +121,10 @@ std::string build_session_update_json(const std::string& model_id) {
     s += R"(},)";
     s += R"("input_audio_transcription":{"model":")";
     s += model_id;
+    if (!language.empty()) {
+        s += R"(","language":")";
+        s += language;
+    }
     s += R"("}}})";
     return s;
 }
@@ -216,7 +221,14 @@ struct RealtimeSttClient::Impl {
                 }
                 ev.turn = active_turn;
                 ev.text = std::move(transcript);
-                ev.lang = std::move(language);
+                // Speaches' transcription.completed event has no
+                // `language` field (the OpenAI Realtime spec it
+                // implements doesn't carry it). Stamp the configured
+                // language from cfg.stt.language so PromptBuilder /
+                // TTS / memory get a non-empty value. M9 will replace
+                // this with per-utterance detection once a streaming
+                // backend that emits language is in place.
+                ev.lang = !language.empty() ? std::move(language) : cfg.language;
                 ev.processing_duration =
                     std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::steady_clock::now() - utterance_start);
@@ -427,7 +439,7 @@ bool RealtimeSttClient::start(std::chrono::milliseconds timeout) {
         std::lock_guard lk(impl_->mu);
         impl_->state = State::Configuring;
     }
-    const std::string update = build_session_update_json(cfg_.model);
+    const std::string update = build_session_update_json(cfg_.model, cfg_.language);
     impl_->dc->send(update);
 
     // 6. Wait for session.updated.

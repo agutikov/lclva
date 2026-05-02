@@ -47,6 +47,13 @@ MODELS=$(cat <<'EOF'
 deepdml/faster-whisper-large-v3-turbo-ct2
 # TTS — Piper voices, one per language we support.
 speaches-ai/piper-en_US-amy-medium
+# Russian (ru_RU): all four upstream voices are pulled so users can
+# pick by ear via cfg.tts.voices[ru].voice_id. Default selection lives
+# in config/default.yaml — `ruslan` is the M5 default.
+speaches-ai/piper-ru_RU-denis-medium
+speaches-ai/piper-ru_RU-dmitri-medium
+speaches-ai/piper-ru_RU-irina-medium
+speaches-ai/piper-ru_RU-ruslan-medium
 EOF
 )
 

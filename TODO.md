@@ -2,14 +2,18 @@
 
 
 
+add cmdline memory crud tool in M8
 
 
-M8: add cmdline memory crud tool
 
-VAD skips first letter-to-word, why? How to fix? Why it doesn't use sliding window?
+M8? fast restart if stuck or to apply params or request - save context with timestamp, restart, load context and continue
 
 
-Long text speech cuts at some lenght threshold, LLM is not aware of it
+
+BUG: VAD skips first letter-to-word, why? How to fix? Why it doesn't use sliding window?
+
+
+BUG: Long text speech cuts at some lenght threshold, LLM is not aware of it
 
 
 --------------------------------------------------------------------------------
@@ -26,7 +30,9 @@ Sound filters cheep way to make voice more natural
 
 SSML
 
-theatre-mode speaking with expression
+artistic speaking with expression
+
+sarcastic
 
 
 Followups:
@@ -39,8 +45,6 @@ Followups:
 Other potential improvements ???
 
 all-in-one C++ app (llama.cpp + speeches, libs instead of servers) ???
-
-fast restart to apply params - save context with timestamp, restart, load context and continue
 
 ?? Interleaving with players (music, browser, etc)
 

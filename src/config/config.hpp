@@ -89,6 +89,15 @@ struct SttConfig {
     std::string model;
     // Per-request timeout for the transcription POST.
     uint32_t request_timeout_seconds = 30;
+    // M5 — BCP-47 language code passed into Speaches'
+    // `input_audio_transcription.language` (configured, NOT detected;
+    // Speaches' realtime endpoint doesn't return per-utterance
+    // detected language). Also stamped onto `FinalTranscript.lang`
+    // by RealtimeSttClient so downstream consumers
+    // (PromptBuilder system-prompt selection, TTS voice routing,
+    // memory `lang` column) get a non-empty value. Default "en".
+    // M9 (post-MVP) replaces this with per-utterance detection.
+    std::string language = "en";
     // M5 — when true and base_url is set, the orchestrator uses
     // RealtimeSttClient (WebRTC streaming on /v1/realtime) and wires
     // it to the M4 capture pipeline's live-audio sink. When false,

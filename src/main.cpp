@@ -747,7 +747,7 @@ int main(int argc, char** argv) {
                     .turn  = e.turn,
                     .slice = e.slice,
                     .cancel = std::make_shared<acva::dialogue::CancellationToken>(),
-                    .lang_hint = "",
+                    .lang_hint = cfg.stt.language,
                 });
                 stt_cv.notify_one();
             });

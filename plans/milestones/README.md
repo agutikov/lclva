@@ -10,10 +10,11 @@ Detailed per-milestone plans. The high-level table lives in `../project_design.m
 | M3  | `m3_tts_playback.md` | ✅ landed   |
 | M4  | `m4_audio_vad.md` | ✅ landed   |
 | M4B | `m4b_speaches_consolidation.md` | ✅ landed |
-| M5  | `m5_streaming_stt.md` | next |
+| M5  | `m5_streaming_stt.md` | in progress |
 | M6  | `m6_aec.md` | planned     |
 | M7  | `m7_barge_in.md` | planned     |
 | M8  | `m8_hardening.md` | planned    |
+| M9  | `m9_speculation.md` | planned (originally M5 Steps 4–5; deferred because Speaches doesn't emit partial transcripts) |
 
 ## Demos — one-shot smoke checks built into the binary
 

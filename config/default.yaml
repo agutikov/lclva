@@ -55,6 +55,15 @@ stt:
   # false. Production uses streaming; demos that synthesize fixture
   # audio offline (e.g. acva demo stt) flip this off.
   streaming: true
+  # M5: BCP-47 language code passed into Speaches' input_audio_transcription.
+  # Speaches' realtime endpoint doesn't return per-utterance detected
+  # language; this value is also stamped onto FinalTranscript.lang so
+  # downstream TTS voice routing (cfg.tts.voices[lang]) and
+  # PromptBuilder system-prompt selection (cfg.dialogue.system_prompts[lang])
+  # work without requiring detection. Switch to "ru" to use the
+  # ruslan voice and the Russian system prompt. M9 (post-MVP) replaces
+  # this with per-utterance detection.
+  language: "ru"
   # M4B: STT goes through Speaches' OpenAI-compatible
   # POST /v1/audio/transcriptions. Setting `base_url` enables real
   # transcription on every UtteranceReady event from the M4 audio
@@ -98,6 +107,10 @@ tts:
     # (e.g. "amy" for piper-en_US-amy-medium); for Kokoro models
     # use the published voice id like "af_bella".
     en: { model_id: "speaches-ai/piper-en_US-amy-medium", voice_id: "amy" }
+    # Russian: ruslan is the default; the downloader pulls denis,
+    # dmitri, and irina too — swap voice_id + model_id (same
+    # piper-ru_RU-<name>-medium pattern) to try them.
+    ru: { model_id: "speaches-ai/piper-ru_RU-ruslan-medium", voice_id: "ruslan" }
   fallback_lang: en
   request_timeout_seconds: 10
 
@@ -182,3 +195,9 @@ dialogue:
       Prefer direct answers over long lists.
       Ask at most one clarification question.
       For technical topics, give concise but precise explanations.
+    ru: |
+      Ты локальный голосовой ассистент.
+      Отвечай короткими разговорными абзацами.
+      Предпочитай прямые ответы длинным спискам.
+      Задавай не более одного уточняющего вопроса.
+      По техническим темам отвечай кратко, но точно.

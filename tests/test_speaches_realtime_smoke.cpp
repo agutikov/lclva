@@ -385,6 +385,10 @@ TEST_CASE("RealtimeSttClient: WAV fixture round-trip — partials + final transc
     // Assert on the model-stable suffix only — that's enough to
     // prove the audio→transcript path round-tripped intact.
     CHECK(final_transcript->text.find("smoke test") != std::string::npos);
+    // M5 Step 6 — RealtimeSttClient stamps cfg.stt.language onto
+    // FinalTranscript.lang so PromptBuilder / TTS / memory get a
+    // non-empty value regardless of whether the backend reports it.
+    CHECK(final_transcript->lang == cfg.language);
 
     client.stop();
 }

@@ -332,68 +332,66 @@ because the project's stated UX is full-duplex.
   capture engine.
 - `config/default.yaml` — documents the two new fields.
 
-## Step 4 — FSM gains `SpeculativeThinking`
+## Steps 4 & 5 — moved to M9
 
-M0 deferred this. Now we add a concurrent sub-state.
+**Originally:** add `SpeculativeThinking` FSM state + a speculation
+gate that opportunistically starts the LLM against a stable partial
+prefix, then reconciles when the final transcript arrives.
 
-**Files:** modify `src/dialogue/fsm.hpp/cpp`.
+**Status: deferred to [`m9_speculation.md`](m9_speculation.md).**
 
-**New behavior:** the FSM listens to `PartialTranscript`. When the speculation policy fires (Step 5), the FSM enters `SpeculativeThinking` *while still being in* `UserSpeaking` or `Transcribing`. The Dialogue Manager submits an LLM request against the speculative prompt; the FSM tracks the speculative turn id separately from the active turn id.
+**Why:** speculation requires a partial-transcript source.
+Speaches' realtime endpoint as of 2026-05-02 does NOT emit
+`conversation.item.input_audio_transcription.delta` events — its
+transcriber (`realtime/input_audio_buffer.py`) awaits the full WAV
+via `transcription_client.create(...)` after `commit` and publishes
+a single `transcription.completed` event. M5's chosen Option B
+backend therefore can't drive speculation. Rather than block M5
+closure on a multi-day Speaches PR with uncertain merge timing — or
+retroactively switch to Option A (custom whisper.cpp wrapper, a
+multi-week scope creep at this point in M5 implementation) — we
+lifted speculation work into M9. M5 ships without it; M9 picks it up
+when partials become available.
 
-```cpp
-struct FsmSnapshot {
-    State state;
-    TurnId active_turn;
-    TurnOutcome outcome;
-    bool speculative_in_flight;            // NEW
-    TurnId speculative_turn;               // NEW: same as active or distinct
-    std::uint32_t sentences_played;
-    // ...
-};
-```
+The acceptance gates that depended on partials moved with it (see
+the M9 plan).
 
-When `FinalTranscript` arrives:
-- If the speculation matches: keep it; transition to `Speaking` as soon as the first sentence is ready (i.e., as before).
-- If it diverges: cancel the speculative LLM (turn-id bump just for the speculative subtask), submit a fresh LLM request against the final transcript.
+## Step 6 — Multilingual flow (✅ landed 2026-05-02)
 
-Both paths are normal cancellation. The `TurnContext` machinery from M0 already supports this; we just allocate two of them.
+**Configured-language baseline** rather than per-utterance detection.
+Speaches' realtime endpoint doesn't return detected language (the
+OpenAI Realtime spec it implements has no `language` field on
+`transcription.completed`); per-utterance detection lands in M9
+along with streaming partials.
 
-## Step 5 — Speculation policy
+**Wiring:**
+- New `cfg.stt.language` (BCP-47, default `"en"`).
+- `RealtimeSttClient` sends it as `input_audio_transcription.language`
+  in `session.update`, so Whisper transcribes against the configured
+  language rather than auto-detecting.
+- `RealtimeSttClient` stamps the same value onto `FinalTranscript.lang`
+  for every transcript it emits — non-empty `lang` propagates through:
+  - `Manager::run_one` → `PromptBuilder::build({lang, ...})` → picks
+    `cfg.dialogue.system_prompts[lang]` (with English fallback).
+  - `TtsBridge` → routes to `cfg.tts.voices[lang]`.
+  - `TurnWriter` → writes `lang` into the SQLite `turns.lang` column.
+- M4B `OpenAiSttClient` path (still alive for fixture demos) gets
+  the same `cfg.stt.language` via `SttRequest.lang_hint`.
 
-**File:** `src/dialogue/speculation.hpp`, `src/dialogue/speculation.cpp`.
+**Default English path** (out-of-box `acva` run) is unchanged in
+behavior: cfg.stt.language defaults to "en" → English voice +
+English system prompt + lang="en" in memory.
 
-```cpp
-struct SpeculationConfig {
-    std::chrono::milliseconds hangover_ms{250};       // shorter than VAD's 600
-    std::size_t min_chars = 20;
-    std::chrono::milliseconds stability_ms{200};
-    double match_ratio = 0.9;
-    int max_restarts_per_minute = 8;
-};
+**To switch to Russian:** set `cfg.stt.language: "ru"`. The
+downloader (`scripts/download-speaches-models.sh`) pulls all four
+upstream `piper-ru_RU-{denis,dmitri,irina,ruslan}-medium` voices;
+`config/default.yaml` ships `ruslan` as the active `ru` voice.
+`config/default.yaml` also ships a Russian system_prompts entry.
 
-class SpeculationGate {
-public:
-    explicit SpeculationGate(SpeculationConfig cfg);
+**M9 will replace this** with detected-per-utterance language once a
+streaming-partial-emitting STT backend is in place.
 
-    // Called on each PartialTranscript and on VAD probability updates.
-    // Returns true once when conditions are met to start a speculative LLM run.
-    bool should_speculate(const PartialState& state);
-
-    // Called when FinalTranscript arrives. Returns Match (keep), Mismatch
-    // (cancel + restart), or NoSpeculation (no spec was running).
-    enum class Reconciliation { Match, Mismatch, NoSpeculation };
-    Reconciliation reconcile(const std::string& speculation_text,
-                             const std::string& final_text);
-};
-```
-
-`PartialState` includes the latest partial's text, stable prefix length, time since last change, and the most recent VAD probability.
-
-The match check uses a normalized token overlap, not strict-equality. `match_ratio = 0.9` means 90% of speculation tokens must appear in the final.
-
-Rate-limit speculative restarts to prevent thrash; if `max_restarts_per_minute` exceeded, log a warning and disable speculation for the rest of the minute.
-
-## Step 6 — Multilingual flow
+### Original Step 6 plan (kept for context)
 
 Touch points:
 - `FinalTranscript.lang` populated from Whisper's detection.
@@ -436,7 +434,10 @@ demo[stt] speak now…
 demo[stt] done: partials=4 final_chars=27 detected_lang=en
 ```
 
-Under Option C (deferred): no partials line, only the final transcript.
+Under the M9-deferred path (Speaches without streaming partials):
+no `partial` lines, only the `final` transcript. Once M9 lands a
+partial-transcript source, the partial lines reappear without
+demo changes.
 
 ### `acva demo stt --fixture FILE.wav` — offline transcription
 
@@ -455,41 +456,57 @@ landed and the chat demo is updated to publish via the real STT path.
 
 ## Acceptance
 
-1. With the chosen STT backend running in Compose, speaking a sentence emits 3+ `PartialTranscript` events and one `FinalTranscript`. (Skip if Option C: only `FinalTranscript`.)
-2. Speculation savings: median first-token-ready latency 300 ms lower than non-speculation baseline on a fixture set. (N/A under Option C.)
-3. Multilingual: speaking in Russian routes to the Russian Piper voice (M3) and the LLM is prompted in Russian.
-4. Mid-utterance revision: speak "set an alarm for ten — wait, eleven AM"; the spoken answer mentions 11 AM, not 10. (Under Option C: works trivially since we wait for the final.)
-5. Memory rows have populated `lang` columns matching the detected language.
-6. (Options A/B only) `voice_speculation_kept_total` and `voice_speculation_restarted_total` counters emit non-zero values; ratio is > 50 % in stable sentences.
+1. With Speaches running in Compose, speaking a sentence emits one
+   `FinalTranscript` on the bus. (Partials are deferred to M9 — see
+   "Steps 4 & 5 — moved to M9" above.)
+2. Multilingual: speaking in a configured non-English language routes
+   to the matching Piper voice (M3) and the LLM is prompted in that
+   language.
+3. Memory rows have populated `lang` columns matching the configured
+   per-utterance language.
+4. End-to-end speech-to-speech works: speaking into the mic produces
+   a spoken reply through the speakers via the
+   capture → VAD → STT → LLM → TTS → playback path. Half-duplex mic
+   gate prevents the assistant's own voice from triggering VAD until
+   M6 AEC lands.
+
+**Speculation-related gates** (median first-token-ready 300 ms savings,
+mid-utterance revision, `voice_speculation_*` counters) moved to M9
+along with the implementation.
 
 ## Risks specific to M5
 
 | Risk | Mitigation |
 |---|---|
-| Streaming-engine choice deferred | Make decision early in M5; fallbacks to Option C if either A or B blocks |
-| Custom wrapper complexity (Option A) | Vendor whisper.cpp snapshot; iterate against `examples/stream` |
-| Speaches upstream drift (Option B) | Pin image digest; track upstream commit; one-line update PRs |
-| Speculative restart thrash | Conservative defaults; rate-limit; emit warning on disable |
+| Speaches upstream drift | Pin image digest; track upstream commit; one-line update PRs |
 | Wrong language detection causes voice/prompt mismatch | Confidence threshold; fallback language; metric `voice_lang_low_confidence_total` |
 | Multilingual STT slow on CPU | Configurable model size; benchmark at startup |
-| Race: FinalTranscript arrives before speculation is set up | Reconciliation handles both orders; FSM tests cover the race |
-| Speculative LLM run wastes GPU cycles | Hard cap by `speculation.max_restarts_per_minute`; report waste in metrics |
 
-## Time breakdown
+## Time breakdown (after M9 split)
 
-Per option (steps 2-7 are mostly identical; Step 1 differs):
+Steps 4 & 5 moved to M9. Remaining M5 work, all under Option B
+(Speaches):
 
-| Step | A: Custom | B: Speaches | C: Defer |
-|---|---:|---:|---:|
-| 1 Streaming engine setup | 5 d | 0.5 d (compose only) | 0 |
-| 2 STT client (Whisper / Speaches / non-streaming) | 2 d | 1.5 d | 1 d |
-| 3 VAD → STT wiring | 1.5 d | 1.5 d | 1 d |
-| 4 FSM SpeculativeThinking | 2 d | 2 d | 0 (skip) |
-| 5 Speculation policy | 1.5 d | 1.5 d | 0 (skip) |
-| 6 Multilingual flow | 1 d | 1 d | 1 d |
-| 7 Tests + fixtures | 2 d | 2 d | 1.5 d |
-| **Total** | **~15 d (~3 wk)** | **~10 d (~2 wk)** | **~5 d (~1 wk)** |
+| Step | Cost |
+|---|---:|
+| 1 Streaming engine setup | done in M4B (0.5 d carryover) |
+| 2.a Session lifecycle | ~1 d (✅ landed) |
+| 2.b Per-utterance audio + transcripts | ~1 d (✅ landed) |
+| 3   VAD → STT wiring + half-duplex gate | ~1 d (✅ landed) |
+| 6   Multilingual flow (configured-language baseline) | ~1 d |
+| 7   Tests + acceptance + cleanup TODO | ~1.5 d |
+| **Remaining to close M5** | **~2.5 d** |
 
 ## TODOs / known issues to clean up before closing M5
 
-- **Flaky `AudioPipeline: forced VAD probability drives SpeechStarted + UtteranceReady`** in `tests/test_audio_pipeline.cpp`. Pre-existing (predates M5; reproduced on the M4 baseline). Fails roughly 1 in 5 runs because the test asserts on bus-delivered events within a wall-clock deadline, and the bus dispatcher thread sometimes lags under host load. Fix: replace the wall-clock wait with a synchronous bus drain (or lengthen the deadline). Not blocking; surfaces only intermittently in `./run_tests.sh`.
+- **Flaky bus-timing tests** — both pre-existing (predate M5; reproduced
+  on the M4 baseline). Each fails roughly 1 in 5 runs of `./run_tests.sh`:
+  - `AudioPipeline: forced VAD probability drives SpeechStarted + UtteranceReady`
+    in `tests/test_audio_pipeline.cpp`.
+  - `ServiceMonitor: Unhealthy → Healthy on a single OK probe`
+    in `tests/test_service_monitor.cpp` (line 215).
+
+  Both assert on bus-delivered events within a wall-clock deadline,
+  and the bus dispatcher thread sometimes lags under host load. Fix:
+  replace the wall-clock wait with a synchronous bus drain (or
+  lengthen the deadline). Not blocking; surfaces intermittently.

@@ -167,17 +167,18 @@ digraph Topology {
 
 The STT service runs as a Docker Compose container in dev (since M1.B). CPU execution (saves ~1 GB VRAM for Qwen). Multilingual model, default size **small** (configurable: base / small / medium).
 
-The streaming-partial behavior depends on which engine is chosen at M5 — see `plans/milestones/m5_streaming_stt.md` for the decision matrix:
+The streaming-partial behavior depends on the chosen engine — see `plans/milestones/m5_streaming_stt.md` and `plans/milestones/m9_speculation.md`:
 
 - **Through M4:** upstream `whisper.cpp:server` (`POST` audio, `JSON` back). Request/response only. Sufficient because the orchestrator only feeds full utterances at this stage.
-- **From M5:** one of three options (custom wrapper / Speaches / defer). Two of the three deliver **streaming partials**; one defers them past MVP.
+- **M4B onward:** Speaches via OpenAI-compatible HTTP — request/response.
+- **M5 (current):** Speaches' WebRTC realtime session (`/v1/realtime`). One long-lived session, per-utterance `input_audio_buffer.commit`, one `FinalTranscript` per utterance. **No `PartialTranscript`** — Speaches' transcriber awaits the full WAV after commit and emits a single `transcription.completed`.
+- **M9 (planned):** add `PartialTranscript` events via one of three paths (PR Speaches to emit deltas / side-car streaming Whisper / re-platform STT). Unblocks speculative LLM start.
 
-Streaming-mode contract (Options A and B in M5):
-- Each partial includes: text, language, confidence, "stable prefix length" (leading characters unlikely to be revised), sequence number per utterance.
-- Input: 16 kHz mono PCM stream tagged with utterance ID; the service consumes audio incrementally as VAD emits frames.
+Realtime-mode contract under M5:
+- Input: 24 kHz mono PCM (data-channel `input_audio_buffer.append`, base64-encoded), tagged with the active turn ID.
 - Output stream:
-  - `PartialTranscript {utterance_id, sequence, text, stable_prefix_len, lang, confidence}`
   - `FinalTranscript   {utterance_id, text, lang, confidence, audio_duration_ms, processing_ms}`
+  - (`PartialTranscript {…, stable_prefix_len, sequence}` — M9)
 - Health: HTTP `/health`; supervisor pings every `cfg.stt.probe_interval_*_ms`.
 
 ### 4.6 LLM Service
@@ -197,7 +198,7 @@ Owns conversational state. Pure logic component; no audio, no I/O, no inference.
 
 Responsibilities:
 - Drive the Dialogue FSM (§6).
-- Consume `PartialTranscript` and `FinalTranscript` events. Apply **speculation policy**: if a partial's stable prefix is "long enough and stable" (see §6) and VAD has been near-silent for `speculation_hangover_ms`, optimistically start LLM generation against the speculative transcript. If the final transcript diverges from the speculation, cancel the speculative LLM run and restart against the final.
+- Consume `FinalTranscript` events as the trigger for LLM generation (current behavior through M5). M9 adds `PartialTranscript` consumption + a **speculation policy**: when a partial's stable prefix is "long enough and stable" (see §6) and VAD has been near-silent for `speculation_hangover_ms`, the manager optimistically starts LLM generation against the speculative transcript and reconciles when the final arrives.
 - Build LLM prompt from memory + recent turns (delegates to `PromptBuilder`). Pass detected language to PromptBuilder so the system prompt instructs the model to reply in that language.
 - Receive LLM token stream; pass to `SentenceSplitter`.
 - Forward sentences to TTS with sequence numbers tied to the active turn ID, **and the detected language** (selects Piper voice).
@@ -749,12 +750,13 @@ digraph Milestones {
   M3 [fillcolor="#F59E0B", fontcolor=white, label="M3\nTTS + Playback\n1-2w"];
   M4  [fillcolor="#3B82F6", fontcolor=white, label="M4\nAudio + VAD\n1-2w"];
   M4B [fillcolor="#6366F1", fontcolor=white, label="M4B\nSpeaches\nConsolidation\n~6d"];
-  M5  [fillcolor="#10B981", fontcolor=white, label="M5\nStreaming STT\n+ Speculation\n1.5-2w"];
+  M5  [fillcolor="#10B981", fontcolor=white, label="M5\nStreaming STT\n(no partials)\n~1w"];
   M6  [fillcolor="#2563EB", fontcolor=white, label="M6\nAEC / NS / AGC\n1-2w"];
   M7  [fillcolor="#DC2626", fontcolor=white, label="M7\nBarge-In\n1w"];
   M8  [fillcolor="#16A34A", fontcolor=white, label="M8\nHardening\n2w"];
+  M9  [fillcolor="#9333EA", fontcolor=white, label="M9\nStreaming Partials\n+ Speculation\n1.5-2w"];
 
-  M0 -> M1 -> M2 -> M3 -> M4 -> M4B -> M5 -> M6 -> M7 -> M8;
+  M0 -> M1 -> M2 -> M3 -> M4 -> M4B -> M5 -> M6 -> M7 -> M8 -> M9;
 
   // Highlight critical reorderings
   M2 -> M3 [label="supervision\nbefore TTS", fontcolor="#0891B2", color="#0891B2", style=dashed, constraint=false];
@@ -805,13 +807,12 @@ Each milestone has a detailed plan in `plans/milestones/`. The summary below is 
 - Closes the M4 synthetic-`FinalTranscript` hole — real STT lands on the bus (request/response, not yet streaming).
 - Drops `cfg.tts.voices[*].url` in favor of one `tts.base_url` + per-language `voice_id`.
 
-### M5: STT — Streaming Partials (1.5–2 weeks) — see [milestones/m5_streaming_stt.md](milestones/m5_streaming_stt.md)
-- Swap M4B's request/response STT client for Speaches' streaming / Realtime endpoint.
-- `PartialTranscript` events on the bus with stable-prefix tracking.
-- Language detection per utterance (already wired in M4B; consumed here).
-- **Speculative LLM start** in Dialogue Manager (speculation policy from §6).
-- Reconciliation logic: speculation kept vs. cancelled-and-restarted.
-- Tests: prefix-stable utterances commit speculation; revision-heavy utterances correctly restart.
+### M5: STT — Streaming session, no partials (~1 week) — see [milestones/m5_streaming_stt.md](milestones/m5_streaming_stt.md)
+- Swap M4B's request/response STT client for Speaches' realtime WebRTC session (one long-lived data channel; per-utterance `input_audio_buffer.commit`).
+- `FinalTranscript` events on the bus.
+- Configured-language flow per utterance (PromptBuilder + per-language TTS voice routing).
+- Half-duplex mic gate so the speakers path is usable before M6 AEC.
+- **No `PartialTranscript` events** — Speaches' transcriber awaits the full WAV after commit and emits one `transcription.completed`. Speculation work moved to M9.
 
 ### M6: AEC / NS / AGC (1–2 weeks) — see [milestones/m6_aec.md](milestones/m6_aec.md)
 - WebRTC APM integration.
@@ -831,6 +832,13 @@ Each milestone has a detailed plan in `plans/milestones/`. The summary below is 
 - Config hot-reload.
 - Wipe/privacy commands.
 - Packaging (single binary + config + service files).
+
+### M9: Streaming Partials + Speculative LLM (1.5–2 weeks) — see [milestones/m9_speculation.md](milestones/m9_speculation.md)
+- Source `PartialTranscript` events from the STT backend (PR Speaches, side-car streaming Whisper, or re-platform STT).
+- `SpeculativeThinking` FSM concurrent state.
+- `SpeculationGate` policy (stability window + match-ratio reconcile).
+- ~300 ms median first-token-ready savings on stable-prefix utterances.
+- Originally Steps 4–5 of M5; deferred because Speaches' realtime endpoint as of 2026-05-02 doesn't emit partials.
 
 **Total: ~14–17 weeks** for a single competent C++ developer to MVP. (Up from 12–14 due to M5 expansion for streaming partial STT and multilingual; M4B adds ~6 days of consolidation work but shrinks M5 by roughly the same amount because the streaming engine is already chosen and smoke-tested by the time M5 starts.)
 

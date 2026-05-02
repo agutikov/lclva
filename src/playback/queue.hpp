@@ -25,6 +25,14 @@ struct AudioChunk {
     dialogue::TurnId  turn = event::kNoTurn;
     event::SequenceNo seq  = 0;
     std::vector<std::int16_t> samples;
+    // True on the LAST chunk a producer (TtsBridge) enqueues for a
+    // given (turn, seq) — i.e., the trailing edge of a sentence. The
+    // PlaybackEngine fires `PlaybackFinished` once per consumed
+    // end-of-sentence chunk; non-terminal chunks just increment the
+    // chunks-played counter. The producer always enqueues a final
+    // chunk with this flag, even if `samples` is empty, so engines
+    // can rely on a deterministic per-sentence signal.
+    bool end_of_sentence = false;
 };
 
 // Bounded FIFO between the TTS bridge (producer) and the playback

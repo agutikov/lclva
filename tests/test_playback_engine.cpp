@@ -42,12 +42,17 @@ PlaybackConfig no_prefill_cfg() {
     return p;
 }
 
+// Each test chunk represents one complete sentence — sets
+// end_of_sentence so the PlaybackEngine fires PlaybackFinished on
+// consumption (the contract is per-sentence, not per-chunk; see
+// AudioChunk::end_of_sentence).
 AudioChunk chunk(TurnId turn, SequenceNo seq, std::size_t n_samples,
                   std::int16_t fill = 1) {
     AudioChunk c;
     c.turn = turn;
     c.seq  = seq;
     c.samples.assign(n_samples, fill);
+    c.end_of_sentence = true;
     return c;
 }
 

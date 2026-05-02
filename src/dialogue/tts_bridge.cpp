@@ -266,31 +266,37 @@ void TtsBridge::run_one(Job job) {
         .cancel = job.cancel,
     }, cb);
 
-    // Flush any tail samples left inside the resampler. If the request
-    // errored / was cancelled we still flush — the few samples don't
-    // matter and the queue.clear() on cancel takes care of them.
+    // Flush any tail samples left inside the resampler, then ALWAYS
+    // enqueue a final chunk (possibly empty) marked
+    // `end_of_sentence` so the PlaybackEngine knows when to fire
+    // `PlaybackFinished` for this sentence. Without the marker, the
+    // FSM can't tell when audio playback for a seq has actually
+    // ended (PlaybackFinished was previously per-chunk, which made
+    // `sentences_played_` over-count).
+    std::vector<std::int16_t> tail;
     if (resampler && got_format) {
         try {
-            auto tail = resampler->flush();
-            if (!tail.empty() && !job.cancel->is_cancelled()) {
-                const auto bytes = tail.size() * sizeof(std::int16_t);
-                playback::AudioChunk chunk{
-                    .turn    = job.sentence.turn,
-                    .seq     = job.sentence.seq,
-                    .samples = std::move(tail),
-                };
-                if (queue_.enqueue(std::move(chunk))) {
-                    bus_.publish(event::TtsAudioChunk{
-                        .turn  = job.sentence.turn,
-                        .seq   = job.sentence.seq,
-                        .bytes = bytes,
-                    });
-                }
-            }
+            tail = resampler->flush();
         } catch (const std::exception& ex) {
             log::info("tts_bridge",
                 fmt::format("resampler flush failed turn={} seq={} err={}",
                              job.sentence.turn, job.sentence.seq, ex.what()));
+        }
+    }
+    if (!job.cancel->is_cancelled()) {
+        const auto bytes = tail.size() * sizeof(std::int16_t);
+        playback::AudioChunk chunk{
+            .turn             = job.sentence.turn,
+            .seq              = job.sentence.seq,
+            .samples          = std::move(tail),
+            .end_of_sentence  = true,
+        };
+        if (queue_.enqueue(std::move(chunk)) && bytes > 0) {
+            bus_.publish(event::TtsAudioChunk{
+                .turn  = job.sentence.turn,
+                .seq   = job.sentence.seq,
+                .bytes = bytes,
+            });
         }
     }
 

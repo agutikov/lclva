@@ -1,12 +1,15 @@
 
 
 
+
+
+
 M8: add cmdline memory crud tool
 
 VAD skips first letter-to-word, why? How to fix? Why it doesn't use sliding window?
 
 
-Long text speech cuts at some threshold, LLM is not aware of it
+Long text speech cuts at some lenght threshold, LLM is not aware of it
 
 
 --------------------------------------------------------------------------------
@@ -22,6 +25,8 @@ Goals:
 Sound filters cheep way to make voice more natural
 
 SSML
+
+theatre-mode speaking with expression
 
 
 Followups:
@@ -53,6 +58,7 @@ different database, vector database, graph database
 llama.cpp vs ollama
 
 speeches systemd service ???
+
 
 reasoning
 temperature

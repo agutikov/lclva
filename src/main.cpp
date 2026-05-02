@@ -1,5 +1,6 @@
 #include "audio/capture.hpp"
 #include "audio/clock.hpp"
+#include "audio/loopback.hpp"
 #include "audio/pipeline.hpp"
 #include "config/config.hpp"
 #include "config/paths.hpp"
@@ -36,6 +37,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <csignal>
 #include <cstdlib>
@@ -443,6 +445,7 @@ int main(int argc, char** argv) {
     std::unique_ptr<acva::playback::PlaybackQueue>  playback_queue;
     std::unique_ptr<acva::tts::OpenAiTtsClient>     openai_tts_client;
     std::unique_ptr<acva::playback::PlaybackEngine> playback_engine;
+    std::unique_ptr<acva::audio::LoopbackSink>      loopback_sink;
     std::unique_ptr<acva::dialogue::TtsBridge>      tts_bridge;
     std::thread                                     playback_metrics_thread;
     std::atomic<bool>                               playback_metrics_stop{false};
@@ -471,6 +474,26 @@ int main(int argc, char** argv) {
             [playback_active_turn]{
                 return playback_active_turn->load(std::memory_order_acquire);
             });
+
+        // M6 — wire the AEC reference tap. The PlaybackEngine writes
+        // every emitted chunk into this ring (with a wall-clock
+        // timestamp); the M4 capture pipeline pulls aligned reference
+        // frames from it for APM. We construct it whenever capture is
+        // ALSO enabled — there's no point taping playback if no one
+        // will read it. Sized in samples = ring_seconds × output rate.
+        if (cfg.audio.capture_enabled) {
+            const std::size_t loopback_capacity =
+                static_cast<std::size_t>(cfg.audio.loopback.ring_seconds)
+                * static_cast<std::size_t>(cfg.audio.sample_rate_hz);
+            loopback_sink = std::make_unique<acva::audio::LoopbackSink>(
+                loopback_capacity, cfg.audio.sample_rate_hz);
+            playback_engine->set_loopback_sink(loopback_sink.get());
+            acva::log::info("main", fmt::format(
+                "loopback ring: {}s × {}Hz = {} samples",
+                cfg.audio.loopback.ring_seconds,
+                cfg.audio.sample_rate_hz,
+                loopback_capacity));
+        }
 
         // M4B: TTS goes through Speaches via OpenAiTtsClient. The
         // bridge takes a generic submit callable so the client class
@@ -518,10 +541,16 @@ int main(int argc, char** argv) {
         acva::log::info("main", "tts disabled — cfg.tts.voices is empty");
     }
 
+    // Forward-declared so the /status closure can read APM stats at
+    // request time. The pipeline is actually constructed below (M4
+    // section) — we declare the unique_ptr early and the lambda picks
+    // up its value lazily on every /status hit.
+    std::unique_ptr<acva::audio::AudioPipeline> audio_pipeline;
+
     // Build the /status JSON-extra closure: services array + pipeline_state.
     // Lambda captures `&supervisor` by reference; lifetime is fine because
     // the ControlServer is destroyed before the supervisor.
-    auto status_extra = [&supervisor]() -> std::string {
+    auto status_extra = [&supervisor, &audio_pipeline]() -> std::string {
         const auto snap = supervisor.snapshot();
         std::string out = "\"pipeline_state\":\"";
         out.append(acva::supervisor::to_string(snap.pipeline_state));
@@ -547,6 +576,32 @@ int main(int argc, char** argv) {
                 s.last_http_status);
         }
         out.push_back(']');
+
+        // M6 — APM block. Present whenever the pipeline is up and an
+        // APM stage was constructed (i.e., capture_enabled + a loopback
+        // ring + a non-stub build of webrtc-audio-processing-1).
+        if (audio_pipeline) {
+            const auto* apm = audio_pipeline->apm();
+            if (apm != nullptr) {
+                const float erle = apm->erle_db();
+                if (std::isnan(erle)) {
+                    out += fmt::format(
+                        R"(,"apm":{{"active":{},"delay_ms":{},)"
+                        R"("erle_db":null,"frames_processed":{}}})",
+                        apm->aec_active(),
+                        apm->aec_delay_estimate_ms(),
+                        apm->frames_processed());
+                } else {
+                    out += fmt::format(
+                        R"(,"apm":{{"active":{},"delay_ms":{},)"
+                        R"("erle_db":{:.2f},"frames_processed":{}}})",
+                        apm->aec_active(),
+                        apm->aec_delay_estimate_ms(),
+                        erle,
+                        apm->frames_processed());
+                }
+            }
+        }
         return out;
     };
 
@@ -573,7 +628,7 @@ int main(int argc, char** argv) {
     std::unique_ptr<acva::audio::MonotonicAudioClock> audio_clock;
     std::unique_ptr<acva::audio::CaptureRing>          capture_ring;
     std::unique_ptr<acva::audio::CaptureEngine>        capture_engine;
-    std::unique_ptr<acva::audio::AudioPipeline>        audio_pipeline;
+    // audio_pipeline declared above so /status can read its APM stats.
     std::unique_ptr<acva::audio::HalfDuplexGate>       half_duplex_gate;
     std::thread                                         audio_metrics_thread;
     std::atomic<bool>                                   audio_metrics_stop{false};
@@ -620,6 +675,18 @@ int main(int argc, char** argv) {
         apc.max_duration_ms      = std::chrono::milliseconds{cfg.utterance.max_duration_ms};
         apc.vad_model_path       = cfg.vad.model_path;
 
+        // M6 — install the AEC stage when both playback (loopback
+        // ring) and an APM-capable build are present. cfg.apm controls
+        // the per-subsystem switches; the wrapper is a no-op when the
+        // webrtc-audio-processing-1 package wasn't found at build time.
+        apc.loopback           = loopback_sink.get();
+        apc.apm.aec_enabled    = cfg.apm.aec_enabled;
+        apc.apm.ns_enabled     = cfg.apm.ns_enabled;
+        apc.apm.agc_enabled    = cfg.apm.agc_enabled;
+        apc.apm.initial_delay_estimate_ms =
+            static_cast<int>(cfg.apm.initial_delay_estimate_ms);
+        apc.apm.max_delay_ms   = static_cast<int>(cfg.apm.max_delay_ms);
+
         audio_pipeline = std::make_unique<acva::audio::AudioPipeline>(
             std::move(apc), *capture_ring, *audio_clock, bus);
 
@@ -646,6 +713,19 @@ int main(int argc, char** argv) {
                     static_cast<double>(audio_pipeline->utterance_drops()));
                 registry->set_utterance_in_flight(
                     static_cast<double>(audio_pipeline->in_flight()));
+
+                // M6 — surface APM stats whenever the AEC stage is wired
+                // in. Runs the gauges off the same poller so we don't
+                // need a second thread; the 500 ms cadence is fine
+                // because APM's internal estimator updates over seconds.
+                if (const auto* apm = audio_pipeline->apm(); apm != nullptr) {
+                    registry->set_aec_delay_estimate_ms(
+                        static_cast<double>(apm->aec_delay_estimate_ms()));
+                    registry->set_aec_erle_db(
+                        static_cast<double>(apm->erle_db()));
+                    registry->set_aec_frames_processed_total(
+                        static_cast<double>(apm->frames_processed()));
+                }
                 std::this_thread::sleep_for(500ms);
             }
         });

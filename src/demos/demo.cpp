@@ -9,6 +9,7 @@ namespace acva::demos {
 // Forward declarations of each demo's entry point. Definitions live in
 // the per-demo TUs so adding a new demo is one entry in this table +
 // one new file under src/demos/.
+int run_aec       (const config::Config&);
 int run_capture   (const config::Config&);
 int run_chat      (const config::Config&);
 int run_fsm       (const config::Config&);
@@ -22,7 +23,7 @@ int run_tts       (const config::Config&);
 
 namespace {
 
-constexpr std::array<Demo, 10> kDemos{{
+constexpr std::array<Demo, 11> kDemos{{
     {"fsm",      "M0",
      "synthetic FSM driver runs 3 turns end-to-end (no backends needed)",
      run_fsm},
@@ -53,6 +54,9 @@ constexpr std::array<Demo, 10> kDemos{{
     {"transcribe", "M5",
      "30 s mic + Silero VAD + Speaches realtime STT — prints partial + final transcripts",
      run_transcribe},
+    {"aec",      "M6",
+     "synthetic AEC validation: stimulus → loopback → APM → ERLE convergence",
+     run_aec},
 }};
 
 } // namespace

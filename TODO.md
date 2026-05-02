@@ -10,7 +10,7 @@
 Goals:
     - ready to use and higly customizable
     - modular experimental platform
-    - local-first
+    - local-first (privacy, connection)
     - Voice UX
 
 
@@ -44,6 +44,10 @@ compare:
 Followups:
 - tools integration
     - first tool - own config modification and restart
+    - knowledge graph
+    - diagrams and presentations
+    - quiz
+    - web search
 - web ui - plans/web_ui_architecture.md
 - docs, readme for advanced users plus arch overview, internals in docs
 - MacOS Metal
@@ -63,6 +67,11 @@ generate copy of user personality
 
 multi-context with single model
 multi-model runtime
+
+
+game NPC character design
+    - user switch talking between character, admin, other characters
+    - ask characters talk to each other
 
 
 different database, vector database, graph database

@@ -226,6 +226,18 @@ std::optional<LoadError> validate(const Config& cfg) {
     if (cfg.utterance.max_duration_ms == 0) {
         return LoadError{"config: utterance.max_duration_ms: must be > 0"};
     }
+
+    // M6 — APM / loopback.
+    if (cfg.audio.loopback.ring_seconds == 0) {
+        return LoadError{"config: audio.loopback.ring_seconds: must be > 0"};
+    }
+    if (cfg.apm.max_delay_ms == 0) {
+        return LoadError{"config: apm.max_delay_ms: must be > 0"};
+    }
+    if (cfg.apm.initial_delay_estimate_ms > cfg.apm.max_delay_ms) {
+        return LoadError{
+            "config: apm.initial_delay_estimate_ms must be <= apm.max_delay_ms"};
+    }
     return std::nullopt;
 }
 

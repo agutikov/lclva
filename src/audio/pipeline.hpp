@@ -1,5 +1,6 @@
 #pragma once
 
+#include "audio/apm.hpp"
 #include "audio/capture.hpp"
 #include "audio/clock.hpp"
 #include "audio/endpointer.hpp"
@@ -19,6 +20,8 @@
 #include <thread>
 
 namespace acva::audio {
+
+class LoopbackSink;
 
 // Owns the consumer half of the M4 capture path: drains the SPSC ring
 // (filled by CaptureEngine on PortAudio's callback thread), resamples
@@ -44,6 +47,16 @@ public:
         // is useful only as a placeholder; the loopback demo runs in
         // this mode for VAD-free testing.
         std::string vad_model_path;
+
+        // M6 — when `loopback` is non-null AND `apm.aec_enabled`, the
+        // pipeline inserts an APM stage between the resampler and the
+        // VAD: `SPSC ring → Resample → APM → VAD → Endpointer`.
+        // Reference samples come from the loopback sink (filled by
+        // PlaybackEngine on every render_into). When `loopback` is null
+        // the APM stage is skipped entirely; existing M4 behaviour is
+        // preserved bit-for-bit so capture-only tests don't regress.
+        ApmConfig     apm{};
+        LoopbackSink* loopback = nullptr;
     };
 
     AudioPipeline(Config cfg,
@@ -66,6 +79,10 @@ public:
     [[nodiscard]] std::uint64_t utterance_drops()    const noexcept { return utterance_buffer_.drops(); }
     [[nodiscard]] std::size_t   in_flight()          const noexcept { return utterance_buffer_.in_flight(); }
     [[nodiscard]] bool          vad_enabled()        const noexcept { return vad_ != nullptr; }
+    // M6 observability — non-null whenever the APM stage is wired in.
+    // Returns nullptr in stub builds (ACVA_HAVE_WEBRTC_APM undefined),
+    // when no loopback was passed, or when AEC was disabled in cfg.
+    [[nodiscard]] const Apm*    apm()                const noexcept { return apm_.get(); }
 
     // Inspect the current endpointer state — useful for the capture demo.
     [[nodiscard]] EndpointerState endpointer_state() const noexcept { return endpointer_.state(); }
@@ -103,6 +120,7 @@ private:
 
     Resampler        resampler_;
     std::unique_ptr<SileroVad> vad_;
+    std::unique_ptr<Apm>       apm_;
     Endpointer       endpointer_;
     UtteranceBuffer  utterance_buffer_;
 

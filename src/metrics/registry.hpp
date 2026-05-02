@@ -99,6 +99,17 @@ public:
     void set_utterance_drops_total(double total);
     void set_utterance_in_flight(double depth);
 
+    // M6 — AEC metrics. Polled from Apm::aec_delay_estimate_ms() and
+    // erle_db() by the same audio-pipeline polling thread. The delay
+    // gauge is the APM's instantaneous internal estimate (refines from
+    // cfg.apm.initial_delay_estimate_ms over the first ~3 s of
+    // playback). ERLE (echo return loss enhancement) is dB lower than
+    // input — higher = more echo cancelled. Acceptance gate is
+    // > 25 dB after convergence.
+    void set_aec_delay_estimate_ms(double ms);
+    void set_aec_erle_db(double db);
+    void set_aec_frames_processed_total(double total);
+
     // Subscribe metrics-collection handlers to the bus. Call after
     // construction. Returns subscriptions which the caller must keep alive.
     [[nodiscard]] std::vector<event::SubscriptionHandle> subscribe(event::EventBus& bus);
@@ -149,6 +160,14 @@ private:
     prometheus::Gauge*                     utterance_drops_metric_         = nullptr;
     prometheus::Family<prometheus::Gauge>* utterance_in_flight_            = nullptr;
     prometheus::Gauge*                     utterance_in_flight_metric_     = nullptr;
+
+    // M6 AEC gauges.
+    prometheus::Family<prometheus::Gauge>* aec_delay_estimate_              = nullptr;
+    prometheus::Gauge*                     aec_delay_estimate_metric_       = nullptr;
+    prometheus::Family<prometheus::Gauge>* aec_erle_db_                     = nullptr;
+    prometheus::Gauge*                     aec_erle_db_metric_              = nullptr;
+    prometheus::Family<prometheus::Gauge>* aec_frames_processed_            = nullptr;
+    prometheus::Gauge*                     aec_frames_processed_metric_     = nullptr;
 
     // Per-(turn, seq) TTS timer state, captured between TtsStarted and
     // the first TtsAudioChunk so we can compute first-audio latency.

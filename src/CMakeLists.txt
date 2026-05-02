@@ -1,5 +1,6 @@
 # Core library — everything except main(). Tests link against this.
 add_library(acva_core STATIC
+    audio/apm.cpp
     audio/capture.cpp
     audio/clock.cpp
     audio/endpointer.cpp
@@ -10,6 +11,7 @@ add_library(acva_core STATIC
     audio/vad.cpp
     config/config.cpp
     config/paths.cpp
+    demos/aec.cpp
     demos/capture.cpp
     demos/chat.cpp
     demos/demo.cpp

@@ -6,6 +6,17 @@
 
 **Blocks:** M7 (barge-in needs AEC to avoid TTS-echo false triggers).
 
+> **Status (2026-05-03):** Steps 1–6 + the AEC demo landed against the
+> Arch system package `webrtc-audio-processing-1` 1.3 (BSD-3-Clause).
+> CMake gate is `ACVA_HAVE_WEBRTC_APM`; missing-package builds compile
+> the wrapper as a pass-through stub. Synthetic round-trip (
+> `acva demo aec`) gives ~22 dB mic-energy reduction on a 1 kHz
+> tone-into-50 ms-delayed-echo fixture; APM's internal `delay_ms`
+> stat converges to ~70 ms (50 ms simulated air + ~20 ms internal
+> processing). Step 7 (real-hardware VAD re-baseline + the
+> acceptance gates that need a quiet room) is pending verification
+> on the dev workstation's actual speaker + mic setup.
+
 ## Goal
 
 Speaker-mode operation works without the assistant interrupting itself. WebRTC APM consumes mic + reference signal frames; emits cleaned audio that VAD operates on.
@@ -34,7 +45,7 @@ pacman -Si webrtc-audio-processing-1
 
 If packaged config is usable, prefer A; else vendor.
 
-## Step 1 — Loopback tap
+## Step 1 — Loopback tap (✅ landed 2026-05-03)
 
 The playback engine in M3 emits int16 samples at 48 kHz to the device. Tap *just before* `Pa_WriteStream` (or whatever PortAudio call) and copy into a per-utterance loopback ring with timestamps.
 
@@ -59,7 +70,25 @@ public:
 
 The `MonotonicAudioClock` from M4 keeps both streams on the same time base.
 
-## Step 2 — APM wrapper
+## Step 2 — APM wrapper (✅ landed 2026-05-03)
+
+`src/audio/apm.{hpp,cpp}` wraps `webrtc::AudioProcessing` behind a
+10-ms-frame `process(mic_frame, capture_time)` signature. AudioProcessingBuilder
+constructs an APM whose Config enables `echo_canceller`, `noise_suppression`
+(level kHigh), `gain_controller1` (kFixedDigital, target -3 dBFs,
+9 dB compression), `high_pass_filter`, and `residual_echo_detector`.
+The wrapper holds the APM via `rtc::scoped_refptr` (Builder.Create()
+returns refcount=0; scoped_refptr does the AddRef on construction).
+Reference samples are pulled at the requested capture-time from a
+`LoopbackSink*` and resampled 48 → 16 kHz on the fly via the persistent
+soxr-backed `audio::Resampler`. APM stats (`delay_ms`, `echo_return_loss_enhancement`)
+are snapshotted into atomics on every `process()` call so /metrics
+readers can sample without coordination.
+
+Stub fallback when `ACVA_HAVE_WEBRTC_APM` is undefined: `process()`
+returns the input mic frame verbatim, `aec_active() == false`, `aec_delay_estimate_ms() == -1`,
+`erle_db() == NaN`. Six unit tests in `tests/test_apm.cpp` cover both
+paths.
 
 **Files:**
 - `src/audio/apm.hpp`
@@ -97,7 +126,18 @@ public:
 };
 ```
 
-## Step 3 — Integrate into the audio-processing thread
+## Step 3 — Integrate into the audio-processing thread (✅ landed 2026-05-03)
+
+`AudioPipeline::Config` gained `ApmConfig apm{}` + `LoopbackSink* loopback`.
+The pipeline constructs an `Apm` whenever `loopback != nullptr`; the
+production wiring (main.cpp) creates the loopback sink + sets it on
+both `PlaybackEngine::set_loopback_sink` and `AudioPipeline::Config::loopback`
+whenever `cfg.audio.capture_enabled`. `process_frame` runs APM on
+exactly-10-ms chunks (the production case: 480 samples in → 160 out
+from the 48→16 kHz resampler); off-size warmup chunks pass through
+unchanged. The cleaned mic frame then feeds `utterance_buffer_` /
+`live_sink_` / `vad_` / `endpointer_` — i.e., everything downstream
+sees the AEC'd signal.
 
 Today (M4) the audio-processing thread is:
 ```
@@ -110,7 +150,16 @@ SPSC ring → Resample → APM (mic+ref) → VAD → Endpointer
 
 VAD operates on the AEC-cleaned signal. The endpointer's thresholds may need slight tuning post-APM (the noise floor changes), but the same defaults usually work.
 
-## Step 4 — Reference-signal alignment delay
+## Step 4 — Reference-signal alignment delay (✅ landed 2026-05-03)
+
+`LoopbackSink::aligned(capture_time, dest)` returns the ref samples
+whose first sample's emit-time matches `capture_time`. The APM
+wrapper passes `capture_time` straight from the AudioFrame timestamp
+(MonotonicAudioClock-derived); APM's internal estimator refines the
+delay hint over the first ~3 s. The configured 50 ms hint is sent
+once at construction via `set_stream_delay_ms` and refreshed each
+frame so APM's search window stays narrow. Future drift correction
+(if needed) lives in `MonotonicAudioClock`.
 
 WebRTC APM expects the reference signal to **arrive before** the corresponding mic signal — i.e., the speaker output must be fed in advance of when the microphone hears it. The native delay is the **device output latency + airborne propagation + microphone latency**. On a typical desktop with USB mic and built-in speakers, this is 30–80 ms.
 
@@ -118,7 +167,20 @@ The `LoopbackSink` stores frames with their emit timestamps. When the APM asks f
 
 **Metric:** `voice_aec_delay_estimate_ms` exposed via `Apm::aec_delay_estimate_ms()`. Watch this during dev — if it diverges over time, drift correction in `MonotonicAudioClock` isn't keeping up.
 
-## Step 5 — Echo-suppression validation
+## Step 5 — Echo-suppression validation (✅ synthetic landed 2026-05-03)
+
+`acva demo aec` runs a synthetic 6 s 1 kHz tone through LoopbackSink
+(as the speaker emission) and the same tone delayed by 50 ms +
+attenuated to 0.4× through APM (as the simulated mic input), then
+prints a per-chunk delay + ERLE table. End-to-end mic-energy
+reduction is ~22 dB on the dev workstation; APM's internal `delay_ms`
+stat converges to ~70 ms. The synthetic test gates on > 1 dB
+reduction (proves the wiring), not the M6 acceptance bar
+(> 25 dB ERLE on real hardware).
+
+The hardware version (real speaker + mic + quiet room) still needs to
+land — same demo with a flag, when the dev workstation is available
+for measurement. Until then the gates below stay PENDING.
 
 A standalone test that exercises the end-to-end loop:
 1. Play a known signal (1 kHz sine) through the speaker.
@@ -128,7 +190,14 @@ A standalone test that exercises the end-to-end loop:
 
 **Files:** `tests/test_aec_validation.cpp` — gated, requires real audio hardware. CI skips it (we have no CI anyway, but document the gate).
 
-## Step 6 — Config extension
+## Step 6 — Config extension (✅ landed 2026-05-03)
+
+`config::ApmConfig` (mirrors `audio::ApmConfig` field-for-field) and
+`config::AudioLoopbackConfig` (just `ring_seconds`) added. main.cpp
+maps to engine configs at construction; validators reject zero
+`ring_seconds` and `initial_delay_estimate_ms > max_delay_ms`.
+
+
 
 ```yaml
 apm:
@@ -143,7 +212,7 @@ audio:
     ring_seconds: 2          # how much loopback history to retain
 ```
 
-## Step 7 — Re-baseline VAD thresholds
+## Step 7 — Re-baseline VAD thresholds (PENDING hardware verification)
 
 After APM is in place, re-run the M4 false-start fixtures with the cleaned signal. Tune `vad.onset_threshold` and `vad.offset_threshold` if needed. Document any change in `plans/open_questions.md` as a tuning note (no new question; just an outcome).
 

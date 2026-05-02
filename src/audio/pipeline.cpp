@@ -39,6 +39,16 @@ AudioPipeline::AudioPipeline(Config cfg,
                              ex.what()));
         }
     }
+
+    // M6 — only construct the APM when there's a loopback to pull
+    // reference frames from. The orchestrator always passes one when
+    // the playback path is wired; capture-only tests skip it.
+    if (cfg_.loopback != nullptr) {
+        ApmConfig apm_cfg = cfg_.apm;
+        apm_cfg.near_sample_rate_hz =
+            static_cast<int>(cfg_.output_sample_rate);
+        apm_ = std::make_unique<Apm>(apm_cfg, cfg_.loopback);
+    }
 }
 
 AudioPipeline::~AudioPipeline() { stop(); }
@@ -86,6 +96,21 @@ void AudioPipeline::process_frame(const AudioFrame& frame) {
 
     auto resampled = resampler_.process(frame.view());
     if (resampled.empty()) return;
+
+    // M6 — AEC stage. APM expects exactly one 10 ms frame
+    // (output_sample_rate/100 samples) per call. Production input is
+    // 480 samples at 48 kHz → 160 samples at 16 kHz, which matches
+    // exactly. Soxr can produce a non-160 chunk on the very first few
+    // calls (warm-up); we pass those through unchanged. The chunked
+    // case is rare enough in practice that the simpler "skip-on-mismatch"
+    // policy beats a buffered chunker — at most a few startup frames
+    // miss AEC, and they're silence anyway.
+    const std::size_t apm_frame_samples =
+        cfg_.output_sample_rate / 100U;
+    if (apm_ && apm_->aec_active()
+        && resampled.size() == apm_frame_samples) {
+        resampled = apm_->process(resampled, frame.captured_at);
+    }
 
     // Always-on append so the rolling pre-buffer stays warm.
     utterance_buffer_.append(resampled);

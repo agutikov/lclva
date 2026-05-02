@@ -187,6 +187,26 @@ Registry::Registry() : registry_(std::make_shared<prometheus::Registry>()) {
         .Help("Live utterance slices held by consumers (STT, recorders)")
         .Register(*registry_);
     utterance_in_flight_metric_ = &utterance_in_flight_->Add({});
+
+    // M6 — APM telemetry. Gauges so a process restart resets the
+    // dashboard to 0 instead of carrying a stale converged value.
+    aec_delay_estimate_ = &prometheus::BuildGauge()
+        .Name("voice_aec_delay_estimate_ms")
+        .Help("APM's instantaneous estimate of speaker→mic round-trip delay (ms)")
+        .Register(*registry_);
+    aec_delay_estimate_metric_ = &aec_delay_estimate_->Add({});
+
+    aec_erle_db_ = &prometheus::BuildGauge()
+        .Name("voice_aec_erle_db")
+        .Help("Echo return loss enhancement (dB); >25 dB after convergence is the M6 acceptance gate")
+        .Register(*registry_);
+    aec_erle_db_metric_ = &aec_erle_db_->Add({});
+
+    aec_frames_processed_ = &prometheus::BuildGauge()
+        .Name("voice_aec_frames_processed_total")
+        .Help("Cumulative 10 ms frames passed through the APM wrapper")
+        .Register(*registry_);
+    aec_frames_processed_metric_ = &aec_frames_processed_->Add({});
 }
 
 void Registry::on_event_published(const char* event_name) {
@@ -297,6 +317,15 @@ void Registry::set_utterance_drops_total(double total) {
 }
 void Registry::set_utterance_in_flight(double depth) {
     if (utterance_in_flight_metric_) utterance_in_flight_metric_->Set(depth);
+}
+void Registry::set_aec_delay_estimate_ms(double ms) {
+    if (aec_delay_estimate_metric_) aec_delay_estimate_metric_->Set(ms);
+}
+void Registry::set_aec_erle_db(double db) {
+    if (aec_erle_db_metric_) aec_erle_db_metric_->Set(db);
+}
+void Registry::set_aec_frames_processed_total(double total) {
+    if (aec_frames_processed_metric_) aec_frames_processed_metric_->Set(total);
 }
 
 std::vector<event::SubscriptionHandle> Registry::subscribe(event::EventBus& bus) {

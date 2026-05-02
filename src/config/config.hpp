@@ -188,6 +188,15 @@ struct DialogueConfig {
     SentenceSplitterConfig sentence_splitter;
 };
 
+// M6 — loopback ring sizing. The PlaybackEngine taps the audio buffer
+// it just emitted into a ring of this duration, indexed by emit
+// timestamp. The APM wrapper pulls aligned reference frames from it.
+// 2 s easily covers the typical speaker→mic round-trip (50 ms physical
+// + a few hundred ms of pipeline jitter under load).
+struct AudioLoopbackConfig {
+    uint32_t ring_seconds = 2;
+};
+
 struct AudioConfig {
     // PortAudio device selector. "default" → host default; otherwise
     // matched by name substring (case-insensitive). Empty == "default".
@@ -213,6 +222,22 @@ struct AudioConfig {
     // barge-in. M6 AEC + M7 barge-in supersede this once landed.
     bool     half_duplex_while_speaking = false;
     uint32_t half_duplex_hangover_ms    = 200;
+    // M6 — AEC reference-signal loopback ring.
+    AudioLoopbackConfig loopback;
+};
+
+// M6 — WebRTC AudioProcessing (AEC + NS + AGC) tuning. Mirrors
+// `audio::ApmConfig` field-for-field; main.cpp maps one to the other
+// when constructing the engine. Defaults match the M6 plan §6.
+struct ApmConfig {
+    bool aec_enabled = true;
+    bool ns_enabled  = true;
+    bool agc_enabled = true;
+    // Initial guess for `set_stream_delay_ms`. APM's internal estimator
+    // refines from here over the first ~3 seconds.
+    uint32_t initial_delay_estimate_ms = 50;
+    // Sanity ceiling on the estimated delay; over this we log + clamp.
+    uint32_t max_delay_ms = 250;
 };
 
 struct PlaybackConfig {
@@ -270,6 +295,7 @@ struct Config {
     PlaybackConfig playback;
     VadConfig vad;
     UtteranceConfig utterance;
+    ApmConfig apm;
 };
 
 struct LoadError {

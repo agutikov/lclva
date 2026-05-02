@@ -26,6 +26,7 @@ set(_acva_test_main test_main.cpp)
 # ----- unit suite -----
 add_executable(acva_unit_tests
     ${_acva_test_main}
+    test_apm.cpp
     test_audio_pipeline.cpp
     test_bus.cpp
     test_config.cpp

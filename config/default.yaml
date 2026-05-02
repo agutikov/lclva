@@ -134,6 +134,13 @@ audio:
   buffer_frames: 480         # 10 ms @ 48 kHz
   half_duplex_while_speaking: true
   half_duplex_hangover_ms: 200
+  # M6 — AEC reference-signal loopback ring. The PlaybackEngine writes
+  # the chunk it just emitted (with a wall-clock timestamp) into this
+  # ring; the APM wrapper pulls aligned reference frames from it. 2 s
+  # covers the typical speaker → air → mic round-trip plus pipeline
+  # jitter under load.
+  loopback:
+    ring_seconds: 2
 
 playback:
   max_queue_chunks: 64       # ~640 ms ahead of the audio cb
@@ -158,6 +165,19 @@ vad:
 utterance:
   max_in_flight: 3
   max_duration_ms: 60000     # safety cap for long monologues
+
+# M6 — WebRTC AudioProcessing (AEC + NS + AGC). When the
+# webrtc-audio-processing-1 package is missing at build time the wrapper
+# is a no-op pass-through and these knobs have no effect. Keep aec on
+# whenever capture_enabled is on; with half_duplex_while_speaking also
+# on the two protect each other (AEC handles speaker bleed; the
+# half-duplex gate covers the residual until AEC converges).
+apm:
+  aec_enabled: true
+  ns_enabled: true
+  agc_enabled: true
+  initial_delay_estimate_ms: 50    # speaker → air → mic round-trip guess
+  max_delay_ms: 250                # sanity ceiling on the estimator
 
 supervisor:
   pipeline_fail_grace_seconds: 30

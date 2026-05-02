@@ -383,7 +383,7 @@ behavior: cfg.stt.language defaults to "en" → English voice +
 English system prompt + lang="en" in memory.
 
 **To switch to Russian:** set `cfg.stt.language: "ru"`. The
-downloader (`scripts/download-speaches-models.sh`) pulls all four
+downloader (`scripts/download-tts.sh`) pulls all four
 upstream `piper-ru_RU-{denis,dmitri,irina,ruslan}-medium` voices;
 `config/default.yaml` ships `ruslan` as the active `ru` voice.
 `config/default.yaml` also ships a Russian system_prompts entry.

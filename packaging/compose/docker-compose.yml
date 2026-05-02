@@ -23,7 +23,9 @@ services:
     ports:
       - "127.0.0.1:8081:8081"
     volumes:
-      - ${ACVA_MODELS_DIR:-${HOME}/.local/share/acva/models}:/models:ro
+      # Mount only the llama.cpp/ subfolder so the container sees just
+      # GGUFs. Sibling subfolders (silero/, speaches/) stay invisible.
+      - ${ACVA_MODELS_DIR:-${HOME}/.local/share/acva/models}/llama.cpp:/models:ro
     deploy:
       resources:
         reservations:
@@ -44,7 +46,7 @@ services:
       - "--port"
       - "8081"
       - "--model"
-      - "/models/${ACVA_LLM_MODEL:-qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf}"
+      - "/models/${ACVA_LLM_MODEL:-Qwen2.5-7B-Instruct-Q4_K_M.gguf}"
       - "--alias"
       - "qwen2.5-7b-instruct"
       - "--ctx-size"

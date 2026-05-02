@@ -171,19 +171,19 @@ int main(int argc, char** argv) {
         acva::config::resolve_data_path(cfg.memory.db_path, "acva.db").string();
 
     // M4 — resolve the Silero VAD model path against XDG_DATA_HOME.
-    // Empty → ${XDG_DATA_HOME}/acva/models/silero_vad.onnx (the path
-    // scripts/download-silero-vad.sh writes to). If the file isn't
+    // Empty → ${XDG_DATA_HOME}/acva/models/silero/silero_vad.onnx (the
+    // path scripts/download-vad.sh writes to). If the file isn't
     // there, AudioPipeline catches the load failure and disables VAD
     // with a warning — so leaving model_path unset is safe.
     if (cfg.vad.model_path.empty()) {
         const auto resolved = acva::config::resolve_data_path(
-            "", "models/silero_vad.onnx");
+            "", "models/silero/silero_vad.onnx");
         if (std::filesystem::exists(resolved)) {
             cfg.vad.model_path = resolved.string();
         }
     } else {
         cfg.vad.model_path =
-            acva::config::resolve_data_path(cfg.vad.model_path, "silero_vad.onnx").string();
+            acva::config::resolve_data_path(cfg.vad.model_path, "silero/silero_vad.onnx").string();
     }
 
     // ----- 2. Initialize logging -----

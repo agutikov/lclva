@@ -184,4 +184,36 @@ exercised by `acva demo capture` and `acva demo aec` separately.
 | 5 Validation suite + fixtures | 2 days |
 | 6 UX polish | 1 day |
 | 7 Config + manual stress | 1 day |
-| **Total** | **~6–7 days = ~1 week** |
+| 8 Cleanup TODOs (below) | 0.5 day |
+| **Total** | **~7 days = ~1 week** |
+
+## TODOs / known issues to clean up before closing M7
+
+Two carry-over bugs surfaced during M5 dogfooding. Both touch the
+audio + dialogue path, so M7 (which significantly reworks both for
+barge-in) is the natural place to fix them.
+
+- **Bug 1: M5 streaming sink misses `pre_padding_ms` window.** In
+  `audio/pipeline.cpp`, the live-audio sink fires only between
+  `SpeechStarted` and `SpeechEnded`. But the M4 endpointer waits
+  `min_speech_ms` (200 ms) of above-threshold audio before firing
+  `SpeechStarted`, and the rolling 300 ms `pre_padding_ms` is
+  buffered only inside `UtteranceBuffer` — the M4B request/response
+  path consumes it; the M5 streaming path doesn't. Net: the
+  realtime STT loses ~200–500 ms of leading audio per utterance,
+  occasionally dropping the first phoneme of the user's first word.
+  Fix: at the `SpeechStarted` outcome, replay the buffered pre-pad
+  samples into `live_sink_` before falling through. `UtteranceBuffer`
+  already retains them; expose `recent_samples(duration)` and push
+  them to the sink as one chunk. ~1 hour.
+
+- **Bug 2: `max_assistant_sentences` cap silently truncates LLM mid-stream.**
+  `Manager::run_one` cancels the LLM stream once the cap fires
+  (default 6). The LLM has no idea — its output ends abruptly, the
+  user hears a half-thought. Two-part fix: (a) thread the cap into
+  the system prompt via `PromptBuilder::assemble_system_content`
+  (one extra line: *"Reply in at most {max_assistant_sentences}
+  short sentences."*); (b) let the in-flight sentence finish before
+  cancel fires (defer cap-driven cancel to the next `LlmSentence`
+  boundary, not the next `LlmToken`). Cancel-at-cap stays as a hard
+  backstop. ~1–2 hours.

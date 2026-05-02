@@ -142,10 +142,11 @@ playback:
 # M4 — Silero VAD + utterance assembly.
 vad:
   provider: silero
-  # Empty path disables the VAD; the audio pipeline runs but never
-  # endpoints real speech. Use scripts/download-silero-vad.sh to
-  # fetch the model into ~/.local/share/acva/models/silero_vad.onnx
-  # and set this path accordingly.
+  # Empty path → main.cpp resolves to
+  # ${XDG_DATA_HOME}/acva/models/silero/silero_vad.onnx (the per-engine
+  # subfolder layout; sibling of llama.cpp/ and speaches/). If the
+  # file is missing, the audio pipeline runs without VAD and logs a
+  # warning. Run scripts/download-vad.sh to fetch it.
   model_path: ""
   onset_threshold: 0.5
   offset_threshold: 0.35

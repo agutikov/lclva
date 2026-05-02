@@ -52,8 +52,8 @@ Three steps, smallest scope first:
      `cfg.tts.base_url` against `docker compose ps speaches`.
    - **`FAIL: cfg.tts.voices is empty`** → populate the map. Default
      is `en: { model_id: "speaches-ai/piper-en_US-amy-medium",
-     voice_id: "amy" }` and `scripts/download-speaches-models.sh`
-     downloads the model.
+     voice_id: "amy" }` and `scripts/download-tts.sh` downloads the
+     voice.
    - **`FAIL: openai_tts: http 422`** → request missing the `voice`
      field. The validator should catch this at config load —
      `voice_id` must be set per voice (Speaches enforces it server-side).
@@ -219,8 +219,9 @@ Common boot failures:
 
 | Service | Symptom | Fix |
 |---|---|---|
-| `llama` | `unable to load model` | Run `scripts/download-backend-assets.sh` to download the Qwen GGUF shards. Check `${ACVA_MODELS_DIR}` (default `~/.local/share/acva/models`). |
-| `speaches` | `model not found` on `/v1/audio/speech` or `/v1/audio/transcriptions` | Run `scripts/download-speaches-models.sh` after the container is up. The script hits Speaches' own `POST /v1/models/{id}` endpoint per model; downloads land under `${ACVA_MODELS_DIR}/speaches/`. |
+| `llama` | `unable to load model` | Run `scripts/download-llm.sh` to fetch the default Qwen GGUF shards. Check `${ACVA_MODELS_DIR}` (default `~/.local/share/acva/models`). For alternatives: `scripts/download-llm.sh socratic` / `doctor`. |
+| `speaches` | `model not found` on `/v1/audio/speech` | Run `scripts/download-tts.sh` after the container is up. |
+| `speaches` | `model not found` on `/v1/audio/transcriptions` | Run `scripts/download-stt.sh` after the container is up. |
 | Either container | `nvidia-smi` not visible inside container | Install the NVIDIA Container Toolkit on the host; restart Docker. |
 
 ## Component → demo cross-reference

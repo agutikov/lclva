@@ -2,28 +2,6 @@
 
 
 
-https://huggingface.co/MaziyarPanahi/openbuddy-zephyr-7b-v14.1-Mistral-7B-Instruct-v0.1-GGUF
-https://huggingface.co/MaziyarPanahi/openbuddy-mistral-7b-v13-base-Mistral-7B-Instruct-v0.1-GGUF
-https://huggingface.co/MaziyarPanahi/openbuddy-mistral-7b-v13.1-Mistral-7B-Instruct-v0.1-GGUF
-https://huggingface.co/Outlier-Ai/Outlier-Lite-7B-GGUF
-
-
-add cmdline memory crud tool in M8
-
-
-
-M8? fast restart if stuck or to apply params or request - save context with timestamp, restart, load context and continue
-
-
-
-BUG: VAD skips first letter-to-word, why? How to fix? Why it doesn't use sliding window?
-
-
-BUG: Long text speech cuts at some lenght threshold, LLM is not aware of it
-
-
-tolerate long pause in user monologue until user will finish his thinking
-another adaptaion - listen all, answer only questions addressed to the Assistent
 
 
 --------------------------------------------------------------------------------
@@ -36,6 +14,20 @@ Goals:
     - Voice UX
 
 
+Modular:
+    - after obvious modules - separate services (tts, stt, llm), what else?
+        - audio processing
+        - memory
+        - tools
+        - what else?
+            can FSM be a module for example?
+            can AEC be a module?
+            can pattern builder be a module?
+            what are pros/cons separating component to a module?
+    - orchestrator loads configurable runtime plugins - modules implementation
+    - do not mixup modularity and configurability
+
+
 Sound filters cheep way to make voice more natural
 
 SSML
@@ -43,6 +35,10 @@ SSML
 artistic speaking with expression
 
 sarcastic
+
+compare:
+    - min default config: no humanization, plain direct question-answer, default computer voice
+    - max human-like config: voice, drift, background thinking, etc...
 
 
 Followups:
@@ -61,6 +57,7 @@ all-in-one C++ app (llama.cpp + speeches, libs instead of servers) ???
 
 multi-user conversation
     - detect users by voice and remember
+    - remember main user by voice
 
 generate copy of user personality
 

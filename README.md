@@ -72,8 +72,8 @@ plans/
 packaging/
   compose/                docker-compose.yml + local Dockerfiles for whisper/piper
   systemd/                per-user systemd units (alternative production path)
-scripts/                  download-backend-assets.sh, download-silero-vad.sh,
-                          download-speaches-models.sh — fetch model files into XDG paths
+scripts/                  download-{llm,stt,tts,vad,assets}.sh — fetch
+                          model assets into XDG paths, organized by type
 compose.yaml              top-level compose shim that include:s packaging/compose/docker-compose.yml
 .env.example              env override template (ACVA_MODELS_DIR, ACVA_LLM_MODEL, ...)
 CMakeLists.txt, CMakePresets.json
@@ -157,7 +157,15 @@ Total: **~14–16 weeks** for a single competent C++ developer to MVP.
 
 Total disk footprint with Qwen Q4_K_M + Whisper small + 1 Piper voice: **~5.0 GB**.
 
-The `scripts/download-backend-assets.sh` helper downloads the LLM, Whisper model, and one Piper voice to the standard host paths in one shot. Silero VAD has its own helper at `scripts/download-silero-vad.sh`. Speaches manages its own STT/TTS model installs via `scripts/download-speaches-models.sh` (introduced in M4B).
+Downloaders are organized by asset type. Run them individually or use the umbrella:
+
+| Script | What it fetches |
+|---|---|
+| `scripts/download-llm.sh [alias …]` | LLM GGUFs into `${ACVA_MODELS_DIR}` (default Qwen2.5-7B; alternatives via aliases — `socratic`, `doctor`) |
+| `scripts/download-stt.sh` | Speaches STT model (faster-whisper-large-v3-turbo). Requires Speaches up. |
+| `scripts/download-tts.sh` | Speaches TTS voices (en + ru). Requires Speaches up. |
+| `scripts/download-vad.sh` | Silero VAD ONNX |
+| `scripts/download-assets.sh` | Runs all four in order |
 
 ### Optional
 
@@ -287,23 +295,41 @@ llama.cpp uses the upstream `ghcr.io/ggml-org/llama.cpp:server-cuda` image verba
     sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
     ```
 - User in the `docker` group (or rootless Docker).
-- Models and voices present on the host under `~/.local/share/acva/{models,voices}/`. The `scripts/download-backend-assets.sh` helper below downloads the defaults.
+- Models and voices present on the host under `~/.local/share/acva/{models,voices}/`. The downloader scripts below fetch the defaults.
 
 ### 2. Download the default model assets
 
+Bring up Compose first (Speaches needs to be live for STT/TTS pulls), then:
+
 ```sh
-bash scripts/download-backend-assets.sh
+cd packaging/compose && docker compose up -d && cd ../..
+bash scripts/download-assets.sh   # umbrella; fans out to per-type scripts
 ```
 
-Idempotent and resumable (curl `--continue-at -`). Default footprint ≈ 5.2 GB:
+Or one type at a time:
+
+```sh
+bash scripts/download-llm.sh         # default Qwen2.5-7B (~4.6 GB)
+bash scripts/download-llm.sh socratic  # alternative — Socratic-tutor LoRA
+bash scripts/download-stt.sh         # Speaches STT (~1.6 GB; Speaches must be up)
+bash scripts/download-tts.sh         # Piper voices via Speaches
+bash scripts/download-vad.sh         # Silero VAD ONNX (~2 MB)
+```
+
+All idempotent and resumable. Default footprint ≈ 6.5 GB:
 
 | File | Size | Source |
 |---|---|---|
-| `qwen2.5-7b-instruct-q4_k_m-{00001,00002}-of-00002.gguf` | ~4.4 GB | Qwen GGUF on HuggingFace |
-| `ggml-small.bin` | ~466 MB | ggerganov/whisper.cpp on HuggingFace |
-| `en_US-amy-medium.onnx` (+ `.json`) | ~63 MB | rhasspy/piper-voices on HuggingFace |
+| `llama.cpp/Qwen2.5-7B-Instruct-Q4_K_M.gguf` | ~4.7 GB | bartowski's GGUF on HuggingFace |
+| `speaches/...` (faster-whisper-large-v3-turbo-ct2) | ~1.6 GB | HuggingFace via Speaches |
+| `speaches/...` (Piper voices, en + ru × 4) | ~250 MB | rhasspy/piper-voices via Speaches |
+| `silero/silero_vad.onnx` | ~2 MB | snakers4/silero-vad on GitHub |
 
-Override the destination dirs with `ACVA_MODELS_DIR` / `ACVA_VOICES_DIR` (the same env vars compose reads).
+Models are organized by engine type under `${ACVA_MODELS_DIR}/`
+(default `~/.local/share/acva/models/`). The downloaders create
+the subfolders automatically and migrate any legacy flat-layout
+files on first run. Override the destination dir with
+`ACVA_MODELS_DIR` (the same env var compose reads).
 
 ### 3. Bring up the backends
 
@@ -389,19 +415,23 @@ Create the dirs:
 mkdir -p ~/.local/opt ~/.local/share/acva/{models,voices,db}
 ```
 
-Download the models (sizes from the README dependency table):
+Download the models (sizes from the README dependency table). Each
+asset goes into its own per-engine subfolder under
+`~/.local/share/acva/models/`:
 
 ```sh
-# Qwen2.5-7B-Instruct GGUF Q4_K_M (~4.5 GB)
-curl -L -o ~/.local/share/acva/models/qwen2.5-7b-instruct-q4_k_m.gguf \
-  https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf
+# Qwen2.5-7B-Instruct GGUF Q4_K_M (~4.7 GB) — into models/llama.cpp/
+mkdir -p ~/.local/share/acva/models/llama.cpp
+curl -L -o ~/.local/share/acva/models/llama.cpp/Qwen2.5-7B-Instruct-Q4_K_M.gguf \
+  https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf
 
-# Whisper small multilingual (~244 MB)
+# Whisper small multilingual (~244 MB) — legacy whisper.cpp path; M4B+ uses Speaches instead
 curl -L -o ~/.local/share/acva/models/ggml-small.bin \
   https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin
 
-# Silero VAD (~2 MB)
-curl -L -o ~/.local/share/acva/models/silero_vad.onnx \
+# Silero VAD (~2 MB) — into models/silero/
+mkdir -p ~/.local/share/acva/models/silero
+curl -L -o ~/.local/share/acva/models/silero/silero_vad.onnx \
   https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx
 
 # A Piper voice (~30 MB) — repeat per language you want

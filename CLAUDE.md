@@ -24,7 +24,7 @@ tests/                   — doctest-based suites: acva_unit_tests (no deps) +
 config/default.yaml      — default runtime config (covers everything through M4).
 cmake/                   — Dependencies.cmake, Warnings.cmake.
 third_party/cpp-httplib/ — vendored single-header HTTP server lib.
-scripts/                 — one-shot dev scripts (download-silero-vad.sh, etc).
+scripts/                 — one-shot dev scripts (download-vad.sh, etc).
 packaging/
   systemd/               — alternative production deployment: per-user units (M2 stretch / M8).
   compose/               — dev default: docker-compose.yml. Two services: `llama` + `speaches`
@@ -90,7 +90,7 @@ If you find yourself recommending Boost.Cobalt, C++23 modules, an embedded infer
 
 ## Milestone Order (Adjusted from Original)
 
-`M0 skeleton → M1 LLM+memory (split: A complete, B Compose stack, C remaining) → M2 supervision → M3 TTS+playback → M4 audio+VAD → M4B Speaches consolidation → M5 STT → M6 AEC → M7 barge-in → M8 hardening → M9 streaming partials + speculative LLM`
+`M0 skeleton → M1 LLM+memory (split: A complete, B Compose stack, C remaining) → M2 supervision → M3 TTS+playback → M4 audio+VAD → M4B Speaches consolidation → M5 STT → M6 AEC → M7 barge-in → M8A admin/state → M8B observability/soak → M8C distribution + wake-word → M9 streaming partials + speculative LLM → M10 conversational UX (adaptive endpointer + address detection)`
 
 Three reorderings / insertions vs. the original plan, all intentional:
 - **Supervision (M2) before TTS (M3)** — llama.cpp will crash during long-context dev; retrofitting supervision is painful.

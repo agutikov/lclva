@@ -753,10 +753,13 @@ digraph Milestones {
   M5  [fillcolor="#10B981", fontcolor=white, label="M5\nStreaming STT\n(no partials)\n~1w"];
   M6  [fillcolor="#2563EB", fontcolor=white, label="M6\nAEC / NS / AGC\n1-2w"];
   M7  [fillcolor="#DC2626", fontcolor=white, label="M7\nBarge-In\n1w"];
-  M8  [fillcolor="#16A34A", fontcolor=white, label="M8\nHardening\n2w"];
+  M8A [fillcolor="#16A34A", fontcolor=white, label="M8A\nAdmin / State\n2w"];
+  M8B [fillcolor="#15803D", fontcolor=white, label="M8B\nObservability\n+ Soak\n1w"];
+  M8C [fillcolor="#166534", fontcolor=white, label="M8C\nDistribution\n+ Wake-Word\n1w"];
   M9  [fillcolor="#9333EA", fontcolor=white, label="M9\nStreaming Partials\n+ Speculation\n1.5-2w"];
+  M10 [fillcolor="#A855F7", fontcolor=white, label="M10\nConversational UX\n1.5w"];
 
-  M0 -> M1 -> M2 -> M3 -> M4 -> M4B -> M5 -> M6 -> M7 -> M8 -> M9;
+  M0 -> M1 -> M2 -> M3 -> M4 -> M4B -> M5 -> M6 -> M7 -> M8A -> M8B -> M8C -> M9 -> M10;
 
   // Highlight critical reorderings
   M2 -> M3 [label="supervision\nbefore TTS", fontcolor="#0891B2", color="#0891B2", style=dashed, constraint=false];
@@ -826,12 +829,23 @@ Each milestone has a detailed plan in `plans/milestones/`. The summary below is 
 - Assistant-turn outcome handling (Discarded vs Interrupted).
 - Memory persistence policy on interruption.
 
-### M8: Production Hardening (2 weeks) — see [milestones/m8_hardening.md](milestones/m8_hardening.md)
-- Soak test infrastructure.
-- Metrics dashboard (Grafana or simple HTML).
-- Config hot-reload.
-- Wipe/privacy commands.
-- Packaging (single binary + config + service files).
+### M8A: Admin & State Management (~2 weeks) — see [milestones/m8a_admin_state.md](milestones/m8a_admin_state.md)
+- Hot-reload (config changes without restart).
+- Privacy commands (`/mute`, `/new-session`, `/wipe`).
+- Memory CRUD CLI (`acva memory ...` subcommand).
+- Watchdog + checkpointed restart (SQLite `runtime_state` row; warm restart preserves session+turn id).
+- Boot-time model orchestration (`model-controller` Go sidecar; `cfg.llm.model_file` becomes single source of truth; opt-in strict-startup).
+
+### M8B: Observability & Soak (~1 week) — see [milestones/m8b_observability.md](milestones/m8b_observability.md)
+- 4-hour soak harness with leak/latency/restart criteria.
+- Grafana dashboard JSON for the metrics surface that's been live since M2.
+- OTLP wiring (opt-in) for per-turn span trees.
+
+### M8C: Distribution & Wake-Word (~1 week) — see [milestones/m8c_distribution.md](milestones/m8c_distribution.md)
+- Wake-word ("Hey acva") via openWakeWord ONNX, default off.
+- Compose + systemd packaging finalized.
+- Docs pass (README, runbook, configuration reference, architecture).
+- Final sweep (clang-tidy, sanitizers, TODO triage).
 
 ### M9: Streaming Partials + Speculative LLM (1.5–2 weeks) — see [milestones/m9_speculation.md](milestones/m9_speculation.md)
 - Source `PartialTranscript` events from the STT backend (PR Speaches, side-car streaming Whisper, or re-platform STT).
@@ -840,7 +854,12 @@ Each milestone has a detailed plan in `plans/milestones/`. The summary below is 
 - ~300 ms median first-token-ready savings on stable-prefix utterances.
 - Originally Steps 4–5 of M5; deferred because Speaches' realtime endpoint as of 2026-05-02 doesn't emit partials.
 
-**Total: ~14–17 weeks** for a single competent C++ developer to MVP. (Up from 12–14 due to M5 expansion for streaming partial STT and multilingual; M4B adds ~6 days of consolidation work but shrinks M5 by roughly the same amount because the streaming engine is already chosen and smoke-tested by the time M5 starts.)
+### M10: Conversational UX (~1.5 weeks) — see [milestones/m10_conversational_ux.md](milestones/m10_conversational_ux.md)
+- Adaptive endpointer hangover keyed on partial transcript heuristics (terminal punctuation, hesitation markers, mid-clause). Depends on M9 partials.
+- Optional address-detection classifier (heuristic or LLM-based) above the wake-word path; rejects side-conversation utterances without triggering a turn.
+- Post-MVP polish; M5–M8 ship a working assistant without it.
+
+**Total: ~16–19 weeks** for a single competent C++ developer to MVP+. (Up from 14–17 due to the M8 split clarifying scope, plus the M10 addition. The M8A/B/C split is purely organizational — the work is the same; ~3 weeks total — but each sub-milestone ships independently.)
 
 ---
 

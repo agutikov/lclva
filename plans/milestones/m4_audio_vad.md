@@ -32,7 +32,7 @@ find_package(onnxruntime CONFIG QUIET)  # gates ACVA_HAVE_ONNXRUNTIME
 
 ONNX Runtime is **optional** (graceful fallback): when not present, `audio/vad.cpp` compiles to a stub that throws on construction; the `AudioPipeline` catches that and proceeds without VAD (probability fixed at 0). Real installs use the system package.
 
-The ONNX model file ships separately; downloaded via `scripts/download-silero-vad.sh` to `${XDG_DATA_HOME}/acva/models/silero_vad.onnx`.
+The ONNX model file ships separately; downloaded via `scripts/download-vad.sh` to `${XDG_DATA_HOME}/acva/models/silero/silero_vad.onnx`.
 
 ## Step 1 — MonotonicAudioClock ✅
 
@@ -225,7 +225,7 @@ audio:
 
 vad:
   provider: silero
-  model_path: "${XDG_DATA_HOME:-~/.local/share}/acva/models/silero_vad.onnx"
+  model_path: "${XDG_DATA_HOME:-~/.local/share}/acva/models/silero/silero_vad.onnx"
   onset_threshold: 0.5
   offset_threshold: 0.35
   min_speech_ms: 200
@@ -338,7 +338,7 @@ you whether VAD endpointing is sensible — that's `capture`'s job.
 - Fake driver gains `suppress_speech_events` so the M4 capture path owns Speech*; main.cpp passes `cfg.audio.capture_enabled` through.
 - Demos `acva demo loopback` (mic → speakers, no VAD) and `acva demo capture` (mic + VAD endpointing report) ship.
 - Tests: `test_spsc_ring.cpp` (6 cases incl. SPSC stress), `test_endpointer.cpp` (9), `test_utterance.cpp` (8), `test_vad.cpp` (1 + 3 model-gated). Total +24 cases. Suite: 210/210 passing locally.
-- `scripts/download-silero-vad.sh` pulls the v5.1.2 ONNX model.
+- `scripts/download-vad.sh` pulls the v5.1.2 ONNX model.
 
 Open follow-ups (deferred, not blocking):
 - Metrics: `voice_vad_false_starts_total`, `voice_audio_ring_depth`, `voice_utterance_drops_total` plumbing — currently exposed via getters on `AudioPipeline` / `UtteranceBuffer` but not yet wired into `metrics::Registry`. Acceptance #2 + #3 need these.

@@ -48,7 +48,7 @@ int run_transcribe(const config::Config& cfg) {
     if (cfg.vad.model_path.empty()) {
         std::fprintf(stderr,
             "demo[transcribe] WARNING: cfg.vad.model_path is empty — VAD will not "
-            "fire on real speech. Run scripts/download-silero-vad.sh.\n");
+            "fire on real speech. Run scripts/download-vad.sh.\n");
     }
 
     std::printf(

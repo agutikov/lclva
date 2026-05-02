@@ -168,8 +168,12 @@ digraph ComponentsTree {
   M5 [label="m5_streaming_stt.md",       fillcolor="#94A3B8", fontcolor="#0F172A"];
   M6 [label="m6_aec.md",                 fillcolor="#94A3B8", fontcolor="#0F172A"];
   M7 [label="m7_barge_in.md",            fillcolor="#94A3B8", fontcolor="#0F172A"];
-  M8 [label="m8_hardening.md",           fillcolor="#94A3B8", fontcolor="#0F172A"];
-  Mil -> {M0 M1 M2 M3 M4 M5 M6 M7 M8};
+  M8A [label="m8a_admin_state.md",       fillcolor="#94A3B8", fontcolor="#0F172A"];
+  M8B [label="m8b_observability.md",     fillcolor="#94A3B8", fontcolor="#0F172A"];
+  M8C [label="m8c_distribution.md",      fillcolor="#94A3B8", fontcolor="#0F172A"];
+  M9  [label="m9_speculation.md",        fillcolor="#94A3B8", fontcolor="#0F172A"];
+  M10 [label="m10_conversational_ux.md", fillcolor="#94A3B8", fontcolor="#0F172A"];
+  Mil -> {M0 M1 M2 M3 M4 M5 M6 M7 M8A M8B M8C M9 M10};
 
   // -------- packaging/ --------
   Pkg [label="packaging/", fillcolor="#0F766E", fontcolor=white, shape=folder, fontsize=12];

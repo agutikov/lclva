@@ -10,11 +10,14 @@ Detailed per-milestone plans. The high-level table lives in `../project_design.m
 | M3  | `m3_tts_playback.md` | ✅ landed   |
 | M4  | `m4_audio_vad.md` | ✅ landed   |
 | M4B | `m4b_speaches_consolidation.md` | ✅ landed |
-| M5  | `m5_streaming_stt.md` | in progress |
+| M5  | `m5_streaming_stt.md` | ✅ landed 2026-05-03 |
 | M6  | `m6_aec.md` | planned     |
 | M7  | `m7_barge_in.md` | planned     |
-| M8  | `m8_hardening.md` | planned    |
+| M8A | `m8a_admin_state.md` | planned (hot-reload, privacy, memory CLI, watchdog+restart, model orchestration) |
+| M8B | `m8b_observability.md` | planned (soak, dashboard, OTLP) |
+| M8C | `m8c_distribution.md` | planned (wake-word, packaging, docs, final sweep) |
 | M9  | `m9_speculation.md` | planned (originally M5 Steps 4–5; deferred because Speaches doesn't emit partial transcripts) |
+| M10 | `m10_conversational_ux.md` | planned (adaptive endpointer + address detection; depends on M9) |
 
 ## Demos — one-shot smoke checks built into the binary
 
@@ -179,7 +182,7 @@ hole in M4 is closed: real STT lands on the bus.
 ```sh
 # Compose stack is now `llama` + `speaches`:
 docker compose -f packaging/compose/docker-compose.yml up -d
-./scripts/download-speaches-models.sh        # idempotent
+./scripts/download-stt.sh && ./scripts/download-tts.sh   # idempotent
 curl -fsS http://127.0.0.1:8090/health        # 200
 
 ./_build/dev/acva --config config/default.yaml --stdin

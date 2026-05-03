@@ -51,7 +51,15 @@ pipeline:
 
 llm:
   base_url: "http://127.0.0.1:8081/v1"
-  model: "qwen2.5-7b-instruct"
+  # Default = Qwen3-8B stage-1 dialogue tune (single Q4_K_M GGUF shipped
+  # by milwright/qwen-8b-dialog-v1; license unstated by the publisher).
+  # Fetch via `scripts/download-llm.sh dialog`.  llama-server ignores
+  # this string for routing — it just loads whatever GGUF was passed
+  # via `--model` on the command line (set by ACVA_LLM_MODEL in
+  # packaging/compose/docker-compose.yml) — so this value is mainly for
+  # log lines and `/v1/models` responses.  Other catalog options are
+  # listed in `scripts/download-llm.sh`.
+  model: "qwen3-stage1"
   unit: "acva-llama.service"
   temperature: 0.7
   # Pre-M7 (no barge-in yet): let the LLM finish whatever it
@@ -112,7 +120,7 @@ stt:
   #     accents/noise.
   #   - `Systran/faster-whisper-small` (~700 MB) — last-resort
   #     fallback if memory pressure forces it.
-  model: "Systran/faster-whisper-large-v3"
+  model: "deepdml/faster-whisper-large-v3-turbo-ct2"
   request_timeout_seconds: 30
   # M6 — force a 1-second silent transcription at acva startup so the
   # Whisper model loads into VRAM before the first real user turn. With

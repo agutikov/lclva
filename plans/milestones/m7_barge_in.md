@@ -217,3 +217,50 @@ barge-in) is the natural place to fix them.
   cancel fires (defer cap-driven cancel to the next `LlmSentence`
   boundary, not the next `LlmToken`). Cancel-at-cap stays as a hard
   backstop. ~1–2 hours.
+
+- **Bug 3: realtime STT sends an unsupported `session.update` field.**
+  Surfaced 2026-05-03 in the production log
+  (`/var/log/acva/acva-20260503-231726.log:33`):
+
+  ```
+  warn stt-realtime: server error: Specifying
+    `session.turn_detection.prefix_padding_ms` is not supported.
+    The server either does not support this field or it is not
+    configurable.
+  ```
+
+  Speaches' OpenAI-realtime-compat surface accepts a subset of the
+  upstream OpenAI schema; `prefix_padding_ms` under `turn_detection`
+  isn't on it. The session keeps going (Speaches ignores the field
+  and continues), but every startup logs a warn line. Drop the field
+  from the session.update payload our realtime envelope sends; if
+  we still need pre-pad framing, do it client-side via
+  `UtteranceBuffer`'s rolling window (we already have it for the
+  blocking-STT path). Look in `src/stt/realtime_envelope.cpp` for
+  the session.update assembly. ~30 minutes.
+
+- **Bug 4: phantom Russian transcripts on near-silence (Whisper
+  hallucination).** Same log, line 16:
+
+  ```
+  trace final_transcript lang=ru text="Продолжение следует..."
+  ```
+
+  Whisper's training data includes a lot of Russian YouTube
+  subtitles; on near-silent audio it loves to project "Продолжение
+  следует…" ("To be continued...") or "Субтитры сделал DimaTorzok"
+  (a prolific Russian subtitle creator). Without AEC the trigger was
+  speaker-bleed silence; with PipeWire AEC active in M6B the trigger
+  becomes ambient room noise during AEC convergence. The dialogue
+  manager treats these as real user turns and prompts the LLM,
+  wasting tokens and confusing the conversation.
+
+  Fix: gate STT submission on a minimum-utterance-RMS threshold (or
+  a min unique-pause-pattern check) before posting to Speaches. The
+  M4 endpointer's `min_speech_ms` already filters most of these but
+  not all — Whisper can hallucinate from the pre/post-padding even
+  when the speech-detected window itself was empty. Cleanest place
+  to add the gate is `audio::AudioPipeline` between
+  `UtteranceBuffer::commit` and the live-sink dispatch.
+  ~2–3 hours including a regression test that feeds the demo a 1 s
+  silent buffer + asserts no `FinalTranscript` fires.

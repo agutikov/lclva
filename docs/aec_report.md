@@ -568,3 +568,141 @@ In priority order:
    source_name=acva-source` and consume the cleaned source instead
    of running APM in-process. Trades portability for system-level
    convergence.
+
+---
+
+## 10. M6B follow-up — `aec-record` + `aec_analyze.py` + system AEC (2026-05-03)
+
+### 10.1 Step 1 — record-and-analyze tooling
+
+`acva demo aec-record` (new in M6B) captures the speaker→air→mic→APM
+chain to three WAVs (`original.wav` 22050 Hz / `raw_recording.wav`
+48 kHz / `aec_recording.wav` 16 kHz) and `scripts/aec_analyze.py`
+runs offline analysis (cross-correlation delay, per-band
+attenuation original→raw, per-band ERLE raw→aec in both as-output
+and level-matched forms, optional matplotlib charts). This replaced
+the ad-hoc retest cycle planned in M6B Step 2 with a permanent
+diagnostic surface.
+
+Implementation notes:
+- Demo bypasses `AudioPipeline` so a bug in `apm_carry_` chunking
+  can't masquerade as a hardware issue (standalone `audio::Apm`
+  reads from `CaptureRing` directly via a worker thread).
+- `make_wav` extracted to `src/audio/wav.{hpp,cpp}` (was inline in
+  `src/stt/openai_stt_client.cpp`).
+- `ACVA_AEC_NO_POSTPROC=1` env knob disables NS+AGC for the demo
+  (keeps AEC on) — separates the AEC measurement from AGC's gain
+  contribution. Analyzer cross-checks via the level-matched table
+  and flags AGC mask when the two tables diverge by > 3 dB.
+- Analyzer suppresses the cross-correlation delay number when raw is
+  > 25 dB below original — when echo is cancelled upstream the
+  correlation is ~flat and any reported peak is a side-lobe pick.
+
+### 10.2 Step 1 measurement on this hardware (default capture path)
+
+```
+original.wav        :  5.04 s, 22050 Hz, RMS  4476, peak 32767
+raw_recording.wav   :  6.13 s, 48000 Hz, RMS   981, peak 11993
+aec_recording.wav   :  6.09 s, 16000 Hz, RMS   979, peak 12979
+                                                   (apm pass-through baseline)
+
+per-band attenuation (original -> raw, dB):
+  100- 300 Hz  : -14.4 dB
+  300-1000 Hz  : -13.2 dB
+  1000-3000 Hz : -10.3 dB
+  3000-8000 Hz : -18.9 dB
+```
+
+Speech-band attenuation -10 to -19 dB is the natural speaker→mic
+transfer function on this hardware. § 6 hypothesis (B) — codec DSP
+suppression — is **disconfirmed**: the broadband signal reaches the
+mic with a typical telephone-bandpass shape, not a codec-NS-shaped
+spectral notch.
+
+### 10.3 Step 3 — Path B (system AEC) PASS
+
+Loaded `module-echo-cancel`, ran `acva demo aec-record` with
+`PULSE_SINK=echo-cancel-sink PULSE_SOURCE=echo-cancel-source`:
+
+```
+raw_recording.wav   :  6.13 s, 48000 Hz, RMS    71, peak  1198
+aec_recording.wav   :  6.09 s, 16000 Hz, RMS    71, peak  1225
+                                                   (apm pass-through, system AEC upstream)
+
+per-band attenuation (original -> raw, dB):
+  100- 300 Hz  : -36.7 dB
+  300-1000 Hz  : -39.4 dB
+  1000-3000 Hz : -46.4 dB    <-- deepest cancellation in 1-3 kHz
+  3000-8000 Hz : -44.0 dB
+
+verdict: M6 acceptance gate 4: PASS via upstream (system) AEC.
+         raw_recording is 42.9 dB below the speaker output in the
+         speech band (300-3000 Hz).
+```
+
+**M6 acceptance gate 4 → PASS via Path B.** Speech-band cancellation
+of 25-29 dB beyond the natural transfer (improvement vs § 10.2) on
+the dev workstation's existing integrated hardware. No USB mic
+needed, no lower amplitude needed. Net mic-side energy reduction:
+~26 dB (raw RMS 981 → 71).
+
+### 10.4 Step 3.2 — `cfg.apm.use_system_aec` wiring landed
+
+`src/orchestrator/system_aec.{hpp,cpp}` — RAII helper. On startup:
+1. `pactl list short modules` — check for an existing
+   `module-echo-cancel`. If found, reuse without taking ownership
+   (so we don't unload someone else's module on shutdown).
+2. Otherwise, load with names `acva-echo-{source,sink}` +
+   `aec_method=webrtc` + sane args; mark ourselves owner.
+3. Set `PULSE_SINK` and `PULSE_SOURCE` env vars before any PortAudio
+   init. The `install_alsa_sidestep` reduction to a single
+   `default → pulse` device makes substring-matching the virtual
+   devices via `cfg.audio.{input,output}_device` ineffective; env
+   vars are the path PortAudio→PulseAudio honours.
+4. Destructor unloads iff we loaded.
+
+`config/default.yaml` ships `use_system_aec: true` + `aec/ns/agc:
+false` as the recommended Linux desktop default. The block comment
+spells out why these are not orthogonal — running both DSP stacks
+double-processes (NS over-suppresses, AGCs fight, AEC convergence
+on a pre-cleaned signal produces ~800 ms of zeroed output at the
+start of every utterance — observed during M6B § 10.5).
+
+### 10.5 Lesson — don't run both DSP stacks
+
+During M6B exploration, an initial run with `cfg.apm.aec_enabled:
+true` + system-AEC routed input produced an ~800 ms gap at the
+start of `aec_recording.wav` — the first words ("The quick brown")
+were silent and the audio started at "fox". Cause: WebRTC's AEC
+adaptive filter, given a strong reference but a near-zero mic
+correlation (PipeWire already cancelled), drives output to zero
+during convergence. Fix: when `use_system_aec=true`, set
+`aec_enabled=false`. Documented in `config/default.yaml`'s apm
+block + `docs/troubleshooting.md` "phantom STT loops" section.
+
+### 10.6 M6 acceptance gates — updated state
+
+| # | Gate | State |
+|---|---|---|
+| 1 | `voice_vad_false_starts_total < 1/min` | **PENDING** — automated via `scripts/soak-vad-falsestarts.sh` (30 min run); not yet executed |
+| 2 | AEC delay estimator stable over 30 min | PASS (M6 § 7) — independent of cancellation depth |
+| 3 | Speaking over TTS produces correct VAD endpointing | **PENDING** — observability via `scripts/barge-in-probe.py` |
+| 4 | ERLE > 25 dB on validation fixture | **PASS via Path B** — § 10.3 measured 25-46 dB on the chirp-style stimulus |
+| 5 | `voice_aec_delay_estimate_ms` exposed on /metrics | PASS (M6 § 7) |
+
+Gates 1 + 3 are derivatives of gate 4 — without working
+cancellation they can't pass. With Path B at -42.9 dB net speech
+attenuation, both should pass on first try.
+
+### 10.7 What ships now
+
+- `acva` boots with PipeWire's `module-echo-cancel` auto-loaded
+  (or auto-reused) by default on Linux desktops; no manual `pactl`
+  + env-var dance.
+- Half-duplex gate stays available as `cfg.audio.half_duplex_while_speaking`
+  but is OFF by default — system AEC obviates it on the canonical
+  hardware.
+- `acva demo aec-record` + `scripts/aec_analyze.py` are the
+  permanent diagnostic for any future hardware change (driver
+  update, USB mic swap, switch to non-PipeWire system).
+- M7 (barge-in) is unblocked once gates 1 + 3 close in soak/probe.

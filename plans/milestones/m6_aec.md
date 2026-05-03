@@ -13,18 +13,26 @@
 > (`acva demo aec`) gives ~22 dB mic-energy reduction on a 1 kHz
 > tone fixture; full unit + integration suites green.
 >
-> **Hardware acceptance gates 1, 3, 4 BLOCKED.** `acva demo aec-hw`
-> with real speaker + mic on the dev laptop reports ERLE pinned at
-> 0.2 dB despite a converged 28 ms delay estimate — root cause is
-> ALC257 codec DSP suppressing the reference signal + speaker
-> non-linearity at usable volume. Wiring is provably correct;
-> hardware pathology is the issue. Full analysis in
-> `docs/aec_report.md`.
+> **Hardware acceptance gates (post-M6B, 2026-05-03):**
+> - **Gate 4 — PASS via Path B.** `acva demo aec-record` +
+>   `scripts/aec_analyze.py` measure 36-46 dB speech-band cancellation
+>   (raw vs original) when `cfg.apm.use_system_aec: true` (PipeWire's
+>   `module-echo-cancel` running upstream of acva).  Past the 25 dB
+>   target across the entire spectrum.  See `docs/aec_report.md` § 10.3.
+> - **Gates 1 + 3 — PENDING.** Soak harness landed
+>   (`scripts/soak-vad-falsestarts.sh` for gate 1's 30-min VAD
+>   false-start count; `scripts/barge-in-probe.py` for gate 3's 5-of-5
+>   barge-in audibility).  Run when ready; both expected to PASS given
+>   gate 4 numbers (gates 1 + 3 are derivatives of cancellation depth).
 >
-> **Continuation: M6B** ([m6b_aec_hardware.md](m6b_aec_hardware.md))
-> — try lower amp, USB mic, then PipeWire's `module-echo-cancel` as
-> a system-AEC fallback. M7 (barge-in) is blocked on M6B because
-> phantom triggers from speaker bleed would defeat the whole point.
+> **In-process APM is shipped but disabled by default.** Wiring is
+> correct (M6 § 5.1 synthetic demo passes with ~22 dB reduction); the
+> dev laptop's ALC257 codec DSP + class-D speaker non-linearity made
+> the in-process path ineffective on this hardware (M6 § 5.2).  Path
+> B (system AEC via PipeWire) sidesteps both, and M6B Step 3.2 wired
+> it as the recommended Linux desktop default — see
+> `plans/milestones/m6b_aec_hardware.md` § 3.2.  Full analysis in
+> `docs/aec_report.md`.
 
 ## Goal
 

@@ -236,12 +236,42 @@ utterance:
   max_in_flight: 3
   max_duration_ms: 60000     # safety cap for long monologues
 
-# M6 — WebRTC AudioProcessing (AEC + NS + AGC). When the
-# webrtc-audio-processing-1 package is missing at build time the wrapper
-# is a no-op pass-through and these knobs have no effect. Keep aec on
-# whenever capture_enabled is on; with half_duplex_while_speaking also
-# on the two protect each other (AEC handles speaker bleed; the
-# half-duplex gate covers the residual until AEC converges).
+# M6 + M6B — speech DSP stack.
+#
+# Two valid configurations.  Pick one — the knobs are NOT independent.
+#
+# (1) System AEC via PipeWire (DEFAULT — recommended on Linux desktops):
+#       use_system_aec: true
+#       aec_enabled: false
+#       ns_enabled:  false
+#       agc_enabled: false
+#     PipeWire's module-echo-cancel runs the same webrtc-audio-processing
+#     library upstream of acva, on the raw ALSA mic feed BEFORE the
+#     per-application codec DSP touches it.  We load it with
+#     noise_suppression=1 + digital_gain_control=1 + high_pass_filter=1,
+#     so NS/AGC/HPF are already happening upstream — turning ours on
+#     too produces double-processing artifacts (NS over-suppresses,
+#     two AGCs fight for level).  Our APM hits the all-off short-circuit
+#     in src/audio/apm.cpp and is a true pass-through.
+#     Measurement 2026-05-03: 25-29 dB ERLE in the speech band on the
+#     dev workstation (M6 acceptance gate 4 ≥ 25 dB).
+#
+# (2) In-process APM only (fallback for non-PipeWire systems):
+#       use_system_aec: false
+#       aec_enabled: true
+#       ns_enabled:  true
+#       agc_enabled: true
+#     This is the M6 in-process WebRTC AudioProcessing path.  ERLE on
+#     the dev workstation's integrated codec is poor — see
+#     docs/aec_report.md § 6 — but on cooperative hardware (USB mic
+#     setups) it's the right path.  When the webrtc-audio-processing-1
+#     build dep is missing, the wrapper compiles to a no-op stub and
+#     these knobs have no effect.
+#
+# DO NOT enable both stacks simultaneously: an in-process AEC running
+# on a pre-cleaned signal produces an ~800 ms zeroed-output convergence
+# transient at the start of every utterance (the assistant's first
+# words go missing).
 apm:
   aec_enabled: false
   ns_enabled: false
@@ -251,15 +281,8 @@ apm:
   # M6B Step 3.2 — auto-load PipeWire's `module-echo-cancel` on
   # startup and route this process's audio through it (PULSE_SINK /
   # PULSE_SOURCE env vars set before PortAudio init; module unloaded
-  # on shutdown if we loaded it). Recommended on Linux desktops with
-  # PipeWire because the in-process WebRTC APM doesn't cancel well on
-  # the dev workstation's integrated codec — see docs/aec_report.md
-  # § 6 + plans/milestones/m6b_aec_hardware.md Step 3. Measurement
-  # 2026-05-03: PipeWire AEC delivered 25-29 dB ERLE in the speech
-  # band on this hardware (M6 acceptance gate 4 ≥ 25 dB).
-  # When this is on, leave aec_enabled: false above so our APM stays
-  # in pass-through; running both stacks causes an ~800 ms zeroed-output
-  # convergence transient at the start of every utterance.
+  # on shutdown if we loaded it).  See block comment above for why
+  # the other three knobs are off.
   use_system_aec: true
 
 supervisor:

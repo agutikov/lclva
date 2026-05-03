@@ -175,13 +175,54 @@ equation. If the fixture transcribes correctly but live mic doesn't,
 the audio path before STT is at fault — re-run `acva demo capture`
 with the same words you spoke.
 
+### (M6+) "Assistant transcribes its own voice / phantom STT loops"
+
+The mic is hearing the speakers. STT transcribes the assistant's own
+TTS as if it were a user turn, the dialogue manager processes that as
+a new prompt, and the assistant talks to itself. With
+`half_duplex_while_speaking: false` (the M6+ default) this loop is
+fast and obvious; with `true` it shows up as the mic going dead during
+TTS.
+
+Diagnostic: capture the speaker→air→mic chain at every stage.
+
+```sh
+./_build/dev/acva demo aec-record       # writes 3 WAVs to /tmp/acva-aec-rec/
+./scripts/aec_analyze.py                 # per-band attenuation + verdict
+```
+
+The verdict line maps the per-band numbers to one of three causes
+(see `docs/aec_report.md` § 6 + `plans/milestones/m6b_aec_hardware.md`):
+
+- **gate 4 PASS via system AEC** — the recommended state.
+  `original→raw` shows -25 dB or more attenuation across the speech
+  band. Our APM is in pass-through. Action: nothing — this is what
+  we want. Confirm `cfg.apm.use_system_aec: true`.
+- **codec/PA chain attenuates speaker by > 30 dB** — speaker isn't
+  reaching the mic with enough fidelity to cancel. Likely the laptop
+  codec's DSP. Action: try a USB mic
+  (`cfg.audio.input_device: "USB"`) — bypasses the integrated codec.
+- **speaker→mic intact but level-matched ERLE near 0** — APM isn't
+  cancelling. Likely speaker non-linearity at high amplitude or APM
+  delay misalignment. Action: lower the speaker volume; check
+  `voice_aec_delay_estimate_ms` in `/metrics`; consider switching to
+  `cfg.apm.use_system_aec: true` (PipeWire's module-echo-cancel sees
+  the raw ALSA stream before per-app codec DSP — usually works
+  better than in-process APM on integrated hardware).
+
+When `cfg.apm.use_system_aec: true`, leave `aec_enabled` /
+`ns_enabled` / `agc_enabled` all FALSE. Running both stacks
+double-processes (NS over-suppresses, two AGCs fight, AEC convergence
+on a pre-cleaned signal zeros the first ~800 ms of every utterance —
+"the first words are missing").
+
 ### (M7+) "Barge-in fires when it shouldn't"
 
 **`acva demo bargein`** verifies the cancellation cascade in
 isolation. If it passes but real barge-in misfires, the issue is
-upstream of the cascade — usually AEC. **`acva demo aec`** measures
-ERLE; below 25 dB means the assistant's own voice is leaking into the
-mic and tripping VAD.
+upstream of the cascade — usually AEC. Run the M6 diagnostic above
+(`acva demo aec-record` + `scripts/aec_analyze.py`) — gate 4 must
+pass before barge-in can be reliable.
 
 ## Audio device
 

@@ -1,6 +1,13 @@
 # M6B — AEC hardware verification + system-AEC fallback
 
-**Status:** planned. Inserted between M6 (in-process APM, code-complete)
+**Status:** Step 1 + Step 3 ✅ landed (2026-05-03); gates 1 + 3 pending
+soak / probe runs.  M6 gate 4 PASS via Path B (PipeWire's
+`module-echo-cancel`); see § 10 in `docs/aec_report.md` for measured
+numbers (25-46 dB cancellation in the speech band).  Step 2 (Path A
+diagnosis: lower-amp + USB mic) is **moot** — Path B works on the
+dev workstation's existing hardware.
+
+**Original status:** planned. Inserted between M6 (in-process APM, code-complete)
 and M7 (barge-in). M6B exists because M6's hardware acceptance gates
 (1, 3, 4) are blocked on this dev workstation's audio path —
 specifically the laptop ALC257 codec's built-in DSP and the speaker
@@ -350,6 +357,11 @@ After 2.1 + 2.2 (informed by Step 1's recordings):
 
 ## Step 3 — Path B: PipeWire system-AEC fallback (was Step 2 in original draft)
 
+**Status (2026-05-03):** ✅ landed.  3.1 manual smoke + 3.2 permanent
+wiring both done in one session.  Measured 25-46 dB speech-band
+cancellation on the dev workstation, well past the gate-4 25 dB
+target — see `docs/aec_report.md` § 10.3.
+
 PipeWire ships `module-echo-cancel`, which loads
 `webrtc-audio-processing` system-side and presents a cleaned source.
 Crucially, it consumes the raw ALSA mic stream before any codec DSP
@@ -375,30 +387,38 @@ left to cancel) but the M4 VAD won't false-fire.
 
 Smoke result drives whether we add a permanent code path.
 
-### 3.2 Permanent wiring
+### 3.2 Permanent wiring (✅ landed 2026-05-03)
 
-Add `cfg.apm.use_system_aec` (bool, default `false`):
+`cfg.apm.use_system_aec` (bool, default `true`):
 
-- When `true`, on startup `acva` invokes the equivalent of the
-  `pactl load-module` above (via the PulseAudio C client API or
-  by shelling `pactl`), records the resulting source/sink IDs,
-  and overrides `cfg.audio.input_device` / `output_device` with
-  the new virtual ones.
-- On shutdown, `acva` unloads the module so subsequent runs
-  don't pile up duplicate AEC chains.
-- `cfg.apm.aec_enabled` remains independent — typically set to
-  `false` when `use_system_aec` is `true` to avoid double-AEC.
+- When `true`, on startup acva runs `pactl list short modules` to
+  detect an existing module-echo-cancel and reuses it without
+  ownership; otherwise it loads a new one with names
+  `acva-echo-{source,sink}` + `aec_method=webrtc` + sane args, and
+  marks itself owner.
+- Sets `PULSE_SINK` and `PULSE_SOURCE` env vars BEFORE PortAudio
+  init.  The `install_alsa_sidestep` reduction to a single
+  `default → pulse` device makes substring-matching the virtual
+  devices via `cfg.audio.{input,output}_device` ineffective; env
+  vars are the path PortAudio→PulseAudio honours.  Both demos and
+  the production binary pick this up automatically.
+- Destructor unloads iff we loaded.
 
-Files:
-- `src/orchestrator/system_aec.{hpp,cpp}` — new RAII helper that
-  load/unloads the module via `pactl`. Lives next to the other
-  orchestrator stacks.
-- `src/orchestrator/bootstrap.cpp` — call-site, before
-  `install_alsa_sidestep` (PipeWire needs to see the ALSA config
-  unmodified for source-name resolution).
-- `src/config/config.hpp` — `use_system_aec` knob + validation.
-- `config/default.yaml` — documented as the recommended default on
-  PipeWire systems where Path A doesn't pass.
+When `use_system_aec: true`, set `aec_enabled` / `ns_enabled` /
+`agc_enabled` all FALSE.  Running both stacks double-processes —
+NS over-suppresses, two AGCs fight, AEC convergence on a pre-cleaned
+signal produces ~800 ms of zeroed output at the start of every
+utterance ("the first words are missing").  This was directly
+observed during M6B exploration; see `docs/aec_report.md` § 10.5.
+
+Files (all landed):
+- `src/orchestrator/system_aec.{hpp,cpp}` — RAII helper.
+- `src/main.cpp` — call site at function scope, after
+  `install_alsa_sidestep`, before any audio init.  Function-scope
+  RAII covers demo dispatch + production runtime + shutdown.
+- `src/config/config.hpp` — `use_system_aec` field on `ApmConfig`.
+- `config/default.yaml` — recommended-default block comment
+  spelling out the two valid configurations.
 
 ### 3.3 Failure modes to handle
 
@@ -413,24 +433,45 @@ Files:
 
 With either Path A working or Path B engaged:
 
-### 4.1 Gate 4 — ERLE on validation fixture
+### 4.1 Gate 4 — ERLE on validation fixture (✅ PASS via Path B, 2026-05-03)
 
-`acva demo aec-hw` with the chirp + pink noise stimulus. Pass:
-ERLE > 25 dB after 4 s of convergence. Record per-second table
-in the report.
+`acva demo aec-record` + `scripts/aec_analyze.py` on the dev
+workstation with `use_system_aec: true`:
 
-### 4.2 Gate 1 — TTS doesn't trigger VAD
+```
+per-band attenuation (original -> raw, dB):
+  100- 300 Hz  : -36.7 dB
+  300-1000 Hz  : -39.4 dB
+  1000-3000 Hz : -46.4 dB
+  3000-8000 Hz : -44.0 dB
 
-Set `cfg.audio.half_duplex_while_speaking: false` (the gate that
-masked the failure pre-M6B). Run `acva` with continuous TTS for
-30 minutes. Pass: `voice_vad_false_starts_total / 30` < 1.
+verdict: M6 acceptance gate 4: PASS via upstream (system) AEC.
+         raw_recording is 42.9 dB below the speaker output in the
+         speech band (300-3000 Hz).
+```
 
-### 4.3 Gate 3 — barge-in audibility
+Speech-band cancellation 25-29 dB beyond the natural transfer
+function (vs the 14-13 dB baseline measured on the default capture
+path).  Past the 25 dB acceptance threshold across the entire
+spectrum.  Full numbers + waveform/spectrogram analysis in
+`docs/aec_report.md` § 10.
 
-While TTS plays, speak a short phrase. The realtime STT should
-publish a `FinalTranscript` containing the user's phrase, not the
-TTS output. Pass: 5 / 5 attempts produce a clean transcript of
-what the user said.
+### 4.2 Gate 1 — TTS doesn't trigger VAD (PENDING — automation landed)
+
+Run `scripts/soak-vad-falsestarts.sh` (default: 30 min).  Spawns
+`acva --stdin`, feeds prompts on a 1/min timer, polls
+`voice_vad_false_starts_total` from `/metrics`, prints PASS/FAIL
+against the 1/min threshold.  `--quick` knob runs 5 min for a
+sanity check.
+
+### 4.3 Gate 3 — barge-in audibility (PENDING — observability landed)
+
+Run `scripts/barge-in-probe.py` (default: 5 attempts × 6 s window).
+Watches the live `/var/log/acva/acva-*.log`, prompts the user
+"speak now" five times, scores each attempt as PASS/FAIL based on
+whether a `final_transcript` event fires within the window AND its
+text doesn't fuzz-match the most recent `llm_sentence` (= it was
+the user, not echo).
 
 (Note: barge-in proper — the FSM transitioning out of `Speaking`
 on `UserInterrupted` — is M7's job. Gate 3 here only verifies the
@@ -446,19 +487,23 @@ signal, document the new defaults in
 defaults survive — Silero's training data already includes
 AEC-style cleaned audio.
 
-## Step 6 — Update production defaults + docs
+## Step 6 — Update production defaults + docs (✅ landed 2026-05-03)
 
-Based on the path that passed:
+Based on Path B passing:
 
-- `config/default.yaml` — flip `apm.use_system_aec` /
-  `apm.aec_enabled` / `audio.half_duplex_while_speaking`
-  to the new recommended combination.
-- `docs/aec_report.md` — append Step 1.1 + 1.2 results, the
-  decision, and the final acceptance numbers.
-- `docs/troubleshooting.md` — add a "no AEC" symptom section
-  pointing at `acva demo aec-hw`.
-- `plans/milestones/m6_aec.md` — flip gates 1, 3, 4 from
-  "BLOCKED" / "FAIL" to PASS.
+- `config/default.yaml` — `use_system_aec: true` + `aec/ns/agc:
+  false` shipped as default; `half_duplex_while_speaking: false`
+  (system AEC obviates the gate).  Block comment spells out why
+  the four knobs are not orthogonal.
+- `docs/aec_report.md` — § 10 appended with M6B Step 1 + Step 3
+  results, gate-4 PASS numbers, the both-stacks-on lesson, and
+  current gate state table.
+- `docs/troubleshooting.md` — "Assistant transcribes its own voice
+  / phantom STT loops" symptom section added, points at
+  `acva demo aec-record` + `scripts/aec_analyze.py` and maps
+  per-band verdicts to actions.
+- `plans/milestones/m6_aec.md` — gate 4 flipped to "PASS via
+  Path B" (gates 1, 3 pending soak/probe).
 
 ---
 

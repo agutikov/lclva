@@ -515,13 +515,31 @@ def main(argv: list[str]) -> int:
     # NOT the AEC-relevant acoustic delay.  APM has its own adaptive
     # estimator that converges to the air-only component (~28 ms on the
     # dev workstation, per `acva demo aec-hw`).
+    #
+    # When raw is heavily attenuated (e.g. system AEC cancelled the echo
+    # upstream), the correlation is ~flat and any reported peak is a
+    # side-lobe pick.  Skip the print in that case.
+    delay_ms = 0.0
+    # When raw is heavily attenuated (system AEC cancelled the echo
+    # upstream), the cross-correlation is ~flat and any peak is a
+    # side-lobe pick.  Use ratio raw.rms / orig.rms to detect this:
+    # below ~-25 dB the number is meaningless.
+    rms_ratio_db = (
+        20.0 * np.log10(raw.rms / orig.rms) if orig.rms > 0 else float("-inf")
+    )
     common = min(orig.rate, raw.rate)
     o = resample_to(orig, common)
     r = resample_to(raw,  common)
     delay_ms = cross_correlate_delay_ms(o, r, common)
-    print(f"cold-start offset (original -> raw, x-corr peak): {delay_ms:6.1f} ms")
-    print("  (queue prefill + output buffer + air; NOT the AEC delay —")
-    print("   see /metrics voice_aec_delay_estimate_ms for that)")
+    if rms_ratio_db < -25.0:
+        print(f"cold-start offset: n/a — raw is {-rms_ratio_db:.1f} dB below "
+              f"original (echo cancelled upstream),")
+        print(f"  cross-correlation peak is a side-lobe pick "
+              f"(reported {delay_ms:.1f} ms; ignore)")
+    else:
+        print(f"cold-start offset (original -> raw, x-corr peak): {delay_ms:6.1f} ms")
+        print("  (queue prefill + output buffer + air; NOT the AEC delay —")
+        print("   see /metrics voice_aec_delay_estimate_ms for that)")
     print()
 
     # -------- 2. per-band attenuation: original -> raw --------

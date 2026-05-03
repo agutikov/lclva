@@ -166,8 +166,18 @@ tts:
 # defaults to false so existing M0–M3 setups keep working unchanged;
 # flip to true to bring up the mic + VAD path.
 audio:
+  # M6B — to route through PipeWire's module-echo-cancel virtual
+  # devices, leave both at `default` here and override per-process
+  # via PulseAudio:
+  #   pactl load-module module-echo-cancel
+  #   PULSE_SINK=echo-cancel-sink PULSE_SOURCE=echo-cancel-source \
+  #     ./_build/dev/acva demo aec-record
+  # The ALSA sidestep restricts PortAudio's enumeration to a single
+  # `default → pulse` device (avoids a 4-minute ALSA probe deadlock),
+  # so substring-matching the echo-cancel devices directly here will
+  # not work — PulseAudio's per-process default routing does.
   output_device: default     # "default" | substring of device name | "none" (skips PortAudio init)
-  input_device: default      # M4 — capture device, same matching rules as output
+  input_device:  default     # M4 — capture device, same matching rules as output
   # M5 default = full speech-to-speech pipeline. The combination
   # below (capture on + half-duplex on) is the working speakers
   # mode pre-M6: mic captures, but is gated off while the assistant
@@ -233,11 +243,24 @@ utterance:
 # on the two protect each other (AEC handles speaker bleed; the
 # half-duplex gate covers the residual until AEC converges).
 apm:
-  aec_enabled: true
-  ns_enabled: true
-  agc_enabled: true
+  aec_enabled: false
+  ns_enabled: false
+  agc_enabled: false
   initial_delay_estimate_ms: 50    # speaker → air → mic round-trip guess
   max_delay_ms: 250                # sanity ceiling on the estimator
+  # M6B Step 3.2 — auto-load PipeWire's `module-echo-cancel` on
+  # startup and route this process's audio through it (PULSE_SINK /
+  # PULSE_SOURCE env vars set before PortAudio init; module unloaded
+  # on shutdown if we loaded it). Recommended on Linux desktops with
+  # PipeWire because the in-process WebRTC APM doesn't cancel well on
+  # the dev workstation's integrated codec — see docs/aec_report.md
+  # § 6 + plans/milestones/m6b_aec_hardware.md Step 3. Measurement
+  # 2026-05-03: PipeWire AEC delivered 25-29 dB ERLE in the speech
+  # band on this hardware (M6 acceptance gate 4 ≥ 25 dB).
+  # When this is on, leave aec_enabled: false above so our APM stays
+  # in pass-through; running both stacks causes an ~800 ms zeroed-output
+  # convergence transient at the start of every utterance.
+  use_system_aec: true
 
 supervisor:
   pipeline_fail_grace_seconds: 30

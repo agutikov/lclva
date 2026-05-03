@@ -11,6 +11,7 @@ namespace acva::demos {
 // one new file under src/demos/.
 int run_aec       (const config::Config&);
 int run_aec_hw    (const config::Config&);
+int run_aec_record(const config::Config&);
 int run_capture   (const config::Config&);
 int run_chat      (const config::Config&);
 int run_soak      (const config::Config&);
@@ -26,7 +27,7 @@ int run_tts       (const config::Config&);
 
 namespace {
 
-constexpr std::array<Demo, 14> kDemos{{
+constexpr std::array<Demo, 15> kDemos{{
     {"fsm",      "M0",
      "synthetic FSM driver runs 3 turns end-to-end (no backends needed)",
      run_fsm},
@@ -63,6 +64,9 @@ constexpr std::array<Demo, 14> kDemos{{
     {"aec-hw",   "M6",
      "real-hardware AEC validation: speaker → mic → APM, asserts ERLE >= 25 dB",
      run_aec_hw},
+    {"aec-record", "M6B",
+     "record original/raw/cleaned WAVs of speaker→air→mic→APM for offline analysis",
+     run_aec_record},
     {"soak",     "M6",
      "5-min Speaches TTS+STT throughput + VRAM monitor (silent; for leak detection)",
      run_soak},

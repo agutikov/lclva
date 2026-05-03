@@ -1,5 +1,7 @@
 #include "stt/openai_stt_client.hpp"
 
+#include "audio/wav.hpp"
+
 #include <curl/curl.h>
 #include <fmt/format.h>
 #include <glaze/glaze.hpp>
@@ -12,48 +14,6 @@
 namespace acva::stt {
 
 namespace {
-
-// Pack `samples` into a RIFF/WAVE container. 16 kHz mono int16 PCM —
-// matches both AudioSlice's invariant and what Speaches expects.
-std::string make_wav(std::span<const std::int16_t> samples,
-                      std::uint32_t rate) {
-    const std::uint32_t bytes_per_sample = 2;
-    const std::uint32_t channels         = 1;
-    const std::uint32_t data_bytes       =
-        static_cast<std::uint32_t>(samples.size()) * bytes_per_sample;
-    const std::uint32_t fmt_chunk        = 16;
-    const std::uint32_t riff_payload     = 4 + 8 + fmt_chunk + 8 + data_bytes;
-
-    auto u32 = [](std::uint32_t v) {
-        std::string s(4, '\0');
-        for (int i = 0; i < 4; ++i) {
-            s[static_cast<std::size_t>(i)] =
-                static_cast<char>((v >> (i * 8)) & 0xFF);
-        }
-        return s;
-    };
-    auto u16 = [](std::uint16_t v) {
-        std::string s(2, '\0');
-        s[0] = static_cast<char>(v & 0xFF);
-        s[1] = static_cast<char>((v >> 8) & 0xFF);
-        return s;
-    };
-
-    std::string out;
-    out.reserve(44 + data_bytes);
-    out.append("RIFF");                     out.append(u32(riff_payload));
-    out.append("WAVE");
-    out.append("fmt ");                     out.append(u32(fmt_chunk));
-    out.append(u16(1));                     // PCM
-    out.append(u16(static_cast<std::uint16_t>(channels)));
-    out.append(u32(rate));
-    out.append(u32(rate * channels * bytes_per_sample));     // byte rate
-    out.append(u16(static_cast<std::uint16_t>(channels * bytes_per_sample)));
-    out.append(u16(static_cast<std::uint16_t>(bytes_per_sample * 8)));
-    out.append("data");                     out.append(u32(data_bytes));
-    out.append(reinterpret_cast<const char*>(samples.data()), data_bytes);
-    return out;
-}
 
 // libcurl write callback — accumulates the JSON response body.
 std::size_t curl_write(char* ptr, std::size_t size, std::size_t nmemb,
@@ -133,8 +93,8 @@ void OpenAiSttClient::submit(SttRequest req, SttCallbacks cb) {
     if (!url.empty() && url.back() == '/') url.pop_back();
     url += "/audio/transcriptions";
 
-    const auto wav = make_wav(req.slice->samples(),
-                                req.slice->sample_rate());
+    const auto wav = audio::make_wav(req.slice->samples(),
+                                       req.slice->sample_rate());
 
     const auto t0 = std::chrono::steady_clock::now();
 

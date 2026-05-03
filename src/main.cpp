@@ -18,6 +18,7 @@
 #include "orchestrator/status_extra.hpp"
 #include "orchestrator/stt_stack.hpp"
 #include "orchestrator/supervisor_setup.hpp"
+#include "orchestrator/system_aec.hpp"
 #include "orchestrator/tts_stack.hpp"
 #include "stt/openai_stt_client.hpp"
 #include "supervisor/supervisor.hpp"
@@ -59,6 +60,13 @@ int main(int argc, char** argv) {
     acva::log::info("main", fmt::format("config loaded: {}", config_path.string()));
     acva::log::info("main", fmt::format("memory db: {}", cfg.memory.db_path));
     acva::orchestrator::install_alsa_sidestep(cfg.audio);
+
+    // RAII: optionally load PipeWire's module-echo-cancel and route
+    // this process through it (set PULSE_SINK / PULSE_SOURCE before
+    // any PortAudio init).  No-op when cfg.apm.use_system_aec=false.
+    // Lives at function scope so its destructor unloads the module on
+    // exit (including the demo short-circuit below).
+    acva::orchestrator::SystemAec system_aec(cfg.apm);
 
     // ----- 2.5. Demo subcommand short-circuit -----
     // Demos build only the subsystems they need from `cfg` and exit

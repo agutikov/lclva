@@ -243,6 +243,29 @@ per-band numbers map to the three hypotheses in
   neither) without further guesswork. Steps 2–4 then act on
   that finding.
 
+**Status (2026-05-03):** ✅ tooling landed.
+- `src/audio/wav.{hpp,cpp}` — extracted from `src/stt/openai_stt_client.cpp`;
+  adds `write_wav_file` + `read_wav_file` for the demo and future tests.
+- `src/demos/aec_record.cpp` — new `acva demo aec-record`. Bypasses
+  `AudioPipeline` (standalone `audio::Apm` reads from `CaptureRing`
+  directly via a worker thread; resampler 48→16 kHz; 160-sample APM
+  carry chunker mirroring `apm_carry_`). Writes `original.wav` (TTS
+  native rate), `raw_recording.wav` (48 kHz pre-APM), `aec_recording.wav`
+  (16 kHz post-APM) to `$ACVA_AEC_OUT_DIR` (default `/tmp/acva-aec-rec/`).
+  Env knobs: `ACVA_AEC_TEXT`, `ACVA_AEC_OUT_DIR`, `ACVA_AEC_LANG`
+  (CLI-flag plumbing through `cli/args.cpp` deferred — demo signature
+  is `(const Config&)` and changing it touches every demo).
+- `scripts/aec_analyze.py` — numpy-only with optional scipy (FFT
+  cross-correlation) + matplotlib (4 charts: waveforms, spectrograms,
+  attenuation, AEC residual). Computes physical delay via
+  cross-correlation peak; per-band attenuation original→raw and ERLE
+  raw→aec across {100-300, 300-1000, 1000-3000, 3000-8000} Hz; emits
+  a verdict line that maps the per-band numbers to the three
+  hypotheses in `docs/aec_report.md` § 6.
+- Pending: actually running it on the dev workstation and pasting the
+  per-band numbers back into `docs/aec_report.md`. That's the user's
+  call (touches the speakers + mic).
+
 ### 1.4 Why this is the right shape
 
 - **Bypassed `AudioPipeline`** — the demo's APM run is

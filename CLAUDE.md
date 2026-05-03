@@ -12,7 +12,7 @@ Streaming partial STT with speculative LLM start (M5 — three options on the ta
 
 ## Status
 
-**M0 + M1 + M2 + M3 + M4 + M4B + M5 + M6 (steps 1–6) complete.** Test suite split into `acva_unit_tests` (209 cases, no external deps) and `acva_integration_tests` (8 cases, real Silero model + live Speaches). Both pass green on the dev workstation without any env vars; integration tests resolve assets via the XDG defaults main.cpp uses. **Compose stack is `llama` + `speaches` only** — Speaches replaces standalone `whisper.cpp/server` (STT) and `piper.http_server` (TTS) behind one OpenAI-API-compatible surface. TTS goes through `OpenAiTtsClient` (libcurl streaming PCM); STT through `OpenAiSttClient` (multipart `POST /v1/audio/transcriptions`, blocking, request/response — M5 swaps for streaming/realtime). `PlaybackEngine` carries a per-turn pre-buffer threshold (`cfg.playback.prefill_ms`, default 100 ms) that absorbs streaming-TTS chunk-arrival jitter — measured 56–71% fewer underruns without any total-latency regression. Demos `acva demo {tts,chat,stt}` exercise the new wiring; `acva demo stt` is a self-contained TTS-fixture-audio → STT round-trip. STT model is `deepdml/faster-whisper-large-v3-turbo-ct2` (not plain large-v3 — see memory note `project_gpu_cdi_and_vram.md` for the 8 GB VRAM budget rationale). **Next: M7 — barge-in.** M6 Step 7 (real-hardware VAD re-baseline +
+**M0 + M1 + M2 + M3 + M4 + M4B + M5 + M6 (steps 1–6) complete.** Test suite split into `acva_unit_tests` (260 cases, no external deps) and `acva_integration_tests` (13 cases, real Silero model + live Speaches). Both pass green on the dev workstation without any env vars; integration tests resolve assets via the XDG defaults main.cpp uses. **Compose stack is `llama` + `speaches` only** — Speaches replaces standalone `whisper.cpp/server` (STT) and `piper.http_server` (TTS) behind one OpenAI-API-compatible surface. TTS goes through `OpenAiTtsClient` (libcurl streaming PCM); STT through `OpenAiSttClient` (multipart `POST /v1/audio/transcriptions`, blocking, request/response — M5 swaps for streaming/realtime). `PlaybackEngine` carries a per-turn pre-buffer threshold (`cfg.playback.prefill_ms`, default 100 ms) that absorbs streaming-TTS chunk-arrival jitter — measured 56–71% fewer underruns without any total-latency regression. Demos `acva demo {tts,chat,stt}` exercise the new wiring; `acva demo stt` is a self-contained TTS-fixture-audio → STT round-trip. STT model is `Systran/faster-whisper-large-v3` running with `WHISPER__COMPUTE_TYPE=int8_float16` (set in compose env); fits cleanly when llama is stopped or running smaller. With the default llama-7B-Q4 still loaded, fall back to `Systran/faster-whisper-medium` — see memory note `project_gpu_cdi_and_vram.md` for the 8 GB VRAM budget rationale and the test-vs-config alignment trap. **Next: M7 — barge-in.** M6 Step 7 (real-hardware VAD re-baseline +
 the > 25 dB ERLE acceptance gate) waits on a measurement session
 with the dev workstation's actual speakers + mic; the synthetic
 demo (`acva demo aec`) gives ~22 dB mic-energy reduction on a 1 kHz
@@ -33,8 +33,18 @@ pass-through stub when missing. `voice_aec_delay_estimate_ms`,
 ## Repository Layout
 
 ```
-src/                     — C++ source. Per-subsystem subdirs: audio/, config/, dialogue/,
-                            event/, http/, log/, memory/, metrics/, pipeline/, playback/, ...
+src/                     — C++ source. Per-subsystem subdirs: audio/, cli/, config/,
+                            dialogue/, event/, http/, llm/, log/, memory/, metrics/,
+                            orchestrator/, pipeline/, playback/, stt/, supervisor/, tts/.
+src/main.cpp             — slim (~280 lines) linear orchestration: parse args →
+                            load config → demo dispatch → build per-subsystem stacks
+                            via orchestrator/ helpers → main loop → orderly shutdown.
+src/orchestrator/        — host-side glue. One *_stack.{hpp,cpp} per subsystem
+                            (tts_stack, capture_stack, stt_stack, dialogue_stack,
+                            supervisor_setup) plus bootstrap, event_tracer,
+                            status_extra. Each stack is a non-copyable RAII bundle
+                            that returns from build_*() with a stop() method that
+                            runs the right teardown order.
 tests/                   — doctest-based suites: acva_unit_tests (no deps) +
                             acva_integration_tests (real Silero model + future Speaches).
 config/default.yaml      — default runtime config (covers everything through M4).

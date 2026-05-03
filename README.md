@@ -57,8 +57,19 @@ See `plans/project_design.md` for the complete architecture.
 ## Repository Layout
 
 ```
-src/                      C++ source (config, dialogue, event, http, log, memory, metrics, pipeline)
-tests/                    doctest-based unit tests
+src/                      C++ source. Per-subsystem subdirs: audio, cli, config,
+                          demos, dialogue, event, http, llm, log, memory, metrics,
+                          orchestrator, pipeline, playback, stt, supervisor, tts.
+src/main.cpp              ~280 lines of linear orchestration: parse args → load
+                          config → demo dispatch → build per-subsystem stacks →
+                          main loop → orderly shutdown.
+src/orchestrator/         host-side glue. One *_stack.{hpp,cpp} per subsystem
+                          (tts_stack, capture_stack, stt_stack, dialogue_stack,
+                          supervisor_setup) plus bootstrap, event_tracer,
+                          status_extra. Each stack is a non-copyable RAII bundle
+                          with a stop() method that runs subsystem teardown in
+                          the right order.
+tests/                    doctest-based suites (unit + integration)
 config/default.yaml       default runtime config
 cmake/                    CMake helpers
 third_party/              vendored single-header libs (cpp-httplib)

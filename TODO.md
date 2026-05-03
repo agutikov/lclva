@@ -1,18 +1,27 @@
 
 
+ananlyze last log
+
+I hear counting from 1 only to 34, something stops tts or playback
+Self-listening if even worse - it transcripts only to 13
+
+I don't want any limits for playback until barge-in implementation;
+If I ask llm to tell a long long story I then want to listen to full monologe till the end
+or till the LLM stops;
+Do not interrupt audio, let user listen to the whole LLM output
+
+When will implement barg-in - then will decide what to do with the rest of not played words
 
 
-analyze C++ code, find files bigger than 1000 lines and refactor
-
-especially refactor main.cpp, other parts of the project has good architecture, follow that modular architecture
-
-
+what left for M6?
 
 
 
 filter llm output because it may hallucinate and mix languages in answer
 leave only selected languge
 
+
+Can we split internal explicit thinking and speaking?
 
 
 --------------------------------------------------------------------------------

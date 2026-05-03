@@ -265,7 +265,7 @@ dialogue:
   # extra STT load and won't fit alongside the production STT call
   # on tight VRAM (see project_gpu_cdi_and_vram).
   self_listen:
-    enabled: false
+    enabled: true
     max_in_flight: 1
   fallback_language: en
   sentence_splitter:

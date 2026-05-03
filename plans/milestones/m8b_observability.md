@@ -124,14 +124,16 @@ Failure modes:
 
 ## Step 4 — Build-time observability + reductions
 
-A clean build is currently ~12 s wall (96 TUs / 8 cores) but
-**746 s sequential**, and one TU dominates: `src/config/config.cpp`
-at **221 s** by itself — Glaze's YAML reflection instantiates the
-full template tree for every nested struct in the schema. The next
-tier (`stt/realtime_stt_client`, `llm/client`, `http/server`, the
-`test_manager` / `test_summarizer` / `test_tts_bridge` /
-`test_speaches_*` units) all sit at 18–26 s each because of heavy
-transitive includes (libdatachannel, libcurl, cpp-httplib, doctest).
+A clean build (post-orchestrator-refactor, 107 TUs / 8 cores) takes
+**~10 s wall** but **~556 s sequential**. One TU still dominates:
+`src/config/config.cpp` at **~139 s** by itself — Glaze's YAML
+reflection instantiates the full template tree for every nested
+struct in the schema. The next tier (`supervisor/probe`,
+`llm/client`, `stt/realtime_stt_client`, `http/server`, the
+`test_manager` / `test_speaches_realtime_smoke` /
+`test_tts_bridge` / `test_summarizer` units) all sit at 14–20 s
+each because of heavy transitive includes (libdatachannel, libcurl,
+cpp-httplib, doctest, glaze-driven config types).
 
 Already landed (2026-05-03):
 - `cmake -DACVA_TIME_TRACE=ON` adds `-ftime-trace`; per-TU JSONs
@@ -145,8 +147,8 @@ To do under M8B:
 1. **Split `src/config/config.cpp`** so each subsystem's parsing +
    validation lives in its own TU. Each per-section TU then
    instantiates only its own slice of the reflection tree, and the
-   work parallelises across cores. Target: drop config.cpp's 221 s
-   to ~7 × 30 s on 8 cores ≈ ~30 s wall.
+   work parallelises across cores. Target: drop config.cpp's ~139 s
+   to ~7 × ~20 s on 8 cores ≈ ~20 s wall.
 2. **PCH for the test suites.** A 200-line `tests/test_pch.hpp`
    covering doctest + the most-shared `acva_core` public headers,
    wired via `target_precompile_headers`. Cuts the ~20 s tier in

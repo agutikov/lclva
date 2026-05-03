@@ -9,6 +9,7 @@ add_library(acva_core STATIC
     audio/resampler.cpp
     audio/utterance.cpp
     audio/vad.cpp
+    cli/args.cpp
     config/config.cpp
     config/paths.cpp
     demos/aec.cpp
@@ -45,6 +46,14 @@ add_library(acva_core STATIC
     memory/repository.cpp
     memory/summarizer.cpp
     metrics/registry.cpp
+    orchestrator/bootstrap.cpp
+    orchestrator/capture_stack.cpp
+    orchestrator/dialogue_stack.cpp
+    orchestrator/event_tracer.cpp
+    orchestrator/status_extra.cpp
+    orchestrator/stt_stack.cpp
+    orchestrator/supervisor_setup.cpp
+    orchestrator/tts_stack.cpp
     pipeline/fake_driver.cpp
     playback/engine.cpp
     playback/queue.cpp

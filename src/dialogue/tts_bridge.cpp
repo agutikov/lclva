@@ -259,9 +259,11 @@ void TtsBridge::run_one(Job job) {
                 .bytes = bytes,
             });
         }
-        // Capacity overflow is counted in queue_.drops(); upstream
-        // backpressure (max_tts_queue_sentences) is the right place
-        // to react.
+        // Pre-M7: cfg.playback.max_queue_chunks = 0 means unbounded
+        // and this enqueue never drops. Once barge-in lands we'll
+        // re-add a cap + cancellation-aware backpressure, but for
+        // now letting the LLM finish takes priority over a bounded
+        // queue.
     };
     cb.on_finished = [] {};
     cb.on_error = [&](std::string m) {

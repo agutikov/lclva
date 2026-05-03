@@ -205,9 +205,8 @@ std::optional<LoadError> validate(const Config& cfg) {
     if (cfg.audio.buffer_frames == 0) {
         return LoadError{"config: audio.buffer_frames: must be > 0"};
     }
-    if (cfg.playback.max_queue_chunks == 0) {
-        return LoadError{"config: playback.max_queue_chunks: must be > 0"};
-    }
+    // playback.max_queue_chunks: 0 means unbounded (pre-M7 default).
+    // No upper bound to validate against — memory is the limit.
     if (cfg.dialogue.max_tts_queue_sentences == 0) {
         return LoadError{"config: dialogue.max_tts_queue_sentences: must be > 0"};
     }

@@ -79,11 +79,12 @@ void self_listen_run(
         const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - t0).count();
 
-        // Single-source diff signal: char count + first 80 chars of
-        // each so the user can eyeball dropouts without grepping the
-        // whole list.
+        // Single-source diff signal: char count + first ~600 chars
+        // of each so the user can eyeball dropouts without grepping
+        // the whole list. 600 covers the longest sentence the
+        // splitter emits (cfg.dialogue.sentence_splitter.max_sentence_chars).
         auto trim = [](std::string s) {
-            if (s.size() > 80) s = s.substr(0, 80) + "…";
+            if (s.size() > 600) s = s.substr(0, 600) + "…";
             return s;
         };
         if (!err.empty()) {

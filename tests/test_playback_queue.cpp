@@ -298,3 +298,28 @@ TEST_CASE("PlaybackQueue: enqueue_blocking does not count drops") {
     // counter must NOT have been bumped during the wait window.
     CHECK(q.drops() == 0);
 }
+
+TEST_CASE("PlaybackQueue: cap=0 disables the bound (unbounded queue)") {
+    // Pre-M7: production runs with cfg.playback.max_queue_chunks=0
+    // so the bridge can pile a full LLM monologue into the queue
+    // without dropping chunks mid-sentence.
+    PlaybackQueue q(0);
+    constexpr int N = 10000;
+    for (SequenceNo i = 0; i < N; ++i) {
+        REQUIRE(q.enqueue(make_chunk(1, i)));
+    }
+    CHECK(q.size() == N);
+    CHECK(q.drops() == 0);
+    CHECK(q.enqueued() == static_cast<std::uint64_t>(N));
+}
+
+TEST_CASE("PlaybackQueue: cap=0 + enqueue_blocking lands first try") {
+    // The blocking variant's poll loop must short-circuit when
+    // cap=0 — otherwise we'd burn CPU spinning for nothing.
+    PlaybackQueue q(0);
+    auto cancel = std::make_shared<acva::dialogue::CancellationToken>();
+    CHECK(q.enqueue_blocking(make_chunk(1, 0), cancel,
+                              std::chrono::milliseconds(1000)));
+    CHECK(q.size() == 1);
+    CHECK(q.drops() == 0);
+}

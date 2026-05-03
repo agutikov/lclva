@@ -54,7 +54,12 @@ llm:
   model: "qwen2.5-7b-instruct"
   unit: "acva-llama.service"
   temperature: 0.7
-  max_tokens: 400
+  # Pre-M7 (no barge-in yet): let the LLM finish whatever it
+  # started. 4000 covers a comfortable long monologue (e.g.
+  # "count to 100" needs ~350 tokens, "tell me a long story"
+  # tops out around 2000-3000 in practice). Drop back to 400
+  # once M7 lets the user interrupt.
+  max_tokens: 4000
   max_prompt_tokens: 3000
   request_timeout_seconds: 60
   keep_alive_interval_seconds: 60
@@ -194,7 +199,11 @@ audio:
   skip_alsa_full_probe: true
 
 playback:
-  max_queue_chunks: 64       # ~640 ms ahead of the audio cb
+  # 0 = unbounded queue. Pre-M7 default — let the full LLM response
+  # sit in memory rather than drop chunks mid-sentence. Worst-case
+  # ~25 MB for a max-tokens response. Re-introduce a cap once
+  # barge-in lands and cancellation can drain the queue cleanly.
+  max_queue_chunks: 0
   underrun_log_throttle_ms: 1000
 
 # M4 — Silero VAD + utterance assembly.
@@ -254,8 +263,13 @@ memory:
 
 dialogue:
   recent_turns_n: 10
-  max_assistant_sentences: 6
-  max_assistant_tokens: 400
+  # Pre-M7: let the LLM emit as many sentences as it wants.
+  # Manager cancels the LLM stream when the cap is hit; without
+  # barge-in there's no reason to clamp this. Bumping to 100 is
+  # effectively "unlimited" for a voice assistant. Drop back to 6
+  # once barge-in (M7) lets the user interrupt.
+  max_assistant_sentences: 100
+  max_assistant_tokens: 4000
   # Self-listen feedback loop. When enabled, every successfully-
   # synthesized sentence is also pushed through STT in a background
   # thread, then logged as a `self_listen` event with the LLM's
@@ -265,7 +279,7 @@ dialogue:
   # extra STT load and won't fit alongside the production STT call
   # on tight VRAM (see project_gpu_cdi_and_vram).
   self_listen:
-    enabled: true
+    enabled: false
     max_in_flight: 1
   fallback_language: en
   sentence_splitter:
@@ -275,7 +289,7 @@ dialogue:
     # cap and produced one ~25 s TTS request that hit the libcurl
     # timeout. Smaller chunks also smooth out time-to-first-audio
     # by letting playback start while later sentences synthesize.
-    max_sentence_chars: 300
+    max_sentence_chars: 80
     detect_code_fences: true
   system_prompts:
     en: |

@@ -314,9 +314,16 @@ struct ApmConfig {
 };
 
 struct PlaybackConfig {
-    // Hard cap on chunks queued ahead of the audio callback. At ~10 ms
-    // per chunk this is ~640 ms of audio.
-    uint32_t max_queue_chunks = 64;
+    // Cap on chunks queued ahead of the audio callback. 0 means
+    // **unbounded** — pre-M7 default, since the LLM's response is
+    // finite (bounded by max_assistant_tokens) and we'd rather hold
+    // the full monologue in RAM than drop chunks mid-sentence. At
+    // ~50 ms per chunk and the typical max-tokens response (~4 min,
+    // ~5000 chunks, ~25 MB), the unbounded queue tops out well below
+    // any realistic memory budget. Once M7 (barge-in) lands we'll
+    // re-introduce a bound so a runaway LLM can't pile audio on
+    // forever — the cancellation path then drains the queue cleanly.
+    uint32_t max_queue_chunks = 0;
     // Throttle window for the "underrun" log line so a stuck pipeline
     // doesn't spam the logs.
     uint32_t underrun_log_throttle_ms = 1000;

@@ -9,7 +9,11 @@ PlaybackQueue::PlaybackQueue(std::size_t max_chunks) : cap_(max_chunks) {}
 
 bool PlaybackQueue::enqueue(AudioChunk chunk) {
     std::lock_guard lk(mu_);
-    if (q_.size() >= cap_) {
+    // cap_ == 0 → unbounded queue (the pre-M7 default; the LLM's
+    // response is finite and bounded by max_assistant_tokens, so
+    // we'd rather hold the whole monologue in RAM than drop chunks
+    // mid-sentence).
+    if (cap_ != 0 && q_.size() >= cap_) {
         drops_.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
@@ -25,7 +29,9 @@ bool PlaybackQueue::enqueue_blocking(
     while (true) {
         {
             std::lock_guard lk(mu_);
-            if (q_.size() < cap_) {
+            // cap_ == 0 → unbounded; the size-check is always false
+            // and we land in the push_back branch on the first try.
+            if (cap_ == 0 || q_.size() < cap_) {
                 q_.push_back(std::move(chunk));
                 enqueued_.fetch_add(1, std::memory_order_relaxed);
                 return true;

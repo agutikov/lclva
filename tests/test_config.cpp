@@ -187,7 +187,7 @@ TEST_CASE("config: M3 defaults") {
     CHECK(cfg.audio.output_device == "default");
     CHECK(cfg.audio.sample_rate_hz == 48000);
     CHECK(cfg.audio.buffer_frames == 480);
-    CHECK(cfg.playback.max_queue_chunks == 64);
+    CHECK(cfg.playback.max_queue_chunks == 0);   // 0 = unbounded (pre-M7)
     CHECK(cfg.playback.underrun_log_throttle_ms == 1000);
     CHECK(cfg.dialogue.max_tts_queue_sentences == 3);
 }
@@ -317,7 +317,11 @@ audio:
           != std::string::npos);
 }
 
-TEST_CASE("config: zero playback.max_queue_chunks rejected") {
+TEST_CASE("config: zero playback.max_queue_chunks accepted as unbounded") {
+    // Pre-M7: max_queue_chunks=0 means "unbounded queue", letting
+    // the full LLM monologue sit in RAM rather than dropping chunks
+    // mid-sentence. The validator must accept it; the queue treats
+    // 0 as "skip the cap check".
     constexpr auto yaml = R"(
 logging: {}
 control: {}
@@ -325,7 +329,7 @@ playback:
   max_queue_chunks: 0
 )";
     auto r = load_from_string(yaml);
-    REQUIRE(std::holds_alternative<LoadError>(r));
-    CHECK(std::get<LoadError>(r).message.find("playback.max_queue_chunks")
-          != std::string::npos);
+    REQUIRE(std::holds_alternative<Config>(r));
+    const auto& cfg = std::get<Config>(r);
+    CHECK(cfg.playback.max_queue_chunks == 0);
 }

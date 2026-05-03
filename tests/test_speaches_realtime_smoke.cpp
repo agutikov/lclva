@@ -75,10 +75,9 @@ bool speaches_reachable() {
 // Same production STT model as config/default.yaml and
 // scripts/download-stt.sh. Sharing one model across all integration
 // tests keeps the GPU footprint minimal — Speaches loads it once
-// and keeps it warm for the rest of the run. Switched from
-// large-v3-turbo to faster-whisper-medium on 2026-05-03 (M6 OOM
-// episode); see tests/test_speaches_smoke.cpp for the rationale.
-constexpr const char* kRealtimeModel = "Systran/faster-whisper-medium";
+// and keeps it warm for the rest of the run. Settled on large-v3 +
+// int8_float16 on 2026-05-03; see tests/test_speaches_smoke.cpp.
+constexpr const char* kRealtimeModel = "Systran/faster-whisper-large-v3";
 
 } // namespace
 

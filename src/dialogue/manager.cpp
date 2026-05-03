@@ -203,6 +203,14 @@ void Manager::run_one(const event::FinalTranscript& e) {
         "manager: turn {} prompt built ({} bytes); submitting to llm",
         ctx.id, body.size()));
 
+    // Fire the synchronous turn-started hook BEFORE publishing
+    // LlmStarted. The hook updates any state the chunk-routing path
+    // consults (most notably main.cpp's `playback_active_turn`),
+    // closing the race where TTS chunks for this turn could reach
+    // the queue before an async LlmStarted subscriber bumps the
+    // active-turn id.
+    if (turn_started_hook_) turn_started_hook_(ctx.id);
+
     bus_.publish(event::LlmStarted{ .turn = ctx.id });
 
     SentenceSplitter splitter(cfg_.dialogue.sentence_splitter);

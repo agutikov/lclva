@@ -1,5 +1,7 @@
+#include "audio/apm.hpp"
 #include "audio/capture.hpp"
 #include "audio/clock.hpp"
+#include "audio/loopback.hpp"
 #include "audio/pipeline.hpp"
 #include "config/config.hpp"
 #include "event/bus.hpp"
@@ -232,6 +234,42 @@ TEST_CASE("AudioPipeline: false start increments counter, no UtteranceReady") {
 
     std::this_thread::sleep_for(50ms);
     CHECK(utterance_ready.load() == 0);
+    bus.shutdown();
+}
+
+TEST_CASE("AudioPipeline: APM stage receives chunks even when soxr "
+           "produces non-160-sample resampled blocks") {
+    // Regression test for the M6 bug where pipeline gated APM on
+    // `resampled.size() == 160`. soxr at 48→16 kHz produces variable
+    // sizes (0/192/106/...) and never exactly 160, so APM was never
+    // invoked. The chunked apm_carry_ path fixes it.
+    auto a_cfg = audio_cfg();
+    acva::event::EventBus bus;
+    MonotonicAudioClock clock;
+    CaptureRing ring;
+    CaptureEngine cap(a_cfg, ring, clock);
+    cap.force_headless();
+    cap.start();
+
+    acva::audio::LoopbackSink loopback(/*capacity=*/96000, /*rate=*/48000);
+
+    auto cfg = pipeline_cfg();
+    cfg.loopback        = &loopback;
+    cfg.apm.aec_enabled = true;
+    cfg.apm.ns_enabled  = false;
+    cfg.apm.agc_enabled = false;
+    AudioPipeline pipe(std::move(cfg), ring, clock, bus);
+
+    REQUIRE(pipe.apm() != nullptr);
+
+    // 20 input frames of 480 samples = 200 ms of audio at 48 kHz →
+    // ~200 ms / 10 ms = ~20 APM frames. soxr's startup eats the first
+    // ~3 calls; we expect ≥ 15 APM frames processed.
+    const auto processed = inject_and_pump(cap, pipe, 20);
+    CHECK(processed == 20);
+    if (pipe.apm()->aec_active()) {
+        CHECK(pipe.apm()->frames_processed() >= 15);
+    }
     bus.shutdown();
 }
 

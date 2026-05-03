@@ -4,9 +4,11 @@
 #include "event/event.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <vector>
@@ -72,6 +74,19 @@ public:
     // full or the chunk's turn has already been invalidated. A `false`
     // return increments drops().
     bool enqueue(AudioChunk chunk);
+
+    // Backpressure variant for chunks that MUST be enqueued — most
+    // notably the `end_of_sentence` marker, whose loss strands the
+    // FSM in Speaking. Blocks until the queue has room or the
+    // cancellation token flips. Returns true on enqueue success,
+    // false if cancelled. Polls every `poll` ms; the audio cb's
+    // dequeue cadence (≈10 ms / chunk) means the wait is short in
+    // practice. No drop counted on success regardless of how long
+    // the caller waited.
+    bool enqueue_blocking(
+        AudioChunk chunk,
+        const std::shared_ptr<dialogue::CancellationToken>& cancel,
+        std::chrono::milliseconds poll = std::chrono::milliseconds(5));
 
     // Consumer side. Returns the next chunk where `chunk.turn ==
     // active_turn`. Stale chunks at the head (turn != active_turn)

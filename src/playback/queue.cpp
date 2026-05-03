@@ -1,5 +1,6 @@
 #include "playback/queue.hpp"
 
+#include <thread>
 #include <utility>
 
 namespace acva::playback {
@@ -15,6 +16,24 @@ bool PlaybackQueue::enqueue(AudioChunk chunk) {
     q_.push_back(std::move(chunk));
     enqueued_.fetch_add(1, std::memory_order_relaxed);
     return true;
+}
+
+bool PlaybackQueue::enqueue_blocking(
+    AudioChunk chunk,
+    const std::shared_ptr<dialogue::CancellationToken>& cancel,
+    std::chrono::milliseconds poll) {
+    while (true) {
+        {
+            std::lock_guard lk(mu_);
+            if (q_.size() < cap_) {
+                q_.push_back(std::move(chunk));
+                enqueued_.fetch_add(1, std::memory_order_relaxed);
+                return true;
+            }
+        }
+        if (cancel && cancel->is_cancelled()) return false;
+        std::this_thread::sleep_for(poll);
+    }
 }
 
 std::optional<AudioChunk> PlaybackQueue::dequeue_active(dialogue::TurnId active_turn) {

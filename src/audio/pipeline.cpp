@@ -97,19 +97,41 @@ void AudioPipeline::process_frame(const AudioFrame& frame) {
     auto resampled = resampler_.process(frame.view());
     if (resampled.empty()) return;
 
-    // M6 — AEC stage. APM expects exactly one 10 ms frame
-    // (output_sample_rate/100 samples) per call. Production input is
-    // 480 samples at 48 kHz → 160 samples at 16 kHz, which matches
-    // exactly. Soxr can produce a non-160 chunk on the very first few
-    // calls (warm-up); we pass those through unchanged. The chunked
-    // case is rare enough in practice that the simpler "skip-on-mismatch"
-    // policy beats a buffered chunker — at most a few startup frames
-    // miss AEC, and they're silence anyway.
-    const std::size_t apm_frame_samples =
-        cfg_.output_sample_rate / 100U;
-    if (apm_ && apm_->aec_active()
-        && resampled.size() == apm_frame_samples) {
-        resampled = apm_->process(resampled, frame.captured_at);
+    // M6 — AEC stage. APM requires exactly one 10-ms frame
+    // (output_sample_rate/100 samples) per ProcessStream call. soxr
+    // at the 48→16 kHz ratio produces variable chunk sizes (e.g.
+    // 0/0/0/192/192/106/192/192 in steady state) that never equal
+    // 160 exactly, so we accumulate into apm_carry_ and pull complete
+    // blocks out. Pre-fix this path used a `resampled.size() == 160`
+    // gate that rejected every frame; M6 was a silent no-op in
+    // production until 2026-05-03.
+    if (apm_ && apm_->aec_active()) {
+        const std::size_t apm_frame_samples =
+            cfg_.output_sample_rate / 100U;
+        apm_carry_.insert(apm_carry_.end(),
+                           resampled.begin(), resampled.end());
+        std::vector<std::int16_t> cleaned;
+        cleaned.reserve(apm_carry_.size());
+        std::size_t off = 0;
+        while (apm_carry_.size() - off >= apm_frame_samples) {
+            std::span<const std::int16_t> chunk{
+                apm_carry_.data() + off, apm_frame_samples};
+            auto out = apm_->process(chunk, frame.captured_at);
+            cleaned.insert(cleaned.end(), out.begin(), out.end());
+            off += apm_frame_samples;
+        }
+        if (off > 0) {
+            apm_carry_.erase(
+                apm_carry_.begin(),
+                apm_carry_.begin() + static_cast<std::ptrdiff_t>(off));
+        }
+        // Skip downstream if we couldn't form a single 10-ms block —
+        // the leftover sits in apm_carry_ for the next process_frame
+        // call. At soxr's typical 192-sample output that happens at
+        // most once per startup; in steady state every input frame
+        // produces ≥ 1 cleaned chunk.
+        if (cleaned.empty()) return;
+        resampled = std::move(cleaned);
     }
 
     // Always-on append so the rolling pre-buffer stays warm.

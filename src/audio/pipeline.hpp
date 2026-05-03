@@ -136,6 +136,13 @@ private:
     // ≈ 10 ms, so the same probability applies to multiple frames).
     float last_vad_p_ = 0.0F;
 
+    // M6 — APM input buffer. soxr's variable chunk sizes (e.g.
+    // 192/106/192 from a 480→160 ratio) don't line up with APM's
+    // required 10-ms / 160-sample frames; we accumulate resampled
+    // output here and pull complete blocks out for ProcessStream.
+    // Empty when APM is not active.
+    std::vector<std::int16_t> apm_carry_;
+
     // Test override (-1 = inactive, otherwise replaces last_vad_p_).
     float test_probability_ = -1.0F;
 

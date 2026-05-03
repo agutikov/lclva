@@ -457,13 +457,15 @@ int main(int argc, char** argv) {
     // active_turn=kNoTurn while Manager mints a fresh turn for the
     // LLM stream — chunks would be dropped as stale. M5+ will unify
     // turn minting between FSM and Manager (see manager.hpp).
+    //
+    // M6 — updated synchronously by Manager via its turn-started hook
+    // (see set_turn_started_hook below), BEFORE LlmStarted publishes.
+    // The earlier async bus subscriber was racy: when TTS chunks for
+    // a new turn reached the queue before the LlmStarted subscriber
+    // drained, dequeue_active dropped them all as stale — including
+    // the EOS marker, which stranded the FSM in Speaking.
     auto playback_active_turn =
         std::make_shared<std::atomic<acva::event::TurnId>>(acva::event::kNoTurn);
-    auto llm_started_sub = bus.subscribe<acva::event::LlmStarted>({},
-        [playback_active_turn](const acva::event::LlmStarted& e) {
-            playback_active_turn->store(e.turn, std::memory_order_release);
-        });
-    metric_subs.push_back(llm_started_sub);
 
     const bool tts_enabled = !cfg.tts.voices.empty();
     if (tts_enabled) {
@@ -961,6 +963,15 @@ int main(int argc, char** argv) {
         manager->set_active_turn_provider([&fsm]{
             return fsm.snapshot().active_turn;
         });
+
+        // Synchronously bump playback_active_turn the instant Manager
+        // mints/adopts the turn id, before LlmStarted publishes. This
+        // closes the race that previously stranded the FSM in
+        // Speaking — see playback_active_turn declaration above.
+        manager->set_turn_started_hook(
+            [playback_active_turn](acva::event::TurnId t) {
+                playback_active_turn->store(t, std::memory_order_release);
+            });
 
         keep_alive = std::make_unique<acva::supervisor::KeepAlive>(
             acva::supervisor::KeepAlive::Options{

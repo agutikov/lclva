@@ -1,7 +1,11 @@
 
 
 
+add speech tempo wpm config, set default 200
 
+
+filter llm output because it may hallucinate and mix languages in answer
+leave only selected languge
 
 
 --------------------------------------------------------------------------------

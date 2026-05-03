@@ -81,11 +81,11 @@ constexpr const char* kVoiceModel = "speaches-ai/piper-en_US-amy-medium";
 // Production STT model — same as `config/default.yaml` and
 // `scripts/download-stt.sh`. Tests must match the production model
 // so a flake here means a real production problem, not a smoke/prod
-// mismatch. Switched from large-v3-turbo to faster-whisper-medium
-// on 2026-05-03 after the M6 OOM episode (turbo-ct2 + llama-7B-Q4
-// left ~165 MiB free on the 8 GB RTX 4060, blowing through the
-// encoder workspace under sustained load).
-constexpr const char* kSttModel   = "Systran/faster-whisper-medium";
+// mismatch. Settled on Systran/faster-whisper-large-v3 + int8_float16
+// quantisation on 2026-05-03; that combo fits when llama is stopped
+// (or running with a smaller n_ctx / Q3 quant), and gives the best
+// multilingual quality.
+constexpr const char* kSttModel   = "Systran/faster-whisper-large-v3";
 constexpr const char* kSentence   = "Hello from acva. This is a smoke test.";
 
 } // namespace

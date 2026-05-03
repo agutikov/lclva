@@ -291,7 +291,13 @@ void TtsBridge::run_one(Job job) {
             .samples          = std::move(tail),
             .end_of_sentence  = true,
         };
-        if (queue_.enqueue(std::move(chunk)) && bytes > 0) {
+        // EOS chunk MUST land — its consumption fires PlaybackFinished
+        // which the FSM uses to leave Speaking. Silently dropping it on
+        // a full queue (the pre-2026-05-03 behaviour) stranded the FSM
+        // forever. Block-with-cancel until the queue accepts it.
+        const bool ok = queue_.enqueue_blocking(
+            std::move(chunk), job.cancel);
+        if (ok && bytes > 0) {
             bus_.publish(event::TtsAudioChunk{
                 .turn  = job.sentence.turn,
                 .seq   = job.sentence.seq,

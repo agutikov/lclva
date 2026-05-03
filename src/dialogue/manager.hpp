@@ -88,6 +88,20 @@ public:
         active_turn_provider_ = std::move(p);
     }
 
+    // M6 — synchronous notification fired AFTER the turn id is fixed
+    // and BEFORE LlmStarted is published on the bus. Use this to
+    // update any state that the chunk-routing path consults (most
+    // notably `playback_active_turn` in main.cpp) so that downstream
+    // chunks for this turn never collide with a stale active-turn
+    // value. Without this hook, an async LlmStarted subscriber may
+    // lag the actual TTS chunk arrival, and dequeue_active drops the
+    // chunks as stale — including the EOS marker — leaving the FSM
+    // stuck in Speaking forever.
+    using TurnStartedHook = std::function<void(event::TurnId)>;
+    void set_turn_started_hook(TurnStartedHook h) noexcept {
+        turn_started_hook_ = std::move(h);
+    }
+
     // Test hook: how many turns the gate has refused since startup.
     [[nodiscard]] std::uint64_t gated_turns() const noexcept {
         return gated_turns_.load(std::memory_order_acquire);
@@ -131,6 +145,7 @@ private:
     std::atomic<std::uint64_t> gated_turns_{0};
 
     ActiveTurnProvider active_turn_provider_;
+    TurnStartedHook    turn_started_hook_;
 };
 
 } // namespace acva::dialogue

@@ -1,9 +1,12 @@
+#include "dialogue/turn.hpp"
 #include "playback/queue.hpp"
 
 #include <doctest/doctest.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <memory>
 #include <thread>
 
 using acva::dialogue::TurnId;
@@ -218,4 +221,80 @@ TEST_CASE("PlaybackQueue: concurrent producer/consumer don't lose chunks") {
     // the producer was rebuffed by capacity, which on a hot loop
     // without backpressure is non-zero. The contract is "no data
     // lost", not "no rejection pressure".
+}
+
+TEST_CASE("PlaybackQueue: enqueue_blocking succeeds when room available immediately") {
+    PlaybackQueue q(4);
+    auto cancel = std::make_shared<acva::dialogue::CancellationToken>();
+    CHECK(q.enqueue_blocking(make_chunk(1, 0), cancel,
+                              std::chrono::milliseconds(1)));
+    CHECK(q.size() == 1);
+}
+
+TEST_CASE("PlaybackQueue: enqueue_blocking waits then succeeds when consumer drains") {
+    PlaybackQueue q(2);
+    // Fill to capacity.
+    CHECK(q.enqueue(make_chunk(1, 0)));
+    CHECK(q.enqueue(make_chunk(1, 1)));
+
+    auto cancel = std::make_shared<acva::dialogue::CancellationToken>();
+    std::atomic<bool> done{false};
+
+    std::thread blocker([&] {
+        // This must block until the consumer drains a slot.
+        const bool ok = q.enqueue_blocking(
+            make_chunk(1, 99), cancel, std::chrono::milliseconds(1));
+        CHECK(ok);
+        done.store(true, std::memory_order_release);
+    });
+
+    // Confirm it really blocked, then unblock by dequeuing.
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    CHECK_FALSE(done.load(std::memory_order_acquire));
+    (void)q.dequeue_active(1);
+
+    // Should resolve quickly now.
+    blocker.join();
+    CHECK(done.load(std::memory_order_acquire));
+    CHECK(q.size() == 2);
+}
+
+TEST_CASE("PlaybackQueue: enqueue_blocking returns false when cancelled") {
+    PlaybackQueue q(1);
+    CHECK(q.enqueue(make_chunk(1, 0)));   // fill capacity
+
+    auto cancel = std::make_shared<acva::dialogue::CancellationToken>();
+    std::atomic<bool> done{false};
+    std::atomic<bool> ok{true};
+
+    std::thread blocker([&] {
+        ok.store(q.enqueue_blocking(
+            make_chunk(1, 99), cancel, std::chrono::milliseconds(1)));
+        done.store(true, std::memory_order_release);
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    CHECK_FALSE(done.load(std::memory_order_acquire));
+    cancel->cancel();
+
+    blocker.join();
+    CHECK(done.load(std::memory_order_acquire));
+    CHECK_FALSE(ok.load(std::memory_order_acquire));
+    CHECK(q.size() == 1);   // unchanged — cancellation kept the slot intact
+}
+
+TEST_CASE("PlaybackQueue: enqueue_blocking does not count drops") {
+    PlaybackQueue q(1);
+    CHECK(q.enqueue(make_chunk(1, 0)));
+    auto cancel = std::make_shared<acva::dialogue::CancellationToken>();
+    std::thread blocker([&] {
+        (void)q.enqueue_blocking(
+            make_chunk(1, 1), cancel, std::chrono::milliseconds(1));
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(15));
+    (void)q.dequeue_active(1);
+    blocker.join();
+    // The blocking attempt waited but ultimately succeeded — drops
+    // counter must NOT have been bumped during the wait window.
+    CHECK(q.drops() == 0);
 }

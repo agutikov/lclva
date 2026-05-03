@@ -202,6 +202,8 @@ void TtsBridge::run_one(Job job) {
     bool got_format = false;
     bool got_error = false;
     std::string err_msg;
+    std::uint32_t native_rate = 0;     // M6 self-listen — Piper voice rate
+    std::vector<std::int16_t> self_listen_samples;
     const auto device_rate =
         static_cast<double>(cfg_.audio.sample_rate_hz);
 
@@ -212,6 +214,7 @@ void TtsBridge::run_one(Job job) {
             err_msg = "piper: invalid sample rate " + std::to_string(rate);
             return;
         }
+        native_rate = static_cast<std::uint32_t>(rate);
         if (static_cast<std::uint32_t>(rate) == cfg_.audio.sample_rate_hz) {
             // Pass-through: skip the resampler entirely. Saves a
             // copy per chunk and avoids any phase wobble at common
@@ -226,6 +229,14 @@ void TtsBridge::run_one(Job job) {
     };
     cb.on_audio = [&](std::span<const std::int16_t> samples) {
         if (got_error || job.cancel->is_cancelled()) return;
+
+        // M6 self-listen — capture native-rate samples BEFORE the
+        // device resample. Cheap append into a vector; only when the
+        // sink is wired (cfg.dialogue.self_listen.enabled).
+        if (self_listen_) {
+            self_listen_samples.insert(
+                self_listen_samples.end(), samples.begin(), samples.end());
+        }
 
         std::vector<std::int16_t> out;
         if (resampler) {
@@ -323,6 +334,20 @@ void TtsBridge::run_one(Job job) {
         .turn = job.sentence.turn,
         .seq  = job.sentence.seq,
     });
+
+    // M6 — hand the captured native-rate samples to the self-listen
+    // sink. Fires only on successful synthesis (not cancel/error)
+    // because there's no "expected" text to compare against in those
+    // paths. The sink moves the buffer onto its own worker thread.
+    if (self_listen_ && !self_listen_samples.empty() && native_rate > 0) {
+        self_listen_(
+            job.sentence.turn,
+            job.sentence.seq,
+            job.sentence.text,
+            job.sentence.lang,
+            native_rate,
+            std::move(self_listen_samples));
+    }
 }
 
 } // namespace acva::dialogue

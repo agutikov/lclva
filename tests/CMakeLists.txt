@@ -74,6 +74,7 @@ target_link_libraries(acva_unit_tests
 set(_acva_integration_sources
     ${_acva_test_main}
     test_speaches_smoke.cpp
+    test_speaches_wedge.cpp
     test_vad.cpp
 )
 

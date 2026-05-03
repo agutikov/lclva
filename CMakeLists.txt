@@ -20,9 +20,27 @@ endif()
 
 option(ACVA_BUILD_TESTS "Build unit tests" ON)
 option(ACVA_WERROR "Treat warnings as errors" ON)
+# Per-TU compile-time tracing (clang ≥ 9 / gcc ≥ 14). Adds
+# `-ftime-trace`; each compiled .cpp emits a sibling .json file in
+# `_build/<preset>/...` that Chrome's chrome://tracing or speedscope
+# can render as a flamegraph. ninja's per-file wall-time is also
+# available via `scripts/build-times.sh` without enabling this.
+option(ACVA_TIME_TRACE "Emit per-TU compile time traces (-ftime-trace)" OFF)
 
 include(cmake/Dependencies.cmake)
 include(cmake/Warnings.cmake)
+
+if(ACVA_TIME_TRACE)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        add_compile_options(-ftime-trace)
+        message(STATUS "ACVA_TIME_TRACE: -ftime-trace enabled; "
+                       "look for *.json next to each .o under "
+                       "${CMAKE_BINARY_DIR}/")
+    else()
+        message(WARNING "ACVA_TIME_TRACE: ignored — compiler "
+                        "${CMAKE_CXX_COMPILER_ID} doesn't support -ftime-trace")
+    endif()
+endif()
 
 add_subdirectory(src)
 

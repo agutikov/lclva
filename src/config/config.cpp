@@ -25,6 +25,7 @@ constexpr std::array kValidSinks{
     std::string_view{"stderr"},
     std::string_view{"journal"},
     std::string_view{"file"},
+    std::string_view{"dir"},
 };
 
 bool contains(std::string_view value, const auto& valid_set) noexcept {
@@ -52,6 +53,7 @@ std::string read_file(const std::filesystem::path& path, LoadError& err) {
 LogSink parse_log_sink(std::string_view s) {
     if (s == "journal") return LogSink::journal;
     if (s == "file")    return LogSink::file;
+    if (s == "dir")     return LogSink::dir;
     return LogSink::stderr_;
 }
 
@@ -64,6 +66,9 @@ std::optional<LoadError> validate(const Config& cfg) {
     }
     if (cfg.logging.sink == "file" && !cfg.logging.file_path) {
         return LoadError{"config: logging.sink='file' requires logging.file_path"};
+    }
+    if (cfg.logging.sink == "dir" && !cfg.logging.dir_path) {
+        return LoadError{"config: logging.sink='dir' requires logging.dir_path"};
     }
     if (cfg.control.port == 0) {
         return LoadError{"config: control.port: must be non-zero"};
@@ -145,6 +150,11 @@ std::optional<LoadError> validate(const Config& cfg) {
     // M3 — TTS / audio / playback knobs.
     if (cfg.tts.request_timeout_seconds == 0) {
         return LoadError{"config: tts.request_timeout_seconds: must be > 0"};
+    }
+    if (cfg.tts.tempo_wpm != 0
+        && (cfg.tts.tempo_wpm < 50 || cfg.tts.tempo_wpm > 400)) {
+        return LoadError{
+            "config: tts.tempo_wpm: must be 0 or in [50, 400]"};
     }
     // M4B — STT.
     if (!cfg.stt.base_url.empty()) {

@@ -13,7 +13,24 @@
 
 logging:
   level: info        # trace | debug | info | warn | error | critical | off
-  sink: stderr       # stderr | journal | file
+  sink: dir          # stderr | journal | file | dir
+  # sink=dir writes a per-run file like
+  # `/var/log/acva/acva-YYYYMMDD-HHMMSS.log` named from the local-time
+  # startup instant. Pre-create the directory with user-writable
+  # perms before first use:
+  #   sudo install -d -o $USER -g $USER -m 0755 /var/log/acva
+  # If the dir can't be created or opened, log::init falls back to
+  # stderr with a one-line warning.
+  dir_path: /var/log/acva
+  # Tee every log line to stderr in addition to the primary sink.
+  # Set true to watch the run live in the terminal AND keep the
+  # per-run file. No-op if sink is already stderr/journal.
+  mirror_to_stderr: true
+  # Periodic GPU VRAM probe (nvidia-smi). Emits a structured `vram`
+  # event every N ms with used / free MiB. Catches the creeping-OOM
+  # pattern where Speaches' encoder workspace pushes free toward
+  # zero before a request fails. Set 0 to disable.
+  vram_monitor_interval_ms: 1000
   # file_path: /var/log/acva.log    # required when sink=file
   # When true, log per-event details (transcripts, LLM sentences,
   # TTS/playback timing) at info level for end-to-end debugging.
@@ -36,7 +53,7 @@ llm:
   base_url: "http://127.0.0.1:8081/v1"
   model: "qwen2.5-7b-instruct"
   unit: "acva-llama.service"
-  temperature: 2.0
+  temperature: 0.7
   max_tokens: 400
   max_prompt_tokens: 3000
   request_timeout_seconds: 60
@@ -128,7 +145,16 @@ tts:
     # piper-ru_RU-<name>-medium pattern) to try them.
     ru: { model_id: "speaches-ai/piper-ru_RU-ruslan-medium", voice_id: "ruslan" }
   fallback_lang: en
-  request_timeout_seconds: 10
+  # Bumped from 10 to 30 on 2026-05-03: long sentences (e.g. a
+  # numbered list of 100 items) at speed=1.25 take ~25 s to fully
+  # stream; libcurl was aborting mid-stream with "Transferred a
+  # partial file" and the EOS-fallback path hid the cause.
+  request_timeout_seconds: 30
+  # Spoken tempo in words-per-minute. Translated to OpenAI `speed`
+  # at native_wpm = 160 (typical Piper baseline). 200 ≈ speed=1.25,
+  # a touch faster than conversational. Range [50, 400] (or 0 to
+  # disable the field and use the voice's native cadence).
+  tempo_wpm: 240
 
 # M3 — audio output + M4 audio capture. Output knobs ship in M3;
 # input_device + capture_enabled are M4 additions. capture_enabled
@@ -157,6 +183,15 @@ audio:
   # jitter under load.
   loopback:
     ring_seconds: 2
+  # M6 — sidestep PortAudio's full ALSA-PCM probe at startup. The
+  # alsa-pipewire-jack glue's snd_pcm_close deadlocks pipewire's
+  # thread loop, adding ~4 minutes to acva startup until it times
+  # out. With this on, we point ALSA_CONFIG_PATH at a tmpfile that
+  # only defines `default → pulse`; PortAudio enumerates one PCM
+  # and returns immediately. Routing still works because pipewire
+  # also exposes a pulse interface. Set false to use the system
+  # asound.conf verbatim.
+  skip_alsa_full_probe: true
 
 playback:
   max_queue_chunks: 64       # ~640 ms ahead of the audio cb
@@ -221,9 +256,26 @@ dialogue:
   recent_turns_n: 10
   max_assistant_sentences: 6
   max_assistant_tokens: 400
+  # Self-listen feedback loop. When enabled, every successfully-
+  # synthesized sentence is also pushed through STT in a background
+  # thread, then logged as a `self_listen` event with the LLM's
+  # original text vs what STT heard. Catches audio dropouts (queue
+  # overflow drops, mid-stream truncation, mispronounced characters)
+  # that aren't visible in the LLM/TTS path. Default off — adds
+  # extra STT load and won't fit alongside the production STT call
+  # on tight VRAM (see project_gpu_cdi_and_vram).
+  self_listen:
+    enabled: false
+    max_in_flight: 1
   fallback_language: en
   sentence_splitter:
-    max_sentence_chars: 600
+    # Forced flush at this length when no terminal punctuation
+    # appears. Lowered from 600 to 300 on 2026-05-03 — a 100-item
+    # comma-only list (430 chars, no periods) fit under the old
+    # cap and produced one ~25 s TTS request that hit the libcurl
+    # timeout. Smaller chunks also smooth out time-to-first-audio
+    # by letting playback start while later sentences synthesize.
+    max_sentence_chars: 300
     detect_code_fences: true
   system_prompts:
     en: |

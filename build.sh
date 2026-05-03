@@ -47,3 +47,12 @@ cmake --build -j8 --preset "$PRESET" "$@"
 if [[ -f "_build/${PRESET}/compile_commands.json" ]]; then
     ln -sfn "_build/${PRESET}/compile_commands.json" compile_commands.json
 fi
+
+# Per-TU compile-time summary. Reads ninja's own per-output start/end
+# timestamps — no overhead added to the build itself. Set
+# ACVA_BUILD_TIMES=0 to suppress when output isn't wanted (e.g.,
+# scripted builds piping logs).
+if [[ "${ACVA_BUILD_TIMES:-1}" != "0" ]] && [[ -x scripts/build-times.sh ]]; then
+    echo
+    scripts/build-times.sh "$PRESET" "${ACVA_BUILD_TIMES_TOP:-15}"
+fi

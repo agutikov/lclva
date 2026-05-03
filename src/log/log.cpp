@@ -6,9 +6,13 @@
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 
+#include <chrono>
 #include <cstdio>
+#include <ctime>
+#include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 
 namespace acva::log {
 
@@ -34,10 +38,54 @@ spdlog::level::level_enum parse_level(std::string_view level) {
 
 std::shared_ptr<spdlog::logger> g_logger; // NOLINT(*global*)
 
+// Build a per-run filename like "acva-20260503-150329.log" using the
+// process's local-time startup instant. Matches the timezone-aware
+// timestamp format that the JSON sink writes inside log records.
+std::string per_run_filename(std::chrono::system_clock::time_point now) {
+    const std::time_t t = std::chrono::system_clock::to_time_t(now);
+    std::tm tm{};
+    ::localtime_r(&t, &tm);
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "acva-%Y%m%d-%H%M%S.log", &tm);
+    return buf;
+}
+
+// Open the per-run file under `dir`. Creates `dir` if missing.
+// Returns nullptr on failure (caller falls back to stderr) and writes
+// a one-line diagnostic to stderr so the user sees why the file sink
+// is silent.
+std::FILE* open_dir_sink(const std::string& dir) {
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    if (ec) {
+        std::fprintf(stderr,
+            "log: cannot create directory '%s' (%s); falling back to stderr\n",
+            dir.c_str(), ec.message().c_str());
+        return nullptr;
+    }
+    const auto name = per_run_filename(std::chrono::system_clock::now());
+    const auto path = std::filesystem::path(dir) / name;
+    // O_APPEND so concurrent writers from this process (single
+    // logger thread, but spdlog may flush from multiple) don't
+    // collide; per-run names mean the only contention case is a
+    // human re-running acva within the same second, which appends
+    // both runs to the same file — acceptable.
+    std::FILE* fp = std::fopen(path.c_str(), "ae");
+    if (!fp) {
+        std::fprintf(stderr,
+            "log: cannot open '%s'; falling back to stderr\n",
+            path.c_str());
+        return nullptr;
+    }
+    std::fprintf(stderr,
+        "log: writing to %s\n", path.c_str());
+    return fp;
+}
+
 } // namespace
 
 void init(const config::LoggingConfig& cfg) {
-    spdlog::sink_ptr sink;
+    std::vector<spdlog::sink_ptr> sinks;
 
     const auto sink_kind = config::parse_log_sink(cfg.sink);
     switch (sink_kind) {
@@ -50,7 +98,15 @@ void init(const config::LoggingConfig& cfg) {
                 throw std::runtime_error(
                     "log: failed to open " + *cfg.file_path);
             }
-            sink = std::make_shared<JsonSink>(fp);
+            sinks.push_back(std::make_shared<JsonSink>(fp));
+            break;
+        }
+        case config::LogSink::dir: {
+            if (!cfg.dir_path) {
+                throw std::runtime_error("log: dir_path required for sink=dir");
+            }
+            std::FILE* fp = open_dir_sink(*cfg.dir_path);
+            sinks.push_back(std::make_shared<JsonSink>(fp ? fp : stderr));
             break;
         }
         case config::LogSink::journal:
@@ -59,13 +115,24 @@ void init(const config::LoggingConfig& cfg) {
             // journald: under systemd, stderr is captured into the
             // journal as-is. JSON-per-line is exactly what `journalctl
             // -o json` and downstream collectors expect.
-            sink = std::make_shared<JsonSink>(stderr);
+            sinks.push_back(std::make_shared<JsonSink>(stderr));
             break;
     }
 
-    sink->set_pattern(kJsonPattern);
+    // mirror_to_stderr tees every log line to stderr in addition to
+    // the primary sink — useful when sink=dir/file and you also want
+    // to watch the run live. No-op if the primary sink is already
+    // stderr/journal (avoid duplicate lines).
+    if (cfg.mirror_to_stderr
+        && sink_kind != config::LogSink::stderr_
+        && sink_kind != config::LogSink::journal) {
+        sinks.push_back(std::make_shared<JsonSink>(stderr));
+    }
 
-    auto new_logger = std::make_shared<spdlog::logger>(kLoggerName, sink);
+    for (auto& s : sinks) s->set_pattern(kJsonPattern);
+
+    auto new_logger = std::make_shared<spdlog::logger>(
+        kLoggerName, sinks.begin(), sinks.end());
     new_logger->set_level(parse_level(cfg.level));
     new_logger->flush_on(spdlog::level::warn);
 

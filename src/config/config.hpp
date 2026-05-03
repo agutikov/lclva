@@ -14,12 +14,41 @@ enum class LogSink {
     stderr_,
     journal,
     file,
+    dir,
 };
 
 struct LoggingConfig {
     std::string level = "info"; // trace | debug | info | warn | error | critical | off
-    std::string sink = "stderr"; // "stderr" | "journal" | "file"
+    // Default `stderr` keeps minimal/test configs valid (no extra
+    // path required). Production uses `dir` — see config/default.yaml.
+    std::string sink = "stderr"; // "stderr" | "journal" | "file" | "dir"
     std::optional<std::string> file_path;
+    // M6 — per-run log directory. When `sink: dir`, log::init writes
+    // to `{dir_path}/acva-YYYYMMDD-HHMMSS.log` (local time at startup;
+    // matches the timestamp format in log lines). The directory is
+    // created on first run; on permission failure the logger falls
+    // back to stderr with a warning printed first. Each `acva`
+    // invocation gets its own file so soak runs / debug sessions
+    // are easy to triage post-mortem without log rotation.
+    //
+    // Default `/var/log/acva` requires the dir to be pre-created
+    // with user-writable permissions:
+    //   sudo install -d -o $USER -g $USER -m 0755 /var/log/acva
+    // If you can't do that, set this to e.g. `~/.local/state/acva/logs`.
+    std::optional<std::string> dir_path;
+    // M6 — tee every log line to stderr in addition to the primary
+    // sink. Useful when sink=dir (or sink=file) and you want to
+    // watch the run live in the terminal AND keep the per-run log
+    // for post-mortem. No effect when sink is already stderr.
+    bool mirror_to_stderr = false;
+    // M6 — periodic GPU VRAM probe. When > 0, a background thread
+    // shells `nvidia-smi --query-gpu=memory.used,memory.free` every
+    // N ms and emits a structured `vram` log event. Catches the
+    // creeping-OOM pattern where Speaches' encoder workspace pushes
+    // free VRAM toward zero before a request finally fails. Set to
+    // 0 to disable; default 1000 ms is light (one nvidia-smi exec
+    // per second). Quietly no-ops if nvidia-smi is missing.
+    uint32_t vram_monitor_interval_ms = 1000;
     // When true, main.cpp installs a bus subscriber that emits a
     // structured log line for each transcript / LLM / TTS / playback
     // event with the relevant payload (transcript text, sentence
@@ -141,6 +170,13 @@ struct TtsConfig {
     // Used when the detected language has no entry in `voices`.
     std::string fallback_lang = "en";
     uint32_t request_timeout_seconds = 10;
+    // Spoken tempo in words-per-minute. Translated to the OpenAI
+    // `speed` request field at native_wpm = 160 baseline (typical
+    // Piper voice). 200 wpm ≈ speed=1.25 — a touch faster than
+    // conversational, comfortable for an assistant. Validated to
+    // [50, 400] which maps to speed [0.31, 2.5]. Set to 160 for
+    // unmodified native cadence; 0 also disables the field.
+    uint32_t tempo_wpm = 200;
 };
 
 struct SupervisorConfig {
@@ -182,10 +218,25 @@ struct SentenceSplitterConfig {
     bool detect_code_fences = true;
 };
 
+// M6 — self-listen feedback loop. When enabled, the bridge
+// accumulates a copy of each synthesized sentence's PCM and the
+// orchestrator pushes it through STT in a background thread, then
+// logs the original LLM text alongside the transcribed audio. Catches
+// the class of bugs where the LLM produced correct text but the
+// listener heard something different (queue overflow drops, voice
+// dropouts, mid-stream truncation, mispronounced characters).
+struct SelfListenConfig {
+    bool enabled = false;
+    // Cap concurrent in-flight STT calls. Self-listen on top of
+    // production STT can starve VRAM on small cards, so we throttle.
+    uint32_t max_in_flight = 1;
+};
+
 struct DialogueConfig {
     uint32_t recent_turns_n = 10;
     uint32_t max_assistant_sentences = 6;
     uint32_t max_assistant_tokens = 400;
+    SelfListenConfig self_listen;
     // Backpressure on the TTS path: when the playback queue depth
     // crosses this, the dialogue layer pauses pulling more sentences
     // off the LLM stream. Independent of max_assistant_sentences.
@@ -232,6 +283,20 @@ struct AudioConfig {
     uint32_t half_duplex_hangover_ms    = 200;
     // M6 — AEC reference-signal loopback ring.
     AudioLoopbackConfig loopback;
+    // M6 — when true (default on Linux), `acva` writes a minimal
+    // ALSA config to a tmpfile and points `ALSA_CONFIG_PATH` at it
+    // BEFORE any `Pa_Initialize` runs. This stops PortAudio's ALSA
+    // host-API enumeration from probing every PCM listed in the
+    // system asound.conf — most importantly the synthetic `jack`
+    // PCM that pipewire-jack exposes, whose snd_pcm_close call
+    // deadlocks pipewire's thread-loop on shutdown and adds ~4 min
+    // to startup time. With this flag on, only `default` is
+    // probed, routing through PulseAudio (pipewire-pulse on
+    // PipeWire systems). Set false to use the system asound.conf
+    // verbatim — required if you genuinely need a non-pulse ALSA
+    // route or have customised your asound.conf in load-bearing
+    // ways.
+    bool skip_alsa_full_probe = true;
 };
 
 // M6 — WebRTC AudioProcessing (AEC + NS + AGC) tuning. Mirrors

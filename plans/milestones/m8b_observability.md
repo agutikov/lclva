@@ -122,6 +122,45 @@ Failure modes:
 | OTLP export contention with critical path | Async + non-blocking; if exporter blocks, drop spans |
 | Dashboard panels regress as metrics get renamed | Pin panel queries to a stable subset; add a CI step that diffs `/metrics` output against a golden list before merge |
 
+## Step 4 — Build-time observability + reductions
+
+A clean build is currently ~12 s wall (96 TUs / 8 cores) but
+**746 s sequential**, and one TU dominates: `src/config/config.cpp`
+at **221 s** by itself — Glaze's YAML reflection instantiates the
+full template tree for every nested struct in the schema. The next
+tier (`stt/realtime_stt_client`, `llm/client`, `http/server`, the
+`test_manager` / `test_summarizer` / `test_tts_bridge` /
+`test_speaches_*` units) all sit at 18–26 s each because of heavy
+transitive includes (libdatachannel, libcurl, cpp-httplib, doctest).
+
+Already landed (2026-05-03):
+- `cmake -DACVA_TIME_TRACE=ON` adds `-ftime-trace`; per-TU JSONs
+  drop next to each `.o` for chrome://tracing flamegraphs.
+- `scripts/build-times.sh [preset] [top-N]` parses
+  `_build/<preset>/.ninja_log` and prints a sorted wall-time table.
+- `./build.sh` calls the script automatically; suppress with
+  `ACVA_BUILD_TIMES=0`, change cap with `ACVA_BUILD_TIMES_TOP=N`.
+
+To do under M8B:
+1. **Split `src/config/config.cpp`** so each subsystem's parsing +
+   validation lives in its own TU. Each per-section TU then
+   instantiates only its own slice of the reflection tree, and the
+   work parallelises across cores. Target: drop config.cpp's 221 s
+   to ~7 × 30 s on 8 cores ≈ ~30 s wall.
+2. **PCH for the test suites.** A 200-line `tests/test_pch.hpp`
+   covering doctest + the most-shared `acva_core` public headers,
+   wired via `target_precompile_headers`. Cuts the ~20 s tier in
+   half — biggest impact on the 8 worst test TUs.
+3. **pImpl for libcurl / libdatachannel / cpp-httplib consumers.**
+   `llm/client.cpp`, `http/server.cpp`, `stt/realtime_stt_client.cpp`,
+   `tts/openai_tts_client.cpp`, `stt/openai_stt_client.cpp` — wrap
+   the third-party type in an `Impl` struct in the .cpp,
+   forward-declare in the .hpp. Stops every downstream TU from
+   re-parsing the library headers.
+
+Acceptance for Step 4: clean `./build.sh` reports < 60 s wall on the
+8-core dev workstation; no single TU > 60 s.
+
 ## Time breakdown
 
 | Step | Estimate |
@@ -129,4 +168,5 @@ Failure modes:
 | 1 Soak infra + first run | 3 days |
 | 2 Dashboard | 1 day |
 | 3 OTLP | 1.5 days |
-| **Total** | **~5.5 days = ~1 week** |
+| 4 Build-time reductions (config split + PCH + pImpl) | 2 days |
+| **Total** | **~7.5 days = ~1.5 weeks** |

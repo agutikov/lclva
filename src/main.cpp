@@ -194,6 +194,43 @@ int main(int argc, char** argv) {
     acva::log::info("main", fmt::format("config loaded: {}", config_path.string()));
     acva::log::info("main", fmt::format("memory db: {}", cfg.memory.db_path));
 
+    // (VRAM monitor is spawned later, AFTER the demo dispatch — demos
+    // do their own VRAM probing via snap_vram() and would otherwise
+    // crash on exit because the demo path returns from main without
+    // joining the monitor thread.)
+
+    // ----- 2.4. Optional ALSA-probe sidestep ------------------------
+    // PortAudio's ALSA host-API enumerates every PCM in the system
+    // asound.conf at Pa_Initialize time. The synthetic `jack` PCM
+    // exposed by alsa-pipewire-jack glue deadlocks pipewire's
+    // thread-loop on snd_pcm_close, adding ~4 minutes to startup
+    // until pipewire times out. Sidestep by writing a minimal
+    // asound.conf to a tmpfile and pointing ALSA_CONFIG_PATH at it
+    // — ALSA then sees only `default → pulse` and the probe finishes
+    // in milliseconds. Demos that hit PortAudio (tone, tts,
+    // loopback, capture, aec) need this too, so it lives before the
+    // demo dispatch.
+    if (cfg.audio.skip_alsa_full_probe) {
+        char tmpl[] = "/tmp/acva-asound.XXXXXX";
+        const int fd = ::mkstemp(tmpl);
+        if (fd >= 0) {
+            constexpr std::string_view kMinimalConf =
+                "pcm.!default { type pulse }\n"
+                "ctl.!default { type pulse }\n";
+            (void)::write(fd, kMinimalConf.data(), kMinimalConf.size());
+            ::close(fd);
+            ::setenv("ALSA_CONFIG_PATH", tmpl, /*overwrite=*/1);
+            acva::log::info("main", fmt::format(
+                "ALSA_CONFIG_PATH={} (skip_alsa_full_probe=true; "
+                "PortAudio probe restricted to default → pulse)", tmpl));
+        } else {
+            acva::log::warn("main",
+                "skip_alsa_full_probe=true but mkstemp failed; "
+                "falling back to system asound.conf — startup may stall "
+                "on alsa-pipewire-jack");
+        }
+    }
+
     // ----- 2.5. Demo subcommand short-circuit -----
     // Demos build only the subsystems they need from `cfg` and exit
     // when done. They MUST run before the full runtime (memory thread,
@@ -214,6 +251,50 @@ int main(int argc, char** argv) {
     }
 
     install_signal_handlers();
+
+    // ----- 2.6. Periodic VRAM monitor (production runtime only) ------
+    // Catches the creeping-OOM pattern where Speaches' workspace
+    // pushes free VRAM toward zero before a request finally fails.
+    // Spawned AFTER the demo dispatch above — demos do their own
+    // VRAM probing and a joinable thread destructor on demo-return
+    // would call std::terminate. nvidia-smi exec per tick is cheap
+    // (~5 ms); silently no-ops if nvidia-smi is missing.
+    std::thread       vram_monitor_thread;
+    std::atomic<bool> vram_monitor_stop{false};
+    if (cfg.logging.vram_monitor_interval_ms > 0) {
+        vram_monitor_thread = std::thread([&]{
+            const auto interval = std::chrono::milliseconds(
+                cfg.logging.vram_monitor_interval_ms);
+            const auto probe = []() -> std::pair<long, long> {
+                FILE* p = ::popen(
+                    "nvidia-smi --query-gpu=memory.used,memory.free "
+                    "--format=csv,noheader,nounits 2>/dev/null", "r");
+                if (!p) return {-1, -1};
+                long used = -1, free_ = -1;
+                if (std::fscanf(p, " %ld , %ld", &used, &free_) != 2) {
+                    used = -1; free_ = -1;
+                }
+                ::pclose(p);
+                return {used, free_};
+            };
+            auto first = probe();
+            if (first.first < 0) {
+                acva::log::warn("vram",
+                    "nvidia-smi unavailable — VRAM monitor disabled");
+                return;
+            }
+            while (!vram_monitor_stop.load(std::memory_order_acquire)) {
+                const auto v = probe();
+                if (v.first >= 0) {
+                    acva::log::event(
+                        "vram", "vram", acva::event::kNoTurn,
+                        {{"used_mib", std::to_string(v.first)},
+                         {"free_mib", std::to_string(v.second)}});
+                }
+                std::this_thread::sleep_for(interval);
+            }
+        });
+    }
 
     // ----- 3. Build the runtime -----
     acva::event::EventBus bus;
@@ -449,6 +530,10 @@ int main(int argc, char** argv) {
     std::unique_ptr<acva::dialogue::TtsBridge>      tts_bridge;
     std::thread                                     playback_metrics_thread;
     std::atomic<bool>                               playback_metrics_stop{false};
+    // M6 self-listen — bound to the bridge's hook + drained on shutdown.
+    std::thread                                     self_listen_thread_;
+    std::shared_ptr<std::atomic<bool>>              self_listen_stop_;
+    std::shared_ptr<std::condition_variable>        self_listen_cv_;
 
     // Track the turn id the Manager mints for each LLM run. The
     // PlaybackEngine reads this to filter "live" chunks. Using
@@ -514,6 +599,132 @@ int main(int argc, char** argv) {
 
         playback_engine->start();
         tts_bridge->start();
+
+        // M6 — self-listen feedback loop. Wired here so it has access
+        // to the production STT client config; the bridge fires the
+        // hook with native-rate samples after each successful
+        // synthesis. We push them onto a bounded deque drained by a
+        // single worker thread → STT → log a `self_listen` event with
+        // expected vs heard text. Throttled to N concurrent in-flight
+        // STT calls so it can't starve VRAM during normal operation.
+        if (cfg.dialogue.self_listen.enabled && !cfg.stt.base_url.empty()) {
+            struct SelfListenJob {
+                acva::event::TurnId turn;
+                acva::event::SequenceNo seq;
+                std::string expected;
+                std::string lang;
+                std::uint32_t native_rate;
+                std::vector<std::int16_t> samples;
+            };
+            auto sl_jobs = std::make_shared<std::deque<SelfListenJob>>();
+            auto sl_mu   = std::make_shared<std::mutex>();
+            auto sl_cv   = std::make_shared<std::condition_variable>();
+            auto sl_stop = std::make_shared<std::atomic<bool>>(false);
+            const auto sl_max = std::max<std::uint32_t>(
+                1, cfg.dialogue.self_listen.max_in_flight);
+
+            tts_bridge->set_self_listen_sink(
+                [sl_jobs, sl_mu, sl_cv, sl_max](
+                    acva::event::TurnId turn,
+                    acva::event::SequenceNo seq,
+                    std::string text, std::string lang,
+                    std::uint32_t rate,
+                    std::vector<std::int16_t> samples) {
+                    {
+                        std::lock_guard lk(*sl_mu);
+                        // DropOldest if the worker can't keep up — better
+                        // to lose a self-listen sample than to balloon
+                        // memory.
+                        while (sl_jobs->size() >= sl_max * 4) {
+                            sl_jobs->pop_front();
+                        }
+                        sl_jobs->push_back(SelfListenJob{
+                            turn, seq, std::move(text), std::move(lang),
+                            rate, std::move(samples)});
+                    }
+                    sl_cv->notify_one();
+                });
+
+            std::thread sl_worker(
+                [sl_jobs, sl_mu, sl_cv, sl_stop, &cfg]{
+                    acva::stt::OpenAiSttClient client(cfg.stt);
+                    while (!sl_stop->load(std::memory_order_acquire)) {
+                        SelfListenJob job;
+                        {
+                            std::unique_lock lk(*sl_mu);
+                            sl_cv->wait(lk, [&]{
+                                return sl_stop->load(std::memory_order_acquire)
+                                    || !sl_jobs->empty();
+                            });
+                            if (sl_stop->load(std::memory_order_acquire)
+                                && sl_jobs->empty()) return;
+                            job = std::move(sl_jobs->front());
+                            sl_jobs->pop_front();
+                        }
+                        // Resample native (e.g. 22050) → 16 kHz for STT.
+                        acva::audio::Resampler r(
+                            static_cast<double>(job.native_rate), 16000.0,
+                            acva::audio::Resampler::Quality::High);
+                        auto resampled = r.process(job.samples);
+                        auto tail = r.flush();
+                        resampled.insert(
+                            resampled.end(), tail.begin(), tail.end());
+                        const auto now = std::chrono::steady_clock::now();
+                        auto slice = std::make_shared<acva::audio::AudioSlice>(
+                            std::move(resampled), 16000U, now, now);
+
+                        std::string heard, err;
+                        acva::stt::SttCallbacks cb;
+                        cb.on_final = [&](acva::event::FinalTranscript ft) {
+                            heard = std::move(ft.text);
+                        };
+                        cb.on_error = [&](std::string e) { err = std::move(e); };
+                        const auto t0 = std::chrono::steady_clock::now();
+                        client.submit(acva::stt::SttRequest{
+                            .turn = job.turn, .slice = slice,
+                            .cancel = std::make_shared<acva::dialogue::CancellationToken>(),
+                            .lang_hint = job.lang,
+                        }, cb);
+                        const auto ms = std::chrono::duration_cast<
+                            std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - t0).count();
+
+                        // Single-source diff signal: char count + first
+                        // 80 chars of each, so the user can eyeball
+                        // dropouts without grepping for the whole list.
+                        auto trim = [](std::string s) {
+                            if (s.size() > 80) s = s.substr(0, 80) + "…";
+                            return s;
+                        };
+                        if (!err.empty()) {
+                            acva::log::event("self_listen", "self_listen",
+                                job.turn,
+                                {{"seq", std::to_string(job.seq)},
+                                 {"expected_chars", std::to_string(job.expected.size())},
+                                 {"audio_ms", std::to_string(
+                                     job.samples.size() * 1000U / job.native_rate)},
+                                 {"stt_ms", std::to_string(ms)},
+                                 {"error", std::move(err)}});
+                        } else {
+                            acva::log::event("self_listen", "self_listen",
+                                job.turn,
+                                {{"seq", std::to_string(job.seq)},
+                                 {"expected_chars", std::to_string(job.expected.size())},
+                                 {"heard_chars", std::to_string(heard.size())},
+                                 {"audio_ms", std::to_string(
+                                     job.samples.size() * 1000U / job.native_rate)},
+                                 {"stt_ms", std::to_string(ms)},
+                                 {"expected", trim(job.expected)},
+                                 {"heard", trim(heard)}});
+                        }
+                    }
+                });
+            self_listen_thread_ = std::move(sl_worker);
+            self_listen_stop_ = sl_stop;
+            self_listen_cv_   = sl_cv;
+            acva::log::info("main",
+                "self-listen enabled: every TTS sentence will be re-transcribed");
+        }
 
         // Tiny poller thread: every 500 ms, push the engine + queue
         // counters into the metrics gauges. The audio thread can't
@@ -1075,6 +1286,16 @@ int main(int argc, char** argv) {
     // M3: stop tts producer first so no new chunks land in the queue,
     // then drain the engine, then everything else.
     if (tts_bridge)     tts_bridge->stop();
+    // Self-listen worker drains AFTER the bridge stops emitting new
+    // jobs but BEFORE the playback engine winds down (so the worker
+    // can finish its in-flight STT call without racing teardown).
+    if (self_listen_thread_.joinable()) {
+        if (self_listen_stop_) {
+            self_listen_stop_->store(true, std::memory_order_release);
+        }
+        if (self_listen_cv_) self_listen_cv_->notify_all();
+        self_listen_thread_.join();
+    }
     if (playback_engine) playback_engine->stop();
     if (tts_enabled) {
         playback_metrics_stop.store(true, std::memory_order_release);
@@ -1083,6 +1304,10 @@ int main(int argc, char** argv) {
     supervisor.stop();
     fsm.stop();
     control.reset();
+    if (vram_monitor_thread.joinable()) {
+        vram_monitor_stop.store(true, std::memory_order_release);
+        vram_monitor_thread.join();
+    }
     bus.shutdown();
 
     acva::log::info("main", "acva exited cleanly");

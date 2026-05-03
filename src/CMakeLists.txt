@@ -24,6 +24,7 @@ add_library(acva_core STATIC
     demos/tone.cpp
     demos/transcribe.cpp
     demos/tts.cpp
+    demos/wedge.cpp
     dialogue/fsm.cpp
     dialogue/manager.cpp
     dialogue/sentence_splitter.cpp

@@ -74,6 +74,21 @@ public:
     void start();
     void stop();
 
+    // M6 — self-listen feedback loop. When set, the bridge accumulates
+    // a copy of each sentence's PCM at the voice's NATIVE sample rate
+    // (no device-rate resample) and invokes this callback once the
+    // synthesis finishes successfully. Wired in main.cpp to a worker
+    // thread that pushes the audio through STT and logs the
+    // expected-vs-heard pair. Fires AFTER TtsFinished publishes.
+    using SelfListenSink = std::function<void(
+        event::TurnId turn,
+        event::SequenceNo seq,
+        std::string  expected_text,
+        std::string  lang,
+        std::uint32_t native_sample_rate_hz,
+        std::vector<std::int16_t> samples)>;
+    void set_self_listen_sink(SelfListenSink sink) { self_listen_ = std::move(sink); }
+
     // Counters for /metrics + tests.
     [[nodiscard]] std::uint64_t sentences_synthesized() const noexcept {
         return synthesized_.load(std::memory_order_relaxed);
@@ -132,6 +147,8 @@ private:
     std::atomic<std::uint64_t> synthesized_{0};
     std::atomic<std::uint64_t> cancelled_{0};
     std::atomic<std::uint64_t> errored_{0};
+
+    SelfListenSink self_listen_;
 };
 
 } // namespace acva::dialogue

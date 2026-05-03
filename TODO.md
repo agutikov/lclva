@@ -1,11 +1,18 @@
 
 
 
-add speech tempo wpm config, set default 200
+
+analyze C++ code, find files bigger than 1000 lines and refactor
+
+especially refactor main.cpp, other parts of the project has good architecture, follow that modular architecture
+
+
+
 
 
 filter llm output because it may hallucinate and mix languages in answer
 leave only selected languge
+
 
 
 --------------------------------------------------------------------------------

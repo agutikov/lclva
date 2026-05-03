@@ -119,15 +119,24 @@ std::string json_escape(std::string_view in) {
     return out;
 }
 
+// Native-speech baseline used to translate cfg.tts.tempo_wpm into the
+// OpenAI-compat `speed` multiplier. Piper voices land near 160 wpm at
+// speed=1.0; Kokoro is similar. The conversion is approximate — the
+// actual cadence depends on the voice and on punctuation density —
+// but it gives the user a consistent knob with familiar units.
+constexpr double kNativeWpm = 160.0;
+
 // Build the request body. Format is OpenAI-compatible:
-//   { "model":..., "input":..., "voice":..., "response_format": "pcm" }
+//   { "model":..., "input":..., "voice":..., "speed":..., "response_format":"pcm" }
 // `voice` is omitted when the route doesn't carry one (single-speaker
-// Piper voices); Speaches accepts either form.
+// Piper voices); Speaches accepts either form. `speed` is omitted when
+// `tempo_wpm` is 0 (= native cadence).
 std::string build_body(std::string_view model_id,
                         std::string_view voice_id,
-                        std::string_view text) {
+                        std::string_view text,
+                        std::uint32_t   tempo_wpm) {
     std::string body;
-    body.reserve(text.size() + 128);
+    body.reserve(text.size() + 160);
     body += R"({"model":")";
     body += json_escape(model_id);
     body += R"(","input":")";
@@ -137,6 +146,10 @@ std::string build_body(std::string_view model_id,
         body += R"("voice":")";
         body += json_escape(voice_id);
         body += R"(",)";
+    }
+    if (tempo_wpm > 0) {
+        const double speed = static_cast<double>(tempo_wpm) / kNativeWpm;
+        body += fmt::format(R"("speed":{:.3f},)", speed);
     }
     body += R"("response_format":"pcm"})";
     return body;
@@ -215,7 +228,8 @@ void OpenAiTtsClient::submit(TtsRequest req, TtsCallbacks cb) {
     if (!url.empty() && url.back() == '/') url.pop_back();
     url += "/audio/speech";
 
-    const std::string body = build_body(route.model_id, route.voice_id, req.text);
+    const std::string body = build_body(
+        route.model_id, route.voice_id, req.text, cfg_.tempo_wpm);
 
     CURL* curl = curl_easy_init();
     if (!curl) {

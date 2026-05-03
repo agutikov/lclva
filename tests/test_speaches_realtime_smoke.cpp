@@ -72,12 +72,13 @@ bool speaches_reachable() {
     return r && r->status == 200;
 }
 
-// Same production STT model as config/default.yaml,
-// download-speaches-models.sh, and `acva demo stt`. Sharing one
-// model across all integration tests keeps the GPU footprint
-// minimal — Speaches loads it once and keeps it warm for the rest
-// of the run.
-constexpr const char* kRealtimeModel = "deepdml/faster-whisper-large-v3-turbo-ct2";
+// Same production STT model as config/default.yaml and
+// scripts/download-stt.sh. Sharing one model across all integration
+// tests keeps the GPU footprint minimal — Speaches loads it once
+// and keeps it warm for the rest of the run. Switched from
+// large-v3-turbo to faster-whisper-medium on 2026-05-03 (M6 OOM
+// episode); see tests/test_speaches_smoke.cpp for the rationale.
+constexpr const char* kRealtimeModel = "Systran/faster-whisper-medium";
 
 } // namespace
 

@@ -32,12 +32,22 @@ until curl -fsS "${URL}/health" >/dev/null 2>&1; do
 done
 echo "  /health 200 OK"
 
-# STT — multilingual faster-whisper-large-v3-turbo (~1.6 GB float16).
-# Smaller distilled decoder over the same large-v3 encoder; fits
-# alongside llama-7B-Q4 on an 8 GB GPU. See config/default.yaml's
-# stt.model comment for the rationale.
+# STT — pulls multiple options so the orchestrator can switch via
+# `cfg.stt.model` without a re-download:
+#
+#   • Systran/faster-whisper-large-v3 (~3.5 GB resident) — best
+#     multilingual quality; current default but only fits on 8 GB
+#     when llama is stopped or running smaller.
+#   • deepdml/faster-whisper-large-v3-turbo-ct2 (~2.5 GB) —
+#     near-best, fits-in-principle alongside default llama but
+#     encoder workspace can OOM under sustained load.
+#   • Systran/faster-whisper-medium (~2.6 GB) — comfortable
+#     margin alongside default llama; previous default. See
+#     config/default.yaml's stt.model comment.
 MODELS=$(cat <<'EOF'
+Systran/faster-whisper-large-v3
 deepdml/faster-whisper-large-v3-turbo-ct2
+Systran/faster-whisper-medium
 EOF
 )
 

@@ -60,4 +60,15 @@ private:
     const config::SttConfig& cfg_;
 };
 
+// Force a Whisper model load by submitting a 1 s silent transcription.
+// Blocks until Speaches returns (success or HTTP error). Used by
+// main.cpp at pipeline open and by `acva demo soak` to absorb the
+// cold-load latency before any throughput measurement starts.
+struct WarmupResult {
+    bool        ok = false;
+    long long   ms = 0;
+    std::string error;        // empty on success
+};
+[[nodiscard]] WarmupResult warmup(const config::SttConfig& cfg);
+
 } // namespace acva::stt

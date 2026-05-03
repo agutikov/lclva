@@ -19,6 +19,7 @@ add_library(acva_core STATIC
     demos/health.cpp
     demos/llm.cpp
     demos/loopback.cpp
+    demos/soak.cpp
     demos/stt.cpp
     demos/tone.cpp
     demos/transcribe.cpp

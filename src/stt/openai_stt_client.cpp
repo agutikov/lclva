@@ -217,4 +217,34 @@ void OpenAiSttClient::submit(SttRequest req, SttCallbacks cb) {
     }
 }
 
+WarmupResult warmup(const config::SttConfig& cfg) {
+    WarmupResult r;
+    if (cfg.base_url.empty()) {
+        r.error = "stt.base_url empty";
+        return r;
+    }
+    constexpr std::uint32_t kRateHz = 16000;
+    std::vector<std::int16_t> silence(kRateHz, std::int16_t{0});
+    const auto now = std::chrono::steady_clock::now();
+    auto fixture = std::make_shared<audio::AudioSlice>(
+        std::move(silence), kRateHz, now, now);
+
+    OpenAiSttClient client(cfg);
+    SttCallbacks cb;
+    cb.on_final = [](event::FinalTranscript) {};
+    cb.on_error = [&](std::string e) { r.error = std::move(e); };
+
+    const auto t0 = std::chrono::steady_clock::now();
+    client.submit(SttRequest{
+        .turn = event::kNoTurn,
+        .slice = fixture,
+        .cancel = std::make_shared<dialogue::CancellationToken>(),
+        .lang_hint = cfg.language,
+    }, cb);
+    r.ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count();
+    r.ok = r.error.empty();
+    return r;
+}
+
 } // namespace acva::stt

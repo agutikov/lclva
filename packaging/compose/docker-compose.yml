@@ -81,8 +81,22 @@ services:
     # and committed utterances never produce transcripts. Setting
     # it to the container's own listener forces a real loopback
     # HTTP request and the route resolves correctly.
+    #
+    # WHISPER__INFERENCE_DEVICE / WHISPER__COMPUTE_TYPE: passed
+    # straight to faster-whisper's CTranslate2 backend at model
+    # load. `int8_float16` keeps weights as int8 (≈ 30% VRAM
+    # reduction vs float16) but runs activations in float16 so
+    # GPU Tensor cores stay engaged — practical sweet spot for
+    # the 8 GB RTX 4060 + llama-7B-Q4 combo. Override per
+    # environment to compare:
+    #   - `default`     — model's stored type (often float16)
+    #   - `float16`     — full FP16
+    #   - `int8_float16`— int8 weights, FP16 activations (default)
+    #   - `int8`        — pure int8 (CPU-only, slow on GPU)
     environment:
       LOOPBACK_HOST_URL: http://localhost:8000
+      WHISPER__INFERENCE_DEVICE: ${ACVA_WHISPER_DEVICE:-cuda}
+      WHISPER__COMPUTE_TYPE: ${ACVA_WHISPER_COMPUTE_TYPE:-int8_float16}
     volumes:
       - ${ACVA_MODELS_DIR:-${HOME}/.local/share/acva/models}/speaches:/home/ubuntu/.cache/huggingface/hub
     deploy:

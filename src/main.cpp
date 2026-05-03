@@ -690,6 +690,28 @@ int main(int argc, char** argv) {
         audio_pipeline = std::make_unique<acva::audio::AudioPipeline>(
             std::move(apc), *capture_ring, *audio_clock, bus);
 
+        // M6 — warm Whisper into VRAM before opening the mic. Without
+        // this the first user turn pays the full model-load cost
+        // (3-5 s for medium / large-v3 / int8_float16 quantised
+        // models), which manifests as a long silence after the user
+        // stops speaking. Synchronous + best-effort: errors are logged
+        // and ignored so a warm-up failure doesn't block the rest of
+        // the orchestrator coming up.
+        if (cfg.stt.warmup_on_startup && !cfg.stt.base_url.empty()) {
+            acva::log::info("main", fmt::format(
+                "warming up STT (model={}) — blocking until ready…",
+                cfg.stt.model));
+            const auto r = acva::stt::warmup(cfg.stt);
+            if (r.ok) {
+                acva::log::info("main", fmt::format(
+                    "STT warm-up complete in {} ms", r.ms));
+            } else {
+                acva::log::warn("main", fmt::format(
+                    "STT warm-up failed in {} ms ({}); first user turn "
+                    "will pay the model-load cost", r.ms, r.error));
+            }
+        }
+
         capture_engine->start();
         audio_pipeline->start();
 

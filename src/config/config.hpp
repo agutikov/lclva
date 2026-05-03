@@ -106,6 +106,14 @@ struct SttConfig {
     // demos and when libdatachannel isn't available. Default true so
     // a normal `acva` run uses streaming.
     bool streaming = true;
+    // M6 — force a tiny synthetic transcription at acva startup to
+    // pre-load the Whisper model into VRAM. Without this, the first
+    // user turn pays the model-load cost (~3 s for medium /
+    // large-v3 / int8_float16 quantised models). Synchronous: blocks
+    // pipeline-open until the warm-up returns. Default true; flip
+    // off for fast-startup tests or when running against a remote
+    // Speaches that's already warm.
+    bool warmup_on_startup = true;
     ServiceHealthConfig health;
 };
 

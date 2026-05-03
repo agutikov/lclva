@@ -73,15 +73,31 @@ stt:
   # The `health` block still points at the legacy whisper.cpp service
   # (port 8082) until M4B Step 6 retires that container.
   base_url: "http://127.0.0.1:8090/v1"
-  # `large-v3-turbo` is a smaller distilled decoder over the same
-  # large-v3 encoder. ~1.6 GB float16 vs ~3.1 GB for plain large-v3 —
-  # fits alongside llama-7B-Q4 on an 8 GB card. Quality is very close
-  # to large-v3 on multilingual benchmarks; the WER gap is well under
-  # mic + room noise variability for our use case. Switch to plain
-  # `Systran/faster-whisper-large-v3` when the workstation has enough
-  # VRAM headroom (>= 12 GB) for both models in float16.
-  model: "deepdml/faster-whisper-large-v3-turbo-ct2"
+  # `Systran/faster-whisper-large-v3` (~3.5 GB resident) — best
+  # multilingual quality. Fits cleanly on the 8 GB RTX 4060 only
+  # **when llama-server is stopped** (or running with a much smaller
+  # n_ctx / Q3 quant). With the default llama-7B-Q4 (~5 GB resident)
+  # this model OOMs at first transcription.
+  #
+  # Other options (see `scripts/download-stt.sh`):
+  #   - `deepdml/faster-whisper-large-v3-turbo-ct2` (~2.5 GB) —
+  #     near-best quality, fits-in-principle alongside llama but the
+  #     encoder workspace can OOM under sustained load (M6 episode
+  #     2026-05-03); needs llama VRAM relief to be reliable.
+  #   - `Systran/faster-whisper-medium` (~2.6 GB) — comfortable
+  #     margin alongside default llama; previous default. Quality
+  #     drop is mild on clean close-mic speech but noticeable on
+  #     accents/noise.
+  #   - `Systran/faster-whisper-small` (~700 MB) — last-resort
+  #     fallback if memory pressure forces it.
+  model: "Systran/faster-whisper-large-v3"
   request_timeout_seconds: 30
+  # M6 — force a 1-second silent transcription at acva startup so the
+  # Whisper model loads into VRAM before the first real user turn. With
+  # quantised models (int8_float16) the cold-load takes 3-5 s; without
+  # warm-up that latency lands on the user's first sentence. Set false
+  # to skip when running against a remote Speaches that's already warm.
+  warmup_on_startup: true
   health:
     health_url: "http://127.0.0.1:8090/health"
     fail_pipeline_if_down: false   # becomes true in M5 once the dialogue path needs STT

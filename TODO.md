@@ -108,3 +108,5 @@ analyze target audiences, usage patterns, required functions
 
 tg on-call assistent
 
+low-latency online voice translation
+

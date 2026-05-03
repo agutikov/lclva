@@ -12,6 +12,7 @@ namespace acva::demos {
 int run_aec       (const config::Config&);
 int run_capture   (const config::Config&);
 int run_chat      (const config::Config&);
+int run_soak      (const config::Config&);
 int run_fsm       (const config::Config&);
 int run_health    (const config::Config&);
 int run_llm       (const config::Config&);
@@ -23,7 +24,7 @@ int run_tts       (const config::Config&);
 
 namespace {
 
-constexpr std::array<Demo, 11> kDemos{{
+constexpr std::array<Demo, 12> kDemos{{
     {"fsm",      "M0",
      "synthetic FSM driver runs 3 turns end-to-end (no backends needed)",
      run_fsm},
@@ -57,6 +58,9 @@ constexpr std::array<Demo, 11> kDemos{{
     {"aec",      "M6",
      "synthetic AEC validation: stimulus → loopback → APM → ERLE convergence",
      run_aec},
+    {"soak",     "M6",
+     "5-min Speaches TTS+STT throughput + VRAM monitor (silent; for leak detection)",
+     run_soak},
 }};
 
 } // namespace

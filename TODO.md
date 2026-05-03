@@ -3,9 +3,6 @@
 
 
 
-what left for M6?
-
-
 
 filter llm output because it may hallucinate and mix languages in answer
 leave only selected languge
@@ -78,6 +75,10 @@ generate copy of user personality
 
 multi-context with single model
 multi-model runtime
+
+
+multi-user conversation -> interleaved STT - solution???
+
 
 
 game NPC character design

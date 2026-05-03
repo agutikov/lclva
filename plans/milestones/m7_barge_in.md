@@ -2,7 +2,7 @@
 
 **Estimate:** 1 week.
 
-**Depends on:** M5 (partial transcripts), M6 (AEC). Both are hard prerequisites — barge-in without AEC is a non-starter in speaker mode (the assistant interrupts itself).
+**Depends on:** M5 (partial transcripts), M6 (AEC wiring) **and M6B (AEC hardware acceptance — gates 1, 3, 4)**. All three are hard prerequisites — barge-in without *working* AEC is a non-starter in speaker mode (the assistant interrupts itself). M6 alone is necessary but not sufficient: the in-process APM wiring landed in M6, but on hardware where the codec DSP or speaker non-linearity defeats it (e.g., the dev laptop's ALC257), M6B's PipeWire system-AEC fallback is what actually keeps phantom triggers below the noise floor.
 
 **Blocks:** nothing — M8 hardens what's already there.
 

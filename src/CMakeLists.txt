@@ -13,6 +13,7 @@ add_library(acva_core STATIC
     config/config.cpp
     config/paths.cpp
     demos/aec.cpp
+    demos/aec_hw.cpp
     demos/capture.cpp
     demos/chat.cpp
     demos/demo.cpp

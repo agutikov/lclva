@@ -12,12 +12,17 @@ Streaming partial STT with speculative LLM start (M5 — three options on the ta
 
 ## Status
 
-**M0 + M1 + M2 + M3 + M4 + M4B + M5 + M6 (steps 1–6) complete.** Test suite split into `acva_unit_tests` (260 cases, no external deps) and `acva_integration_tests` (13 cases, real Silero model + live Speaches). Both pass green on the dev workstation without any env vars; integration tests resolve assets via the XDG defaults main.cpp uses. **Compose stack is `llama` + `speaches` only** — Speaches replaces standalone `whisper.cpp/server` (STT) and `piper.http_server` (TTS) behind one OpenAI-API-compatible surface. TTS goes through `OpenAiTtsClient` (libcurl streaming PCM); STT through `OpenAiSttClient` (multipart `POST /v1/audio/transcriptions`, blocking, request/response — M5 swaps for streaming/realtime). `PlaybackEngine` carries a per-turn pre-buffer threshold (`cfg.playback.prefill_ms`, default 100 ms) that absorbs streaming-TTS chunk-arrival jitter — measured 56–71% fewer underruns without any total-latency regression. Demos `acva demo {tts,chat,stt}` exercise the new wiring; `acva demo stt` is a self-contained TTS-fixture-audio → STT round-trip. STT model is `Systran/faster-whisper-large-v3` running with `WHISPER__COMPUTE_TYPE=int8_float16` (set in compose env); fits cleanly when llama is stopped or running smaller. With the default llama-7B-Q4 still loaded, fall back to `Systran/faster-whisper-medium` — see memory note `project_gpu_cdi_and_vram.md` for the 8 GB VRAM budget rationale and the test-vs-config alignment trap. **Next: M7 — barge-in.** M6 Step 7 (real-hardware VAD re-baseline +
-the > 25 dB ERLE acceptance gate) waits on a measurement session
-with the dev workstation's actual speakers + mic; the synthetic
-demo (`acva demo aec`) gives ~22 dB mic-energy reduction on a 1 kHz
-fixture and confirms the loopback → APM → cleaned-mic wiring is
-live.
+**M0 + M1 + M2 + M3 + M4 + M4B + M5 + M6 (steps 1–6) complete.** Test suite split into `acva_unit_tests` (260 cases, no external deps) and `acva_integration_tests` (13 cases, real Silero model + live Speaches). Both pass green on the dev workstation without any env vars; integration tests resolve assets via the XDG defaults main.cpp uses. **Compose stack is `llama` + `speaches` only** — Speaches replaces standalone `whisper.cpp/server` (STT) and `piper.http_server` (TTS) behind one OpenAI-API-compatible surface. TTS goes through `OpenAiTtsClient` (libcurl streaming PCM); STT through `OpenAiSttClient` (multipart `POST /v1/audio/transcriptions`, blocking, request/response — M5 swaps for streaming/realtime). `PlaybackEngine` carries a per-turn pre-buffer threshold (`cfg.playback.prefill_ms`, default 100 ms) that absorbs streaming-TTS chunk-arrival jitter — measured 56–71% fewer underruns without any total-latency regression. Demos `acva demo {tts,chat,stt}` exercise the new wiring; `acva demo stt` is a self-contained TTS-fixture-audio → STT round-trip. STT model is `Systran/faster-whisper-large-v3` running with `WHISPER__COMPUTE_TYPE=int8_float16` (set in compose env); fits cleanly when llama is stopped or running smaller. With the default llama-7B-Q4 still loaded, fall back to `Systran/faster-whisper-medium` — see memory note `project_gpu_cdi_and_vram.md` for the 8 GB VRAM budget rationale and the test-vs-config alignment trap. **Next: M6B — AEC hardware verification + system-AEC fallback.** M6's
+in-process APM wiring is correct (synthetic demo passes; full unit +
+integration suite green) but the hardware acceptance gates (1, 3, 4)
+fail on the dev workstation's laptop codec — `acva demo aec-hw` shows
+ERLE pinned at 0.2 dB despite a converged delay estimate, attributable
+to ALC257 codec DSP + speaker non-linearity at usable volume. M7
+(barge-in) cannot proceed without working AEC: speaker bleed would
+trigger phantom interruptions. M6B is the bridge — try lower
+amplitude, USB mic, then PipeWire's `module-echo-cancel` as a
+production fallback. See `docs/aec_report.md` for the full M6
+analysis and `plans/milestones/m6b_aec_hardware.md` for the M6B plan.
 
 **M6 (AEC):** PlaybackEngine now taps the chunk it just emitted into
 an `audio::LoopbackSink` ring (sized by `cfg.audio.loopback.ring_seconds`,
@@ -116,11 +121,11 @@ If you find yourself recommending Boost.Cobalt, C++23 modules, an embedded infer
 
 ## Milestone Order (Adjusted from Original)
 
-`M0 skeleton → M1 LLM+memory (split: A complete, B Compose stack, C remaining) → M2 supervision → M3 TTS+playback → M4 audio+VAD → M4B Speaches consolidation → M5 STT → M6 AEC → M7 barge-in → M8A admin/state → M8B observability/soak → M8C distribution + wake-word → M9 streaming partials + speculative LLM → M10 conversational UX (adaptive endpointer + address detection)`
+`M0 skeleton → M1 LLM+memory (split: A complete, B Compose stack, C remaining) → M2 supervision → M3 TTS+playback → M4 audio+VAD → M4B Speaches consolidation → M5 STT → M6 AEC → M6B AEC hardware verification + system-AEC fallback → M7 barge-in → M8A admin/state → M8B observability/soak → M8C distribution + wake-word → M9 streaming partials + speculative LLM → M10 conversational UX (adaptive endpointer + address detection)`
 
 Three reorderings / insertions vs. the original plan, all intentional:
 - **Supervision (M2) before TTS (M3)** — llama.cpp will crash during long-context dev; retrofitting supervision is painful.
-- **AEC (M6) before barge-in (M7)** — without AEC the assistant's own voice triggers VAD; you'll spend a week debugging phantom interruptions.
+- **AEC (M6) before barge-in (M7)** — without AEC the assistant's own voice triggers VAD; you'll spend a week debugging phantom interruptions. M6B inserted because M6's in-process APM doesn't fully cancel on the dev laptop's codec; barge-in needs *working* AEC, not just wired AEC.
 - **M4B Speaches consolidation between M4 and M5** — Speaches packages STT + TTS behind one OpenAI-compatible surface and matches CLAUDE.md pillar #5 ("don't write a custom HTTP wrapper around a backend that already ships one"). Doing this swap *before* M5 closes the M5 L1 decision (A/B/C) up front and lets M5 focus on streaming partials + speculation rather than mixing engine selection in. See `plans/milestones/m4b_speaches_consolidation.md`.
 
 Don't propose moving these back without strong reasons.

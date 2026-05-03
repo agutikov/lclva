@@ -11,8 +11,9 @@ Detailed per-milestone plans. The high-level table lives in `../project_design.m
 | M4  | `m4_audio_vad.md` | ✅ landed   |
 | M4B | `m4b_speaches_consolidation.md` | ✅ landed |
 | M5  | `m5_streaming_stt.md` | ✅ landed 2026-05-03 |
-| M6  | `m6_aec.md` | planned     |
-| M7  | `m7_barge_in.md` | planned     |
+| M6  | `m6_aec.md` | code-complete 2026-05-03; hardware gates blocked → see M6B |
+| M6B | `m6b_aec_hardware.md` | planned (USB-mic / PipeWire system-AEC fallback) |
+| M7  | `m7_barge_in.md` | planned (blocked on M6B) |
 | M8A | `m8a_admin_state.md` | planned (hot-reload, privacy, memory CLI, watchdog+restart, model orchestration) |
 | M8B | `m8b_observability.md` | planned (soak, dashboard, OTLP) |
 | M8C | `m8c_distribution.md` | planned (wake-word, packaging, docs, final sweep) |

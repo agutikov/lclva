@@ -179,7 +179,7 @@ audio:
   capture_enabled: true
   sample_rate_hz: 48000
   buffer_frames: 480         # 10 ms @ 48 kHz
-  half_duplex_while_speaking: true
+  half_duplex_while_speaking: false
   half_duplex_hangover_ms: 200
   # M6 — AEC reference-signal loopback ring. The PlaybackEngine writes
   # the chunk it just emitted (with a wall-clock timestamp) into this

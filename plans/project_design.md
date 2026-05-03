@@ -752,6 +752,7 @@ digraph Milestones {
   M4B [fillcolor="#6366F1", fontcolor=white, label="M4B\nSpeaches\nConsolidation\n~6d"];
   M5  [fillcolor="#10B981", fontcolor=white, label="M5\nStreaming STT\n(no partials)\n~1w"];
   M6  [fillcolor="#2563EB", fontcolor=white, label="M6\nAEC / NS / AGC\n1-2w"];
+  M6B [fillcolor="#1D4ED8", fontcolor=white, label="M6B\nAEC HW verification\n+ system-AEC\nfallback\n~4d"];
   M7  [fillcolor="#DC2626", fontcolor=white, label="M7\nBarge-In\n1w"];
   M8A [fillcolor="#16A34A", fontcolor=white, label="M8A\nAdmin / State\n2w"];
   M8B [fillcolor="#15803D", fontcolor=white, label="M8B\nObservability\n+ Soak\n1w"];
@@ -759,11 +760,11 @@ digraph Milestones {
   M9  [fillcolor="#9333EA", fontcolor=white, label="M9\nStreaming Partials\n+ Speculation\n1.5-2w"];
   M10 [fillcolor="#A855F7", fontcolor=white, label="M10\nConversational UX\n1.5w"];
 
-  M0 -> M1 -> M2 -> M3 -> M4 -> M4B -> M5 -> M6 -> M7 -> M8A -> M8B -> M8C -> M9 -> M10;
+  M0 -> M1 -> M2 -> M3 -> M4 -> M4B -> M5 -> M6 -> M6B -> M7 -> M8A -> M8B -> M8C -> M9 -> M10;
 
   // Highlight critical reorderings
   M2 -> M3 [label="supervision\nbefore TTS", fontcolor="#0891B2", color="#0891B2", style=dashed, constraint=false];
-  M6 -> M7 [label="AEC before\nbarge-in", fontcolor="#DC2626", color="#DC2626", style=dashed, constraint=false];
+  M6B -> M7 [label="working AEC\nbefore barge-in", fontcolor="#DC2626", color="#DC2626", style=dashed, constraint=false];
 }
 ```
 

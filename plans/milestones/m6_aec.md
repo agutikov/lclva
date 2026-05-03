@@ -6,16 +6,25 @@
 
 **Blocks:** M7 (barge-in needs AEC to avoid TTS-echo false triggers).
 
-> **Status (2026-05-03):** Steps 1–6 + the AEC demo landed against the
+> **Status (2026-05-03):** Steps 1–6 + both AEC demos landed against the
 > Arch system package `webrtc-audio-processing-1` 1.3 (BSD-3-Clause).
 > CMake gate is `ACVA_HAVE_WEBRTC_APM`; missing-package builds compile
-> the wrapper as a pass-through stub. Synthetic round-trip (
-> `acva demo aec`) gives ~22 dB mic-energy reduction on a 1 kHz
-> tone-into-50 ms-delayed-echo fixture; APM's internal `delay_ms`
-> stat converges to ~70 ms (50 ms simulated air + ~20 ms internal
-> processing). Step 7 (real-hardware VAD re-baseline + the
-> acceptance gates that need a quiet room) is pending verification
-> on the dev workstation's actual speaker + mic setup.
+> the wrapper as a pass-through stub. Synthetic round-trip
+> (`acva demo aec`) gives ~22 dB mic-energy reduction on a 1 kHz
+> tone fixture; full unit + integration suites green.
+>
+> **Hardware acceptance gates 1, 3, 4 BLOCKED.** `acva demo aec-hw`
+> with real speaker + mic on the dev laptop reports ERLE pinned at
+> 0.2 dB despite a converged 28 ms delay estimate — root cause is
+> ALC257 codec DSP suppressing the reference signal + speaker
+> non-linearity at usable volume. Wiring is provably correct;
+> hardware pathology is the issue. Full analysis in
+> `docs/aec_report.md`.
+>
+> **Continuation: M6B** ([m6b_aec_hardware.md](m6b_aec_hardware.md))
+> — try lower amp, USB mic, then PipeWire's `module-echo-cancel` as
+> a system-AEC fallback. M7 (barge-in) is blocked on M6B because
+> phantom triggers from speaker bleed would defeat the whole point.
 
 ## Goal
 
@@ -212,7 +221,7 @@ audio:
     ring_seconds: 2          # how much loopback history to retain
 ```
 
-## Step 7 — Re-baseline VAD thresholds (PENDING hardware verification)
+## Step 7 — Re-baseline VAD thresholds (moved to M6B Step 4)
 
 After APM is in place, re-run the M4 false-start fixtures with the cleaned signal. Tune `vad.onset_threshold` and `vad.offset_threshold` if needed. Document any change in `plans/open_questions.md` as a tuning note (no new question; just an outcome).
 

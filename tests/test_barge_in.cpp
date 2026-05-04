@@ -93,7 +93,7 @@ TEST_CASE("barge_in: fires UserInterrupted when speaking and AEC not required") 
     fsm.start();
 
     InterruptionCollector collector(bus);
-    dlg::BargeInDetector detector(bus, fsm, /*apm=*/nullptr, default_cfg());
+    dlg::BargeInDetector detector(bus, fsm, /*apm=*/nullptr, /*system_aec=*/false, default_cfg());
     detector.start();
 
     const auto turn = drive_to_speaking(bus, fsm);
@@ -117,7 +117,7 @@ TEST_CASE("barge_in: ignores SpeechStarted when not Speaking") {
     fsm.start();
 
     InterruptionCollector collector(bus);
-    dlg::BargeInDetector detector(bus, fsm, /*apm=*/nullptr, default_cfg());
+    dlg::BargeInDetector detector(bus, fsm, /*apm=*/nullptr, /*system_aec=*/false, default_cfg());
     detector.start();
 
     // FSM is Listening — SpeechStarted should drive normal turn start, not
@@ -145,7 +145,7 @@ TEST_CASE("barge_in: cooldown suppresses fires within window") {
 
     auto c = default_cfg();
     c.cool_down_after_turn_ms = 200;       // 200 ms quiet window
-    dlg::BargeInDetector detector(bus, fsm, /*apm=*/nullptr, c);
+    dlg::BargeInDetector detector(bus, fsm, /*apm=*/nullptr, /*system_aec=*/false, c);
     detector.start();
 
     drive_to_speaking(bus, fsm);
@@ -171,7 +171,7 @@ TEST_CASE("barge_in: AEC required + null Apm suppresses") {
     fsm.start();
 
     auto c = default_cfg(/*require_aec=*/true);
-    dlg::BargeInDetector detector(bus, fsm, /*apm=*/nullptr, c);
+    dlg::BargeInDetector detector(bus, fsm, /*apm=*/nullptr, /*system_aec=*/false, c);
     detector.start();
 
     drive_to_speaking(bus, fsm);
@@ -192,7 +192,7 @@ TEST_CASE("barge_in: only fires once per turn") {
     fsm.start();
 
     InterruptionCollector collector(bus);
-    dlg::BargeInDetector detector(bus, fsm, /*apm=*/nullptr, default_cfg());
+    dlg::BargeInDetector detector(bus, fsm, /*apm=*/nullptr, /*system_aec=*/false, default_cfg());
     detector.start();
 
     drive_to_speaking(bus, fsm);
@@ -221,7 +221,7 @@ TEST_CASE("barge_in: on_fired callback receives turn + timestamp") {
     std::atomic<ev::TurnId> got_turn{ev::kNoTurn};
     std::atomic<bool> got_ts{false};
 
-    dlg::BargeInDetector detector(bus, fsm, /*apm=*/nullptr, default_cfg());
+    dlg::BargeInDetector detector(bus, fsm, /*apm=*/nullptr, /*system_aec=*/false, default_cfg());
     detector.set_on_fired(
         [&](ev::TurnId turn, std::chrono::steady_clock::time_point ts) {
             got_turn.store(turn, std::memory_order_release);
@@ -253,7 +253,7 @@ TEST_CASE("barge_in: disabled config is a no-op") {
     InterruptionCollector collector(bus);
     auto c = default_cfg();
     c.enabled = false;
-    dlg::BargeInDetector detector(bus, fsm, /*apm=*/nullptr, c);
+    dlg::BargeInDetector detector(bus, fsm, /*apm=*/nullptr, /*system_aec=*/false, c);
     detector.start();
 
     drive_to_speaking(bus, fsm);
@@ -262,6 +262,40 @@ TEST_CASE("barge_in: disabled config is a no-op") {
     std::this_thread::sleep_for(80ms);
     CHECK(detector.fires_total() == 0);
     CHECK(collector.count() == 0);
+
+    detector.stop();
+    fsm.stop();
+    bus.shutdown();
+}
+
+TEST_CASE("barge_in: system AEC mode bypasses in-process APM gate") {
+    // M6B Path B regression: with cfg.apm.use_system_aec=true the
+    // in-process APM is intentionally a stub. Pre-fix the detector
+    // gated on apm_->aec_active() which returns false in that mode,
+    // so every SpeechStarted was suppressed and barge-in literally
+    // never fired in production. Pin the new behavior: when
+    // system_aec_active=true, AEC is treated as always-converged
+    // even with require_aec_converged=true and a null/stub Apm.
+    ev::EventBus bus;
+    dlg::TurnFactory turns;
+    dlg::Fsm fsm(bus, turns);
+    fsm.start();
+
+    InterruptionCollector collector(bus);
+    auto c = default_cfg(/*require_aec=*/true);  // strict gate ON
+    dlg::BargeInDetector detector(bus, fsm,
+                                   /*apm=*/nullptr,
+                                   /*system_aec=*/true,    // ← the fix
+                                   c);
+    detector.start();
+
+    const auto turn = drive_to_speaking(bus, fsm);
+    bus.publish(ev::SpeechStarted{ .turn = 0 });
+
+    REQUIRE(wait_for(200ms, [&]{ return collector.count() >= 1; }));
+    CHECK(collector.last_turn() == turn);
+    CHECK(detector.fires_total() == 1);
+    CHECK(detector.suppressed_aec() == 0);  // not gated on AEC
 
     detector.stop();
     fsm.stop();

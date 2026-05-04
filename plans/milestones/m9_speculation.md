@@ -200,3 +200,53 @@ speculation for the rest of the minute.
 | Speculative restart thrash | Conservative defaults; rate-limit; emit warning on disable |
 | Speculative LLM run wastes GPU cycles | Hard cap by `speculation.max_restarts_per_minute`; report waste in metrics |
 | Race: `FinalTranscript` arrives before speculation is set up | Reconciliation handles both orders; FSM tests cover the race |
+
+## Known issues to address in M9
+
+- **Whisper hallucinations on the realtime STT path.** Surfaced 2026-05-04
+  while running `scripts/barge-in-probe.py` against M6B Path B AEC.
+  During barge-in conditions (user speaking under low-SNR audio),
+  Speaches' faster-whisper backend falls back to memorised
+  YouTube-subtitle artifacts:
+  `Корректор А.Кулакова`, `Субтитры сделал DimaTorzok`,
+  `Субтитры создавал DimaTorzok`, `Продолжение следует…`,
+  `Спасибо за внимание`, English equivalents like
+  `Thank you for watching` and `Subscribe and like`. The probe reported
+  4/5 PASS but every one of the four was a hallucination.
+
+  M7 Bug 4 added an RMS gate at `audio::AudioPipeline`'s `SpeechEnded`
+  handler that drops `UtteranceReady` for low-RMS slices — but it ONLY
+  covers the M4B request/response path. The M5 realtime path streams
+  audio through `live_sink_` and commits on `SpeechEnded` directly; no
+  RMS gate. Whisper sees the bytes, returns a hallucination, the
+  realtime client publishes `FinalTranscript`, dialogue Manager
+  treats it as a real user turn, the LLM runs against fake input.
+
+  M9 owes the partials story; partials carry the same hallucination
+  risk (an early "Субт" prefix would speculate against junk input).
+  Both must be addressed when partials land:
+
+  1. **Hallucination blocklist** in dialogue Manager — pattern-match
+     on `FinalTranscript.text` and `PartialTranscript.text`; matches
+     are suppressed before reaching the splitter / speculator. List
+     lives in `cfg.stt.hallucination_patterns` (substring match,
+     case-insensitive). Distinctive substrings only — bare
+     "Пожалуйста" stays valid because real users say it.
+  2. **Realtime-path RMS gate** — `RealtimeSttClient` keeps a rolling
+     RMS of audio it pushed in the current utterance window; drops
+     the resulting `FinalTranscript` (and any pending partials) if
+     below `cfg.stt.min_utterance_rms`. Mirrors the M4B-side gate.
+  3. **`scripts/barge-in-probe.py`** — same blocklist applied to its
+     own PASS/FAIL classifier so the probe matches reality. Mirror of
+     the C++ patterns; ~5 lines.
+
+  These don't belong earlier than M9 because M9 is the first
+  milestone to actually consume partials — and any half-fix that
+  filters only finals leaves partials feeding speculation off
+  hallucinated prefixes. Do it once, do it right.
+
+  See `plans/milestones/m10_conversational_ux.md` for the
+  complementary "address detection" angle: even a real, correctly-
+  transcribed phrase like "уберите камеру" might not be addressed at
+  the assistant. M9 handles the wire-level filter; M10 handles the
+  semantic one.

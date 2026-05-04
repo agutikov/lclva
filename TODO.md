@@ -2,6 +2,8 @@
 
 
 
+
+Add to M10:
 how to decrease mid-word delays?
 With high WPM tempo words became quick, but delays between words not so small, and speech
 feels fragmentary/chopped.
@@ -11,13 +13,16 @@ What if we synthesize not 200 WPM but 160 and then speedup playback?
 
 
 
-
+Add to M8A:
 create multiple system prompts
 - AI expert consultant
 - obsessed geeky AI enthusiast
 - ingenue, frivolous, absent-minded, playful and cheerful
 - aggressive milatary nazi
-- phylosopher and writer
+- ideomatic kommunist
+- abstract phylosopher and writer - materialist
+- abstract phylosopher and writer - idealist
+- robot Bender Rodrigez (from Futurama)
 What other existing settings may work well together with sysprompt defining personality?
 Let's combine them together in config and make registry of personalities.
 

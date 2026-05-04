@@ -28,8 +28,10 @@ bool erle_meets(const audio::Apm* apm, float threshold_db) noexcept {
 BargeInDetector::BargeInDetector(event::EventBus& bus,
                                   const Fsm& fsm,
                                   const audio::Apm* apm,
+                                  bool system_aec_active,
                                   const config::BargeInConfig& cfg)
-    : bus_(bus), fsm_(fsm), apm_(apm), cfg_(cfg) {}
+    : bus_(bus), fsm_(fsm), apm_(apm),
+      system_aec_active_(system_aec_active), cfg_(cfg) {}
 
 BargeInDetector::~BargeInDetector() { stop(); }
 
@@ -50,9 +52,10 @@ void BargeInDetector::start() {
         std::move(opts),
         [this](const event::SpeechStarted& e) { on_speech_started(e); });
     log::info("barge_in", fmt::format(
-        "active (require_aec_converged={}, min_erle={:.1f}dB, cooldown={}ms)",
+        "active (require_aec_converged={}, min_erle={:.1f}dB, cooldown={}ms, system_aec={})",
         cfg_.require_aec_converged, cfg_.min_aec_erle_db,
-        cfg_.cool_down_after_turn_ms));
+        cfg_.cool_down_after_turn_ms,
+        system_aec_active_));
 }
 
 void BargeInDetector::stop() {
@@ -69,6 +72,17 @@ std::chrono::steady_clock::time_point BargeInDetector::last_fired_at() const noe
 
 bool BargeInDetector::aec_ok() {
     if (!cfg_.require_aec_converged) return true;
+    // M6B Path B — PipeWire's `module-echo-cancel` runs upstream of
+    // acva and is always-on once `pactl load-module module-echo-cancel`
+    // succeeds at startup (orchestrator/system_aec.cpp). The in-process
+    // APM (apm_) is intentionally a no-op stub in that mode, so its
+    // aec_active() returns false permanently. Treat system AEC as
+    // "always converged" — without this, the detector permanently
+    // suppresses every SpeechStarted in the recommended default config
+    // and barge-in literally never fires in production. M6B gate 4
+    // (25-46 dB measured ERLE, see docs/aec_report.md § 6) is the
+    // standing convergence budget.
+    if (system_aec_active_) return true;
     if (!aec_active(apm_)) {
         suppressed_aec_.fetch_add(1, std::memory_order_relaxed);
         return false;

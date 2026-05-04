@@ -173,6 +173,38 @@ for anyway).
 | LLM classifier mis-fires on imperative-but-not-addressed ("close that door" to a pet) | Heuristic is the safer default; LLM mode is opt-in for users who want stronger filtering and accept the latency |
 | Two classifiers (wake-word + address) drift on what counts as "addressed" | Document precedence: wake-word gate first (M8C); address classifier inside its follow-up window (M10) |
 
+## Hallucination-handling layer (companion to M9)
+
+M9 owes the wire-level hallucination filter — pattern blocklist on
+`FinalTranscript.text` + realtime-path RMS gate (see
+`plans/milestones/m9_speculation.md` "Known issues to address in M9"
+for the full bug history from the 2026-05-04 barge-in-probe run).
+M10's address-detection layer is the semantic complement: even a
+real, correctly-transcribed phrase isn't necessarily addressed at
+the assistant.
+
+Three modes the address classifier should treat as "not-addressed",
+all of which arrive looking like normal `FinalTranscript` events:
+
+1. **Sub-utterance content the M9 blocklist missed.** New Whisper
+   hallucinations (`Спасибо за просмотр`, `Pewdiepie`, etc.) drift
+   into the wild as Whisper updates; M9 list is finite. Heuristic
+   classifier (Step 2.a) catches these via "no imperative verb /
+   no question form / no address token" → not addressed.
+2. **Side conversation.** User says something to a person in the
+   room while the assistant is speaking; mic catches it; STT
+   transcribes correctly. Should not interrupt the assistant.
+3. **Self-talk / thinking aloud.** "Hmm, where did I…" — real
+   speech, addressed at nobody. Same heuristic filter applies.
+
+This is why the barge-in-probe failure on 2026-05-04 (4/5 false
+PASS, all hallucinations) belongs in M9+M10 jointly, not as an M7
+patch: M9 catches the obvious YouTube-subtitle artifacts at the
+wire layer; M10 catches the broader "speech-but-not-for-me" class
+above the wire. A useful sanity check at M10 close: re-run
+`scripts/barge-in-probe.py` and expect 5/5 with content matching
+what the user actually said.
+
 ## Time breakdown
 
 | Step | Estimate |

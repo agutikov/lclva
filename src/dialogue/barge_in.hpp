@@ -35,9 +35,19 @@ namespace acva::dialogue {
 // is atomic; everything else is read/written from the subscriber thread.
 class BargeInDetector {
 public:
+    // `system_aec_active` is true when the orchestrator is running in
+    // M6B Path B mode — PipeWire's `module-echo-cancel` upstream of
+    // acva is providing the AEC, and the in-process APM (`apm`) is an
+    // intentional no-op stub (cfg.apm.aec_enabled=false). In that
+    // mode `apm->aec_active()` returns false permanently — but echo
+    // cancellation IS happening, just at the OS layer. The detector
+    // treats system AEC as "always converged" so the AEC gate doesn't
+    // permanently suppress every SpeechStarted. When false, the
+    // existing in-process APM checks (aec_active + min_erle_db) apply.
     BargeInDetector(event::EventBus& bus,
                     const Fsm& fsm,
                     const audio::Apm* apm,
+                    bool system_aec_active,
                     const config::BargeInConfig& cfg);
     ~BargeInDetector();
 
@@ -103,6 +113,7 @@ private:
     event::EventBus&             bus_;
     const Fsm&                   fsm_;
     const audio::Apm*            apm_;     // nullable
+    bool                         system_aec_active_;
     config::BargeInConfig        cfg_;
 
     event::SubscriptionHandle    sub_;

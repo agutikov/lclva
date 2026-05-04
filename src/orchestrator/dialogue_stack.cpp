@@ -159,7 +159,7 @@ build_dialogue_stack(const config::Config& cfg,
     // UserInterrupted, but the on_fired callback isn't connected yet
     // and the latency histogram misses the sample.
     stack->barge_in_ = std::make_unique<dialogue::BargeInDetector>(
-        bus, fsm, apm, cfg.barge_in);
+        bus, fsm, apm, cfg.apm.use_system_aec, cfg.barge_in);
 
     return stack;
 }

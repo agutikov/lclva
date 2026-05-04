@@ -180,6 +180,27 @@ def wait_for_tts(log_path: str, offset: int, timeout: float) -> tuple[int, list[
     return offset, sentences  # caller decides if this is fatal
 
 
+def wait_for_tts_resume(log_path: str, offset: int, timeout: float,
+                         assistant_recent: list[str]) -> tuple[int, bool]:
+    """Wait for a NEW tts_started event after `offset`. Updates
+    assistant_recent with any llm_sentence events seen along the way
+    (so the echo guard stays current). Returns (new offset, ok)."""
+    deadline = time.monotonic() + timeout
+    saw_tts = False
+    while time.monotonic() < deadline and not saw_tts:
+        time.sleep(0.25)
+        entries, offset = tail_since(log_path, offset)
+        for e in entries:
+            ev = e.get("event")
+            if ev == "llm_sentence":
+                txt = e.get("text", "")
+                if txt:
+                    assistant_recent.append(txt)
+            elif ev == "tts_started":
+                saw_tts = True
+    return offset, saw_tts
+
+
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
@@ -191,10 +212,26 @@ def main() -> int:
     )
     p.add_argument("--attempts", type=int, default=5,
                     help="number of speak-now prompts (default 5)")
-    p.add_argument("--window", type=float, default=6.0,
-                    help="seconds to wait for a transcript per attempt")
-    p.add_argument("--gap", type=float, default=2.0,
-                    help="seconds between attempts (lets assistant resume TTS)")
+    p.add_argument("--window", type=float, default=10.0,
+                    help="seconds to wait for a transcript per attempt "
+                          "(default 10; was 6 — Whisper realtime needs ~600ms "
+                          "of trailing silence + transcription latency, so "
+                          "short windows under barge-in conditions race the "
+                          "user's natural pause).")
+    p.add_argument("--rest", type=float, default=4.0,
+                    help="seconds to wait AFTER each attempt before starting "
+                          "the next (default 4; lets the cascade settle and "
+                          "any in-flight LLM turn finish).")
+    p.add_argument("--tts-resume-timeout", type=float, default=15.0,
+                    help="max seconds to wait for the assistant to start "
+                          "speaking again before each attempt (default 15). "
+                          "After a barge-in the FSM goes Listening; the next "
+                          "user transcript triggers a new LLM turn whose TTS "
+                          "may take a few seconds to start.")
+    p.add_argument("--head-start", type=float, default=2.0,
+                    help="seconds to let the assistant speak before showing "
+                          "the SPEAK NOW banner (default 2). Bigger = more "
+                          "audio playing when you barge in.")
     p.add_argument("--lang", default="ru",
                     help="--stdin-lang for acva (default ru). Also picks the "
                          "default prompt + speak-now phrase suggestions.")
@@ -223,14 +260,27 @@ def main() -> int:
 
     suggestions = SUGGESTIONS.get(args.lang, SUGGESTIONS["en"])
 
+    # Per-attempt budget for the help banner.
+    per_attempt = (args.tts_resume_timeout + args.head_start
+                    + args.window + args.rest)
+    total_budget = per_attempt * args.attempts
+
     print("M6B gate 3 — barge-in audibility probe")
     print()
     print("HOW THIS GOES:")
-    print("  - acva will start and the assistant will begin speaking a long story.")
-    print(f"  - You'll be prompted {args.attempts} times to speak.")
+    print("  - acva starts; assistant begins a long monologue.")
+    print(f"  - {args.attempts} attempts. Each runs five phases in order:")
+    print(f"      1. wait for assistant to be speaking "
+          f"(up to {args.tts_resume_timeout:.0f}s)")
+    print(f"      2. head-start  ({args.head_start:.1f}s)")
+    print(f"      3. SPEAK NOW   (window {args.window:.0f}s)")
+    print(f"      4. result      (PASS / no transcript)")
+    print(f"      5. rest        ({args.rest:.1f}s) before the next attempt")
+    print(f"    Worst-case total: ~{total_budget/60:.1f} min.")
+    print()
     print("  - When you see  >>> SPEAK NOW <<<  say a SHORT, DISTINCTIVE phrase.")
     print(f"    Try one of: {', '.join(suggestions)}.")
-    print("  - The phrase must NOT be something the assistant is saying.")
+    print("  - The phrase must NOT echo what the assistant is saying.")
     print(f"  - Pass = clean transcript fires within {args.window:.0f}s and isn't echo.")
     print()
     print("starting acva...")
@@ -297,12 +347,58 @@ def main() -> int:
         assistant_recent = list(sentences)
         passes = 0
 
+        # Per-attempt phase machine:
+        #   1. wait_for_tts_resume       — confirm assistant is actively
+        #                                  speaking (new tts_started since
+        #                                  the last attempt). Skips into
+        #                                  step 2 immediately if the
+        #                                  assistant is already speaking
+        #                                  (very first attempt).
+        #   2. head-start sleep          — let the assistant get ~2 s into
+        #                                  the next sentence so the user is
+        #                                  barging in on real audio.
+        #   3. SPEAK NOW                  — banner, user speaks.
+        #   4. wait for non-echo final   — up to args.window seconds.
+        #   5. rest                       — args.rest seconds of slack so
+        #                                  the cascade + next LLM turn can
+        #                                  spin up before step 1 of the
+        #                                  next attempt.
         for i in range(1, args.attempts + 1):
-            time.sleep(args.gap)
-            print(f"[{i}/{args.attempts}] >>> SPEAK NOW <<<", flush=True)
+            tag = f"[{i}/{args.attempts}]"
+
+            # ---- step 1: wait for assistant to be speaking ----
+            if i == 1:
+                # First attempt: TTS is already known active (we just
+                # passed wait_for_tts above). Skip the resume check.
+                pass
+            else:
+                print(f"{tag} waiting for assistant to resume "
+                      f"speaking (up to {args.tts_resume_timeout:.0f}s)…",
+                      flush=True)
+                offset, ok = wait_for_tts_resume(
+                    log_path, offset, args.tts_resume_timeout,
+                    assistant_recent)
+                if not ok:
+                    print(f"{tag} ⚠ assistant did not resume in "
+                          f"{args.tts_resume_timeout:.0f}s — skipping window")
+                    print(f"{tag} no clean transcript "
+                          f"(assistant never resumed)")
+                    time.sleep(args.rest)
+                    continue
+
+            # ---- step 2: head-start ----
+            print(f"{tag} assistant is speaking — letting it run "
+                  f"{args.head_start:.1f}s before barge-in…",
+                  flush=True)
+            time.sleep(args.head_start)
+
+            # ---- step 3: prompt user ----
+            print(f"{tag} >>> SPEAK NOW <<<  "
+                  f"(window {args.window:.0f}s)", flush=True)
+
+            # ---- step 4: wait for non-echo transcript ----
             deadline = time.monotonic() + args.window
             captured: str | None = None
-
             while time.monotonic() < deadline:
                 time.sleep(0.25)
                 entries, offset = tail_since(log_path, offset)
@@ -317,7 +413,7 @@ def main() -> int:
                         if not text:
                             continue
                         if looks_like_echo(text, assistant_recent):
-                            print(f"    skip (echo of assistant): '{text}'")
+                            print(f"{tag}   skip (echo): '{text}'")
                             continue
                         captured = text
                         break
@@ -325,10 +421,17 @@ def main() -> int:
                     break
 
             if captured:
-                print(f"    PASS — transcript: '{captured}'")
+                print(f"{tag} PASS — transcript: '{captured}'")
                 passes += 1
             else:
-                print(f"    no clean transcript in {args.window:.1f}s window")
+                print(f"{tag} no clean transcript in "
+                      f"{args.window:.1f}s window")
+
+            # ---- step 5: rest ----
+            if i < args.attempts:
+                print(f"{tag} resting {args.rest:.1f}s before next attempt…",
+                      flush=True)
+                time.sleep(args.rest)
 
         print()
         print(f"barge-in audibility: {passes}/{args.attempts}")

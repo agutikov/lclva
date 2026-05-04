@@ -39,9 +39,12 @@ load_and_resolve_config(const std::filesystem::path& cli_config_path,
 void install_alsa_sidestep(const config::AudioConfig& audio);
 
 // RAII periodic VRAM probe. Spawns a worker that shells nvidia-smi
-// every cfg.vram_monitor_interval_ms and emits a `vram` event with
-// used / free MiB. Stop via the destructor; safe to construct with
-// interval = 0 (disabled — destructor is a no-op).
+// every cfg.vram_monitor_interval_ms and emits a `vram_low` event
+// when free VRAM drops below cfg.vram_low_threshold_mib, then a
+// `vram_recovered` event when it climbs back above. Edge-triggered
+// — steady state produces no log lines. Stop via the destructor;
+// safe to construct with interval = 0 (disabled — destructor is a
+// no-op).
 class VramMonitor {
 public:
     explicit VramMonitor(const config::LoggingConfig& logging);

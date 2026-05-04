@@ -26,11 +26,15 @@ logging:
   # Set true to watch the run live in the terminal AND keep the
   # per-run file. No-op if sink is already stderr/journal.
   mirror_to_stderr: true
-  # Periodic GPU VRAM probe (nvidia-smi). Emits a structured `vram`
-  # event every N ms with used / free MiB. Catches the creeping-OOM
-  # pattern where Speaches' encoder workspace pushes free toward
-  # zero before a request fails. Set 0 to disable.
+  # Periodic GPU VRAM probe (nvidia-smi). Edge-triggered — emits
+  # `vram_low` when free MiB drops below vram_low_threshold_mib and
+  # `vram_recovered` on the way back up. Steady state is silent.
+  # Catches the creeping-OOM pattern where Speaches' encoder
+  # workspace pushes free toward zero before a request fails
+  # (faster-whisper #992 — see open_questions.md L7). Set
+  # interval=0 to disable.
   vram_monitor_interval_ms: 1000
+  vram_low_threshold_mib: 100
   # file_path: /var/log/acva.log    # required when sink=file
   # When true, log per-event details (transcripts, LLM sentences,
   # TTS/playback timing) at info level for end-to-end debugging.
@@ -156,7 +160,7 @@ tts:
     # Russian: ruslan is the default; the downloader pulls denis,
     # dmitri, and irina too — swap voice_id + model_id (same
     # piper-ru_RU-<name>-medium pattern) to try them.
-    ru: { model_id: "speaches-ai/piper-ru_RU-ruslan-medium", voice_id: "ruslan" }
+    ru: { model_id: "speaches-ai/piper-ru_RU-irina-medium", voice_id: "irina" }
   fallback_lang: en
   # Bumped from 10 to 30 on 2026-05-03: long sentences (e.g. a
   # numbered list of 100 items) at speed=1.25 take ~25 s to fully
@@ -343,7 +347,7 @@ dialogue:
     # cap and produced one ~25 s TTS request that hit the libcurl
     # timeout. Smaller chunks also smooth out time-to-first-audio
     # by letting playback start while later sentences synthesize.
-    max_sentence_chars: 80
+    max_sentence_chars: 300
     detect_code_fences: true
   system_prompts:
     en: |

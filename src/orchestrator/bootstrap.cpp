@@ -87,7 +87,9 @@ void install_alsa_sidestep(const config::AudioConfig& audio) {
 VramMonitor::VramMonitor(const config::LoggingConfig& logging) {
     if (logging.vram_monitor_interval_ms == 0) return;
 
-    thread_ = std::thread([this, interval_ms = logging.vram_monitor_interval_ms]{
+    thread_ = std::thread([this,
+                            interval_ms = logging.vram_monitor_interval_ms,
+                            threshold_mib = logging.vram_low_threshold_mib]{
         const auto interval = std::chrono::milliseconds(interval_ms);
         const auto probe = []() -> std::pair<long, long> {
             FILE* p = ::popen(
@@ -107,12 +109,30 @@ VramMonitor::VramMonitor(const config::LoggingConfig& logging) {
                 "nvidia-smi unavailable — VRAM monitor disabled");
             return;
         }
+        // Edge-triggered logging: emit `vram_low` only on the
+        // transition from healthy → low and `vram_recovered` on
+        // low → healthy, so a steady-state run is silent. If the
+        // first probe is already low, that counts as a transition
+        // and we emit once.
+        bool low = false;
         while (!stop_.load(std::memory_order_acquire)) {
             const auto v = probe();
             if (v.first >= 0) {
-                log::event("vram", "vram", event::kNoTurn,
-                    {{"used_mib", std::to_string(v.first)},
-                     {"free_mib", std::to_string(v.second)}});
+                const bool now_low =
+                    v.second < static_cast<long>(threshold_mib);
+                if (now_low && !low) {
+                    log::event("vram", "vram_low", event::kNoTurn,
+                        {{"used_mib", std::to_string(v.first)},
+                         {"free_mib", std::to_string(v.second)},
+                         {"threshold_mib", std::to_string(threshold_mib)}});
+                    low = true;
+                } else if (!now_low && low) {
+                    log::event("vram", "vram_recovered", event::kNoTurn,
+                        {{"used_mib", std::to_string(v.first)},
+                         {"free_mib", std::to_string(v.second)},
+                         {"threshold_mib", std::to_string(threshold_mib)}});
+                    low = false;
+                }
             }
             std::this_thread::sleep_for(interval);
         }

@@ -74,10 +74,14 @@ bool speaches_reachable() {
 
 // Same production STT model as config/default.yaml and
 // scripts/download-stt.sh. Sharing one model across all integration
-// tests keeps the GPU footprint minimal — Speaches loads it once
-// and keeps it warm for the rest of the run. Settled on large-v3 +
-// int8_float16 on 2026-05-03; see tests/test_speaches_smoke.cpp.
-constexpr const char* kRealtimeModel = "Systran/faster-whisper-large-v3";
+// tests is required, not just nice — with llama resident at
+// ~5 GB, the 8 GB RTX 4060 fits exactly one large Whisper. Two
+// different models in the same run = CUDA OOM and 500s on every
+// downstream STT call (observed 2026-05-04 when this constant was
+// large-v3 and tests/test_speaches_smoke.cpp was already on turbo).
+// Swapped to large-v3-turbo-ct2 on 2026-05-04 to match the config
+// default; see project_gpu_cdi_and_vram.md for the budget rationale.
+constexpr const char* kRealtimeModel = "deepdml/faster-whisper-large-v3-turbo-ct2";
 
 } // namespace
 

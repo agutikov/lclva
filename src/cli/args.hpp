@@ -13,6 +13,13 @@ struct CliArgs {
     bool show_help = false;
     bool stdin_mode = false;     // M1: read FinalTranscript lines from stdin
 
+    // Override the lang stamped on FinalTranscripts published from
+    // --stdin. Empty → use cfg.dialogue.fallback_language. Affects
+    // PromptBuilder system_prompt selection and TTS voice routing
+    // for the synthetic stdin path only; the real STT path resolves
+    // language from Whisper.
+    std::string stdin_lang;
+
     // Per-milestone smoke-check subcommand. Empty → run normally.
     // "list" → print the catalog and exit. Otherwise, look up by name
     // in acva::demos::find().

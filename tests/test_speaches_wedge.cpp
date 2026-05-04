@@ -54,7 +54,12 @@ bool speaches_reachable() {
     return r && r->status == 200;
 }
 
-constexpr const char* kSttModel   = "Systran/faster-whisper-large-v3";
+// Same model as config/default.yaml + the other two integration
+// suites. Three different Whisper models would not fit on the 8 GB
+// RTX 4060 alongside llama (project_gpu_cdi_and_vram.md) and would
+// trigger a CUDA OOM cascade the second time these tests ran without
+// a Speaches container restart.
+constexpr const char* kSttModel   = "deepdml/faster-whisper-large-v3-turbo-ct2";
 constexpr const char* kRuVoiceModel = "speaches-ai/piper-ru_RU-ruslan-medium";
 constexpr const char* kRuVoiceId    = "ruslan";
 

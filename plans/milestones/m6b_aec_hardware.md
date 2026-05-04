@@ -1,11 +1,20 @@
 # M6B — AEC hardware verification + system-AEC fallback
 
-**Status:** Step 1 + Step 3 ✅ landed (2026-05-03); gates 1 + 3 pending
-soak / probe runs.  M6 gate 4 PASS via Path B (PipeWire's
-`module-echo-cancel`); see § 10 in `docs/aec_report.md` for measured
-numbers (25-46 dB cancellation in the speech band).  Step 2 (Path A
-diagnosis: lower-amp + USB mic) is **moot** — Path B works on the
-dev workstation's existing hardware.
+**Status:** ✅ closed 2026-05-04. All three M6 hardware gates PASS via
+Path B (PipeWire `module-echo-cancel`):
+
+- Gate 1 — VAD false-starts during continuous TTS: 0.200/min vs 1.0/min threshold (`scripts/soak-vad-falsestarts.sh --quick`).
+- Gate 3 — barge-in audibility: 5/5 clean Russian transcripts (`scripts/barge-in-probe.py`).
+- Gate 4 — speech-band cancellation: 25–46 dB (see `docs/aec_report.md` § 10).
+
+Step 2 (Path A diagnosis: lower-amp + USB mic) is **moot** — Path B
+works on the dev workstation's existing hardware. Two follow-on
+fixes were required before gate 1 would PASS: `system_aec.cpp` PA
+name parsing on module reuse (silent-fallback was the false-pass
+mode), and `WHISPER__TTL=-1` in compose to prevent Speaches'
+auto-evict / cold-reload cycle leaking VRAM via faster-whisper #992.
+
+M7 (barge-in FSM wiring) is now unblocked.
 
 **Original status:** planned. Inserted between M6 (in-process APM, code-complete)
 and M7 (barge-in). M6B exists because M6's hardware acceptance gates
@@ -456,22 +465,43 @@ path).  Past the 25 dB acceptance threshold across the entire
 spectrum.  Full numbers + waveform/spectrogram analysis in
 `docs/aec_report.md` § 10.
 
-### 4.2 Gate 1 — TTS doesn't trigger VAD (PENDING — automation landed)
+### 4.2 Gate 1 — TTS doesn't trigger VAD (✅ PASS 2026-05-04)
 
-Run `scripts/soak-vad-falsestarts.sh` (default: 30 min).  Spawns
-`acva --stdin`, feeds prompts on a 1/min timer, polls
-`voice_vad_false_starts_total` from `/metrics`, prints PASS/FAIL
-against the 1/min threshold.  `--quick` knob runs 5 min for a
-sanity check.
+`scripts/soak-vad-falsestarts.sh --quick` on Russian prompts:
+**0.200 false_starts/min** over 5 min vs the 1.0/min threshold —
+5× margin. Pre-fix runs hit 33.665/min when the system_aec helper
+silently routed audio around the AEC module (`system_aec.cpp`
+hardcoded the wrong PA names on reuse). Two follow-up landings
+were needed before this gate could PASS:
 
-### 4.3 Gate 3 — barge-in audibility (PENDING — observability landed)
+- `src/orchestrator/system_aec.cpp` — parse `source_name=` /
+  `sink_name=` from `pactl list short modules` when reusing an
+  existing module, adopt ownership when names match the
+  `acva-echo-*` convention, refuse to start when the module's
+  args are unparseable (silent fallback was the M6B 4.2 false-pass
+  mode that 33/min unmasked). New unit tests in
+  `tests/test_system_aec.cpp`.
+- `packaging/compose/docker-compose.yml` — `WHISPER__TTL: -1` so
+  Speaches doesn't auto-evict turbo every 5 min and reload it
+  cold. faster-whisper #992 leaks ~300 MB per unload cycle on the
+  8 GB box; the loop was untenable without this.
 
-Run `scripts/barge-in-probe.py` (default: 5 attempts × 6 s window).
-Watches the live `/var/log/acva/acva-*.log`, prompts the user
-"speak now" five times, scores each attempt as PASS/FAIL based on
-whether a `final_transcript` event fires within the window AND its
-text doesn't fuzz-match the most recent `llm_sentence` (= it was
-the user, not echo).
+A 30-min soak is still an option for a tighter rate estimate but
+the 5-min `--quick` margin is wide enough that gate 1 is closed.
+
+### 4.3 Gate 3 — barge-in audibility (✅ PASS 2026-05-04)
+
+`scripts/barge-in-probe.py` — **5/5** clean Russian transcripts
+captured during continuous Mars-story TTS. Phrases used:
+*"два, раз, два, три"*, *"Слышно"*, *"Нифига себе, работает"*,
+*"Стоп, стоп, стоп"*, *"Спасибо"*. None misclassified as echo.
+
+The probe was rewritten to be self-contained: spawns acva with
+the seeded prompt, waits for the first `tts_started` event before
+opening windows, SIGTERMs on exit. Earlier interactive workflow
+required a separate acva terminal and could latch onto a stale
+log file (caught when first attempt was 0/5 against the soak's
+post-mortem log).
 
 (Note: barge-in proper — the FSM transitioning out of `Speaking`
 on `UserInterrupted` — is M7's job. Gate 3 here only verifies the

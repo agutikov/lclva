@@ -26,6 +26,10 @@ CliArgs parse_args(int argc, char** argv) {
             args.show_help = true;
         } else if (a == "--stdin") {
             args.stdin_mode = true;
+        } else if (a == "--stdin-lang" && i + 1 < argc) {
+            args.stdin_lang = argv[++i];
+        } else if (a.starts_with("--stdin-lang=")) {
+            args.stdin_lang = a.substr(std::string_view{"--stdin-lang="}.size());
         } else if (a == "--config" && i + 1 < argc) {
             args.config_path = argv[++i];
         } else if (a.starts_with("--config=")) {
@@ -60,6 +64,10 @@ void print_help() {
                  "                       (first existing path wins).\n"
                  "  --stdin              Read FinalTranscript lines from stdin and drive\n"
                  "                       the real LLM. M1 mode.\n"
+                 "  --stdin-lang LANG    Stamp this lang on every --stdin line\n"
+                 "                       (overrides cfg.dialogue.fallback_language).\n"
+                 "                       Routes the LLM to the matching system_prompt\n"
+                 "                       and TTS to the matching voice. E.g. `ru`.\n"
                  "  -h, --help           Show this help and exit\n"
                  "\n"
                  "Subcommands:\n"

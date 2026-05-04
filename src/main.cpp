@@ -33,6 +33,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <vector>
 #include <thread>
 #include <variant>
 
@@ -61,12 +62,46 @@ int main(int argc, char** argv) {
     acva::log::info("main", fmt::format("memory db: {}", cfg.memory.db_path));
     acva::orchestrator::install_alsa_sidestep(cfg.audio);
 
+    // Validate --stdin-lang against the configured maps.  Empty maps
+    // mean the feature is not configured (early-bring-up state) — only
+    // gate when a map has entries at all, mirroring config::validate.
+    if (args.stdin_mode && !args.stdin_lang.empty()) {
+        std::vector<std::string> errs;
+        if (!cfg.dialogue.system_prompts.empty()
+            && !cfg.dialogue.system_prompts.contains(args.stdin_lang)) {
+            errs.push_back(fmt::format(
+                "dialogue.system_prompts has no entry for '{}'",
+                args.stdin_lang));
+        }
+        if (!cfg.tts.voices.empty()
+            && !cfg.tts.voices.contains(args.stdin_lang)) {
+            errs.push_back(fmt::format(
+                "tts.voices has no entry for '{}'", args.stdin_lang));
+        }
+        if (!errs.empty()) {
+            std::cerr << "acva: --stdin-lang " << args.stdin_lang
+                      << " is not configured:\n";
+            for (const auto& e : errs) std::cerr << "  - " << e << "\n";
+            std::cerr << "Add the missing entries to "
+                      << config_path.string()
+                      << " or pick a configured lang.\n";
+            return EXIT_FAILURE;
+        }
+    }
+
     // RAII: optionally load PipeWire's module-echo-cancel and route
     // this process through it (set PULSE_SINK / PULSE_SOURCE before
     // any PortAudio init).  No-op when cfg.apm.use_system_aec=false.
     // Lives at function scope so its destructor unloads the module on
     // exit (including the demo short-circuit below).
     acva::orchestrator::SystemAec system_aec(cfg.apm);
+    if (const auto& err = system_aec.startup_error()) {
+        // System-AEC setup failed in a way that would cause silent
+        // misrouting. Refuse to start rather than fall back — see the
+        // failure-modes block in system_aec.hpp.
+        std::cerr << "acva: system AEC setup failed: " << *err << "\n";
+        return EXIT_FAILURE;
+    }
 
     // ----- 2.5. Demo subcommand short-circuit -----
     // Demos build only the subsystems they need from `cfg` and exit
@@ -236,15 +271,19 @@ int main(int argc, char** argv) {
 
     // ----- stdin text-input mode (M1 era) — only the line reader -----
     if (args.stdin_mode) {
-        std::cout << "acva stdin mode — type a line and press enter. Ctrl-D or Ctrl-C to exit.\n";
-        stdin_reader = std::thread([&bus, &cfg]{
+        const std::string stdin_lang = args.stdin_lang.empty()
+                                           ? cfg.dialogue.fallback_language
+                                           : args.stdin_lang;
+        std::cout << "acva stdin mode (lang=" << stdin_lang
+                  << ") — type a line and press enter. Ctrl-D or Ctrl-C to exit.\n";
+        stdin_reader = std::thread([&bus, lang = stdin_lang]{
             std::string line;
             while (std::getline(std::cin, line)) {
                 if (line.empty()) continue;
                 bus.publish(acva::event::FinalTranscript{
                     .turn = 0,
                     .text = line,
-                    .lang = cfg.dialogue.fallback_language,
+                    .lang = lang,
                     .confidence = 1.0F,
                     .audio_duration = {},
                     .processing_duration = {},

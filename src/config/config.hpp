@@ -43,12 +43,19 @@ struct LoggingConfig {
     bool mirror_to_stderr = false;
     // M6 — periodic GPU VRAM probe. When > 0, a background thread
     // shells `nvidia-smi --query-gpu=memory.used,memory.free` every
-    // N ms and emits a structured `vram` log event. Catches the
-    // creeping-OOM pattern where Speaches' encoder workspace pushes
-    // free VRAM toward zero before a request finally fails. Set to
-    // 0 to disable; default 1000 ms is light (one nvidia-smi exec
-    // per second). Quietly no-ops if nvidia-smi is missing.
+    // N ms and emits a structured `vram` log event ONLY on transitions
+    // across `vram_low_threshold_mib` (edge-triggered). This catches
+    // the creeping-OOM pattern where Speaches' encoder workspace pushes
+    // free VRAM toward zero before a request finally fails, without
+    // spamming the log under healthy conditions. Set interval to 0 to
+    // disable; default 1000 ms is light (one nvidia-smi exec / sec).
+    // Quietly no-ops if nvidia-smi is missing.
     uint32_t vram_monitor_interval_ms = 1000;
+    // Free-VRAM (MiB) below which the monitor emits a `vram_low` event.
+    // When VRAM recovers above the threshold, emits `vram_recovered`.
+    // 100 MiB picks up the M6B faster-whisper #992 leak symptom (see
+    // open_questions.md L7) before inference allocations OOM.
+    uint32_t vram_low_threshold_mib = 100;
     // When true, main.cpp installs a bus subscriber that emits a
     // structured log line for each transcript / LLM / TTS / playback
     // event with the relevant payload (transcript text, sentence

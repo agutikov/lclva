@@ -48,6 +48,7 @@ add_executable(acva_unit_tests
     test_service_monitor.cpp
     test_spsc_ring.cpp
     test_supervisor.cpp
+    test_system_aec.cpp
     test_queue.cpp
     test_sse_parser.cpp
     test_summarizer.cpp

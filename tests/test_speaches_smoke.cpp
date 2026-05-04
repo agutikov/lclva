@@ -81,11 +81,13 @@ constexpr const char* kVoiceModel = "speaches-ai/piper-en_US-amy-medium";
 // Production STT model — same as `config/default.yaml` and
 // `scripts/download-stt.sh`. Tests must match the production model
 // so a flake here means a real production problem, not a smoke/prod
-// mismatch. Settled on Systran/faster-whisper-large-v3 + int8_float16
-// quantisation on 2026-05-03; that combo fits when llama is stopped
-// (or running with a smaller n_ctx / Q3 quant), and gives the best
-// multilingual quality.
-constexpr const char* kSttModel   = "Systran/faster-whisper-large-v3";
+// mismatch. Swapped from large-v3 to large-v3-turbo-ct2 on 2026-05-04
+// to match the config default (project_gpu_cdi_and_vram.md): with
+// llama-7B-Q4 holding ~5 GB on the 8 GB RTX 4060, only the turbo
+// quant fits a second Whisper resident. Mismatched models across
+// integration tests trigger CUDA OOM 500s — keep
+// test_speaches_realtime_smoke.cpp's kRealtimeModel in sync.
+constexpr const char* kSttModel   = "deepdml/faster-whisper-large-v3-turbo-ct2";
 constexpr const char* kSentence   = "Hello from acva. This is a smoke test.";
 
 } // namespace

@@ -2,9 +2,27 @@
 
 #include "config/config.hpp"
 
+#include <optional>
 #include <string>
+#include <string_view>
 
 namespace acva::orchestrator {
+
+namespace detail {
+
+// Parsed view of a single line of `pactl list short modules` whose
+// module name is `module-echo-cancel`. Exposed for unit testing —
+// the popen + line-walking belongs to system_aec.cpp.
+struct EchoCancelModule {
+    std::string id;          // numeric module id (always non-empty on success)
+    std::string source_name; // empty iff `source_name=` absent from args
+    std::string sink_name;   // empty iff `sink_name=` absent from args
+};
+
+std::optional<EchoCancelModule>
+    parse_echo_cancel_module_line(std::string_view line);
+
+} // namespace detail
 
 // RAII helper that routes acva's audio through PipeWire's
 // `module-echo-cancel` (system-side AEC) when
@@ -40,9 +58,19 @@ namespace acva::orchestrator {
 // capture_stack / playback_engine / any demo). The env vars must
 // be set before PortAudio's PulseAudio host opens streams.
 //
-// Failure modes: pactl missing, module load fails, no PulseAudio /
-// PipeWire — log a warning and continue with the default audio
-// path (active() returns false). Never throws.
+// Failure modes:
+//   * `use_system_aec=false`: no-op; `active()` is false; never errors.
+//   * `use_system_aec=true` and one of:
+//       - pactl missing / no PulseAudio / module load fails, OR
+//       - existing module-echo-cancel found but its args don't expose
+//         source_name= / sink_name= (we can't reliably name the
+//         PA-side nodes to route through),
+//     → `startup_error()` returns a populated message and `active()`
+//     stays false. Caller (main) must check and exit non-zero rather
+//     than fall back silently to the default audio path. Silent
+//     fallback was the M6B Step 4.2 false-pass mode (2026-05-04):
+//     audio went around the AEC and gate 1 reported 33/min.
+// Never throws.
 class SystemAec {
 public:
     explicit SystemAec(const config::ApmConfig& apm);
@@ -58,17 +86,25 @@ public:
     [[nodiscard]] bool active() const noexcept { return active_; }
 
     // True when WE loaded the module — i.e., the destructor will
-    // unload it. False when we reused an existing module.
+    // unload it. False when we reused an existing module without
+    // taking ownership.
     [[nodiscard]] bool owns_module() const noexcept { return owned_; }
 
     [[nodiscard]] std::string_view module_id() const noexcept { return module_id_; }
 
+    // Populated when `use_system_aec: true` but setup failed in a way
+    // that prevents safe operation. main() checks this immediately
+    // after construction and exits non-zero.
+    [[nodiscard]] const std::optional<std::string>&
+        startup_error() const noexcept { return startup_error_; }
+
 private:
-    bool         active_ = false;
-    bool         owned_  = false;
-    std::string  module_id_;
-    std::string  source_name_;
-    std::string  sink_name_;
+    bool                       active_ = false;
+    bool                       owned_  = false;
+    std::string                module_id_;
+    std::string                source_name_;
+    std::string                sink_name_;
+    std::optional<std::string> startup_error_;
 };
 
 } // namespace acva::orchestrator

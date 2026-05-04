@@ -97,6 +97,7 @@ services:
       LOOPBACK_HOST_URL: http://localhost:8000
       WHISPER__INFERENCE_DEVICE: ${ACVA_WHISPER_DEVICE:-cuda}
       WHISPER__COMPUTE_TYPE: ${ACVA_WHISPER_COMPUTE_TYPE:-int8_float16}
+      WHISPER__TTL: ${ACVA_WHISPER_TTL:--1}     # -1 = never auto-unload 
     volumes:
       - ${ACVA_MODELS_DIR:-${HOME}/.local/share/acva/models}/speaches:/home/ubuntu/.cache/huggingface/hub
     deploy:

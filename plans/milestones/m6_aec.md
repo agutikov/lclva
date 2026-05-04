@@ -13,17 +13,18 @@
 > (`acva demo aec`) gives ~22 dB mic-energy reduction on a 1 kHz
 > tone fixture; full unit + integration suites green.
 >
-> **Hardware acceptance gates (post-M6B, 2026-05-03):**
-> - **Gate 4 — PASS via Path B.** `acva demo aec-record` +
->   `scripts/aec_analyze.py` measure 36-46 dB speech-band cancellation
->   (raw vs original) when `cfg.apm.use_system_aec: true` (PipeWire's
->   `module-echo-cancel` running upstream of acva).  Past the 25 dB
->   target across the entire spectrum.  See `docs/aec_report.md` § 10.3.
-> - **Gates 1 + 3 — PENDING.** Soak harness landed
->   (`scripts/soak-vad-falsestarts.sh` for gate 1's 30-min VAD
->   false-start count; `scripts/barge-in-probe.py` for gate 3's 5-of-5
->   barge-in audibility).  Run when ready; both expected to PASS given
->   gate 4 numbers (gates 1 + 3 are derivatives of cancellation depth).
+> **Hardware acceptance gates (post-M6B, 2026-05-04):** ✅ all three PASS via Path B.
+> - **Gate 4 — PASS.** `acva demo aec-record` + `scripts/aec_analyze.py`
+>   measure 36-46 dB speech-band cancellation (raw vs original) when
+>   `cfg.apm.use_system_aec: true` (PipeWire's `module-echo-cancel`
+>   running upstream of acva). Past the 25 dB target across the entire
+>   spectrum. See `docs/aec_report.md` § 10.3.
+> - **Gate 1 — PASS.** `scripts/soak-vad-falsestarts.sh --quick` on
+>   Russian prompts: 0.200 false_starts/min over 5 min vs 1.0/min
+>   threshold (5× margin). 2026-05-04.
+> - **Gate 3 — PASS.** `scripts/barge-in-probe.py`: 5/5 clean Russian
+>   transcripts during continuous Mars-story TTS, none misclassified
+>   as echo. 2026-05-04.
 >
 > **In-process APM is shipped but disabled by default.** Wiring is
 > correct (M6 § 5.1 synthetic demo passes with ~22 dB reduction); the

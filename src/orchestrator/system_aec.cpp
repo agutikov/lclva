@@ -7,10 +7,62 @@
 #include <array>
 #include <cstdio>
 #include <cstdlib>
+#include <optional>
 #include <string>
 #include <string_view>
 
 namespace acva::orchestrator {
+
+namespace detail {
+
+namespace {
+
+// Pull the value of `key=` (e.g. "source_name=") out of a
+// space/tab-separated args fragment. Returns empty if absent or empty.
+std::string extract_kv(std::string_view args, std::string_view key) {
+    auto pos = args.find(key);
+    if (pos == std::string_view::npos) return {};
+    pos += key.size();
+    const auto end = args.find_first_of(" \t\n", pos);
+    const auto len = (end == std::string_view::npos)
+                         ? std::string_view::npos
+                         : end - pos;
+    return std::string(args.substr(pos, len));
+}
+
+} // namespace
+
+std::optional<EchoCancelModule>
+parse_echo_cancel_module_line(std::string_view line) {
+    static constexpr std::string_view kName = "module-echo-cancel";
+    const auto name_pos = line.find(kName);
+    if (name_pos == std::string_view::npos) return std::nullopt;
+
+    // pactl list short emits tab-separated columns: id \t name \t args.
+    // The id is the prefix up to the first whitespace.
+    const auto first_ws = line.find_first_of(" \t");
+    if (first_ws == std::string_view::npos || first_ws == 0)
+        return std::nullopt;
+
+    EchoCancelModule m;
+    m.id = std::string(line.substr(0, first_ws));
+    for (char c : m.id) {
+        if (c < '0' || c > '9') return std::nullopt;
+    }
+
+    // The args column starts at the first whitespace AFTER the module
+    // name. If the line is malformed (no args column), source/sink
+    // simply stay empty.
+    const auto args_start = line.find_first_of(" \t", name_pos + kName.size());
+    const auto args = (args_start == std::string_view::npos)
+                          ? std::string_view{}
+                          : line.substr(args_start);
+    m.source_name = extract_kv(args, "source_name=");
+    m.sink_name   = extract_kv(args, "sink_name=");
+    return m;
+}
+
+} // namespace detail
 
 namespace {
 
@@ -36,28 +88,29 @@ std::string trim(std::string s) {
     return s;
 }
 
-// Walk `pactl list short modules` for a module-echo-cancel entry.
-// Returns its id (decimal string) if found, empty otherwise.
-std::string find_existing_echo_cancel() {
+// Walk `pactl list short modules` for the first module-echo-cancel
+// entry and parse it. Returns nullopt iff pactl failed or no such
+// module is loaded.
+std::optional<detail::EchoCancelModule> find_existing_echo_cancel() {
     bool ok = false;
     const auto out = popen_capture(
         "pactl list short modules 2>/dev/null", ok);
-    if (!ok) return {};
+    if (!ok) return std::nullopt;
     std::string line;
+    auto try_match = [](const std::string& l)
+        -> std::optional<detail::EchoCancelModule> {
+        return detail::parse_echo_cancel_module_line(l);
+    };
     for (char c : out) {
         if (c == '\n') {
-            if (line.find("module-echo-cancel") != std::string::npos) {
-                const auto ws = line.find_first_of(" \t");
-                if (ws != std::string::npos) {
-                    return std::string(line.substr(0, ws));
-                }
-            }
+            if (auto m = try_match(line)) return m;
             line.clear();
         } else {
             line.push_back(c);
         }
     }
-    return {};
+    if (auto m = try_match(line)) return m; // tail without trailing \n
+    return std::nullopt;
 }
 
 // Load module-echo-cancel with names + args we control, so the
@@ -100,42 +153,68 @@ bool unload_module(std::string_view id) {
 SystemAec::SystemAec(const config::ApmConfig& apm) {
     if (!apm.use_system_aec) return;
 
-    const auto existing = find_existing_echo_cancel();
-    if (!existing.empty()) {
-        // Reuse — do not take ownership.  We can't tell what
-        // source_name / sink_name the existing module was loaded
-        // with, so we use the PipeWire default names (which are
-        // what `pactl load-module module-echo-cancel` produces with
-        // no args).  If the user loaded it with custom names, the
-        // env vars below won't match and PortAudio will fall back
-        // to the system default — log warns so they can either
-        // unload + relaunch or accept the default routing.
-        module_id_   = existing;
-        owned_       = false;
-        source_name_ = "echo-cancel-source";
-        sink_name_   = "echo-cancel-sink";
+    static constexpr std::string_view kAcvaSource = "acva-echo-source";
+    static constexpr std::string_view kAcvaSink   = "acva-echo-sink";
+
+    if (auto existing = find_existing_echo_cancel()) {
+        if (existing->source_name.empty() || existing->sink_name.empty()) {
+            // Module is loaded but its args don't expose source_name=
+            // and/or sink_name=. We can't reliably guess what PA-side
+            // node names PipeWire assigned, and getting it wrong makes
+            // PortAudio fall back to the system default — silently
+            // routing audio AROUND the AEC. That was the M6B Step 4.2
+            // false-pass mode (2026-05-04, soak gate 1 reported 33/min
+            // false starts because the env vars pointed at non-existent
+            // PA nodes). Refuse to start instead.
+            startup_error_ = fmt::format(
+                "module-echo-cancel id={} is loaded but its arguments "
+                "lack source_name= and/or sink_name= "
+                "(see `pactl list short modules`). acva can't "
+                "reliably route audio through it. Either unload it "
+                "(`pactl unload-module {}`) and let acva load its own, "
+                "or set cfg.apm.use_system_aec: false.",
+                existing->id, existing->id);
+            log::error("system_aec", *startup_error_);
+            return;
+        }
+
+        module_id_   = existing->id;
+        source_name_ = existing->source_name;
+        sink_name_   = existing->sink_name;
+        // Adopt ownership iff the names match our convention. That
+        // means the module was almost certainly loaded by a prior
+        // acva run that didn't get to clean up (crash, kill -9, ...).
+        // Adopting it lets the destructor unload on this run's clean
+        // exit, preventing sticky bad state across crashes.
+        owned_ = (source_name_ == kAcvaSource &&
+                  sink_name_   == kAcvaSink);
         log::info("system_aec",
-            fmt::format("module-echo-cancel already loaded (id={}); "
-                          "reusing without ownership.  Routing this "
-                          "process via PULSE_SINK={}, PULSE_SOURCE={}.  "
-                          "If those names don't match the existing "
-                          "module's source/sink, audio will fall back "
-                          "to the system default.",
-                          existing, sink_name_, source_name_));
+            fmt::format("module-echo-cancel already loaded (id={}); {}. "
+                        "Routing this process via PULSE_SINK={}, "
+                        "PULSE_SOURCE={}.",
+                        existing->id,
+                        owned_ ? "names match acva convention — "
+                                  "adopting ownership and will unload on exit"
+                                : "reusing without ownership",
+                        sink_name_, source_name_));
     } else {
         const auto id = load_module();
         if (id.empty()) {
-            log::warn("system_aec",
+            startup_error_ =
                 "use_system_aec=true but `pactl load-module "
-                "module-echo-cancel` failed.  Is pactl installed "
-                "and PulseAudio/PipeWire running?  Falling back to "
-                "the default audio path.");
+                "module-echo-cancel` failed. Is pactl installed and "
+                "PulseAudio/PipeWire running? Set "
+                "cfg.apm.use_system_aec: false to disable system AEC "
+                "(note: the in-process APM path is known to be "
+                "ineffective on the dev workstation's laptop codec — "
+                "see docs/aec_report.md).";
+            log::error("system_aec", *startup_error_);
             return;
         }
         module_id_   = id;
         owned_       = true;
-        source_name_ = "acva-echo-source";
-        sink_name_   = "acva-echo-sink";
+        source_name_ = std::string(kAcvaSource);
+        sink_name_   = std::string(kAcvaSink);
         log::info("system_aec",
             fmt::format("loaded module-echo-cancel (id={}); routing "
                           "this process via PULSE_SINK={}, "

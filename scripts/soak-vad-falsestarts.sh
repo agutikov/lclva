@@ -50,16 +50,16 @@ fi
 # Prompts cycle through this list.  Each one should produce a multi-second
 # TTS response so the speaker is busy while we count VAD false-starts.
 PROMPTS=(
-    "Tell me a short story about a curious cat."
-    "Explain the difference between TCP and UDP in a few sentences."
-    "What is the speed of light, and how was it first measured?"
-    "Describe how a household refrigerator works."
-    "Give me three uses for baking soda outside of cooking."
-    "What's the difference between weather and climate?"
-    "Tell me a fun fact about octopuses."
-    "How does a transistor work, briefly?"
-    "What are the main causes of ocean tides?"
-    "Recite the first stanza of any well-known poem."
+    "Расскажите мне короткую историю о любопытном коте".
+    "Объясните разницу между TCP и UDP в нескольких предложениях".
+    "Что такое скорость света и как она была впервые измерена?"
+    "Опишите, как работает бытовой холодильник".
+    "Назовите три способа использования пищевой соды помимо приготовления пищи".
+    "В чем разница между погодой и климатом?"
+    "Расскажите мне интересный факт об осьминогах".
+    "Как вкратце работает транзистор?"
+    "Каковы основные причины океанских приливов?"
+    "Прочитайте первую строфу любого известного стихотворения".
 )
 
 FIFO=$(mktemp -u /tmp/acva-soak.XXXXXX.fifo)
@@ -82,7 +82,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # Spawn acva reading the fifo on stdin
-"$ACVA" --stdin < "$FIFO" >/tmp/acva-soak.out 2>&1 &
+"$ACVA" --stdin-lang "ru" --stdin < "$FIFO" >/tmp/acva-soak.out 2>&1 &
 ACVA_PID=$!
 
 # Open the fifo for writing in this shell so the read side blocks

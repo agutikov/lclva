@@ -1,8 +1,10 @@
 # M6 — AEC implementation report
 
 **Author:** acva orchestrator team
-**Status:** code-complete; hardware acceptance gates blocked by laptop codec DSP
-**Date:** 2026-05-03
+**Status:** ✅ closed 2026-05-04. Gates 1 + 3 + 4 all PASS via Path B
+(PipeWire `module-echo-cancel`); see § 10.6 for the gate-1 / gate-3
+soak + probe results. M7 unblocked.
+**Date:** 2026-05-03 (initial), 2026-05-04 (M6B closure)
 
 ---
 
@@ -680,19 +682,33 @@ during convergence. Fix: when `use_system_aec=true`, set
 `aec_enabled=false`. Documented in `config/default.yaml`'s apm
 block + `docs/troubleshooting.md` "phantom STT loops" section.
 
-### 10.6 M6 acceptance gates — updated state
+### 10.6 M6 acceptance gates — final state (2026-05-04)
 
-| # | Gate | State |
-|---|---|---|
-| 1 | `voice_vad_false_starts_total < 1/min` | **PENDING** — automated via `scripts/soak-vad-falsestarts.sh` (30 min run); not yet executed |
-| 2 | AEC delay estimator stable over 30 min | PASS (M6 § 7) — independent of cancellation depth |
-| 3 | Speaking over TTS produces correct VAD endpointing | **PENDING** — observability via `scripts/barge-in-probe.py` |
-| 4 | ERLE > 25 dB on validation fixture | **PASS via Path B** — § 10.3 measured 25-46 dB on the chirp-style stimulus |
-| 5 | `voice_aec_delay_estimate_ms` exposed on /metrics | PASS (M6 § 7) |
+| # | Gate | State | Evidence |
+|---|---|---|---|
+| 1 | `voice_vad_false_starts_total < 1/min` | **PASS** | `scripts/soak-vad-falsestarts.sh --quick` Russian prompts, 5 min: 0.200/min (5× margin) |
+| 2 | AEC delay estimator stable over 30 min | PASS (M6 § 7) | independent of cancellation depth |
+| 3 | Speaking over TTS produces correct VAD endpointing | **PASS** | `scripts/barge-in-probe.py`: 5/5 clean Russian transcripts during continuous Mars-story TTS, none misclassified as echo |
+| 4 | ERLE > 25 dB on validation fixture | **PASS via Path B** | § 10.3 measured 25-46 dB |
+| 5 | `voice_aec_delay_estimate_ms` exposed on /metrics | PASS (M6 § 7) | |
 
-Gates 1 + 3 are derivatives of gate 4 — without working
-cancellation they can't pass. With Path B at -42.9 dB net speech
-attenuation, both should pass on first try.
+Two non-obvious follow-on fixes were required between gate 4 PASS
+(2026-05-03) and gate 1 PASS (2026-05-04). Both are recorded in
+`plans/open_questions.md` § L7:
+
+- **`src/orchestrator/system_aec.cpp` PA name parsing on module
+  reuse.** Pre-fix code hardcoded `echo-cancel-{source,sink}` (the
+  PipeWire no-args defaults), which mismatched any acva-loaded
+  module from a prior run and silently routed audio around the
+  AEC. Gate-1 hit 33/min false-starts in that state. Now parses
+  `source_name=` / `sink_name=` from `pactl list short modules`
+  and refuses to start when args are unparseable.
+- **`WHISPER__TTL=-1` in compose env.** Speaches' default 5-min
+  auto-evict + faster-whisper [#992](https://github.com/SYSTRAN/faster-whisper/issues/992)
+  leaks ~300 MB of CUDA per unload cycle. On the 8 GB box, four
+  reload cycles take VRAM over the limit and inference OOMs. The
+  TTL pin is what makes back-to-back integration test runs and
+  long soaks stable.
 
 ### 10.7 What ships now
 
@@ -705,4 +721,7 @@ attenuation, both should pass on first try.
 - `acva demo aec-record` + `scripts/aec_analyze.py` are the
   permanent diagnostic for any future hardware change (driver
   update, USB mic swap, switch to non-PipeWire system).
-- M7 (barge-in) is unblocked once gates 1 + 3 close in soak/probe.
+- `scripts/soak-vad-falsestarts.sh` and `scripts/barge-in-probe.py`
+  are now self-contained — they spawn acva, drive the test, and
+  shut it down on exit. Re-run any time the audio path changes.
+- M7 (barge-in FSM wiring) is unblocked.

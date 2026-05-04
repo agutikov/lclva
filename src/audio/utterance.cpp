@@ -169,4 +169,11 @@ std::size_t UtteranceBuffer::pre_buffer_samples() const noexcept {
     return pre_buffer_.size();
 }
 
+std::vector<std::int16_t> UtteranceBuffer::pre_buffer_snapshot() const {
+    std::vector<std::int16_t> out;
+    out.reserve(pre_buffer_.size());
+    out.insert(out.end(), pre_buffer_.begin(), pre_buffer_.end());
+    return out;
+}
+
 } // namespace acva::audio

@@ -110,6 +110,21 @@ public:
     void set_aec_erle_db(double db);
     void set_aec_frames_processed_total(double total);
 
+    // M7 — barge-in metrics. ----------------------------------------
+    //
+    // `voice_barge_in_latency_ms` — UserInterrupted publish → first
+    // post-cancel silent audio buffer emitted by PlaybackEngine. The
+    // M7 acceptance gate is P50 ≤ 200 ms / P95 ≤ 400 ms (project_design
+    // §19). Observed once per fired barge-in.
+    void on_barge_in_latency(double ms);
+
+    // Polled gauges populated by main.cpp's metrics thread from the
+    // BargeInDetector counters. Set absolute values; restart resets to 0.
+    void set_barge_in_fires_total(double total);
+    void set_barge_in_suppressed_total(double total);
+    void set_barge_in_suppressed_cooldown(double total);
+    void set_barge_in_suppressed_aec(double total);
+
     // Subscribe metrics-collection handlers to the bus. Call after
     // construction. Returns subscriptions which the caller must keep alive.
     [[nodiscard]] std::vector<event::SubscriptionHandle> subscribe(event::EventBus& bus);
@@ -168,6 +183,16 @@ private:
     prometheus::Gauge*                     aec_erle_db_metric_              = nullptr;
     prometheus::Family<prometheus::Gauge>* aec_frames_processed_            = nullptr;
     prometheus::Gauge*                     aec_frames_processed_metric_     = nullptr;
+
+    // M7 barge-in.
+    prometheus::Family<prometheus::Histogram>* barge_in_latency_ms_             = nullptr;
+    prometheus::Histogram*                     barge_in_latency_ms_metric_      = nullptr;
+    prometheus::Family<prometheus::Gauge>*     barge_in_fires_                  = nullptr;
+    prometheus::Gauge*                         barge_in_fires_metric_           = nullptr;
+    prometheus::Family<prometheus::Gauge>*     barge_in_suppressed_             = nullptr;
+    prometheus::Gauge*                         barge_in_suppressed_metric_      = nullptr;
+    prometheus::Gauge*                         barge_in_suppressed_cooldown_metric_ = nullptr;
+    prometheus::Gauge*                         barge_in_suppressed_aec_metric_      = nullptr;
 
     // Per-(turn, seq) TTS timer state, captured between TtsStarted and
     // the first TtsAudioChunk so we can compute first-audio latency.

@@ -74,6 +74,7 @@ FsmSnapshot Fsm::snapshot() const {
         .turns_completed = turns_completed_,
         .turns_interrupted = turns_interrupted_,
         .turns_discarded = turns_discarded_,
+        .entered_speaking_at = entered_speaking_at_,
     };
 }
 
@@ -83,6 +84,9 @@ void Fsm::transition(State next, std::string_view reason) {
         std::lock_guard lk(mu_);
         prev = state_;
         state_ = next;
+        if (prev != State::Speaking && next == State::Speaking) {
+            entered_speaking_at_ = std::chrono::steady_clock::now();
+        }
     }
     log::info("dialogue",
               fmt::format("fsm {} -> {} ({})", to_string(prev), to_string(next), reason));

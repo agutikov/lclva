@@ -97,6 +97,14 @@ public:
     [[nodiscard]] bool active() const noexcept;
     [[nodiscard]] std::size_t pre_buffer_samples() const noexcept;
 
+    // Snapshot of the rolling pre-buffer as a contiguous vector. Used
+    // by the M5 streaming sink at SpeechStarted to replay the
+    // pre-padding window so the realtime STT sees the leading
+    // phoneme(s) the M4B request/response path keeps in the slice.
+    // Cheap when the buffer is small (≤ 300 ms × 16 kHz × int16 ≈
+    // 9.6 KB). Caller-thread only — same contract as append().
+    [[nodiscard]] std::vector<std::int16_t> pre_buffer_snapshot() const;
+
     // Sample-rate-derived cap on the rolling pre-buffer (samples).
     [[nodiscard]] std::size_t pre_pad_capacity() const noexcept { return pre_pad_capacity_; }
 

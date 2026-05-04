@@ -84,6 +84,21 @@ public:
     // start() to avoid a brief race with the audio callback.
     void set_loopback_sink(audio::LoopbackSink* sink) noexcept { loopback_sink_ = sink; }
 
+    // M7 — note that a barge-in fired for `cancelled_turn` at
+    // `publish_ts`. Call from the bus subscriber thread (or the
+    // BargeInDetector) after publishing UserInterrupted. The audio
+    // thread arms a single-shot timer and stops it the first time it
+    // emits silence while the active turn no longer equals
+    // `cancelled_turn`. consume_pending_barge_in_latency_ms() then
+    // returns the delta exactly once.
+    void note_barge_in(dialogue::TurnId cancelled_turn,
+                        std::chrono::steady_clock::time_point publish_ts) noexcept;
+
+    // Returns the most recent barge-in latency in milliseconds, or
+    // -1 if no measurement is pending. Resets to -1 after each
+    // successful read.
+    [[nodiscard]] double consume_pending_barge_in_latency_ms() noexcept;
+
     // Counters (read by /metrics). All loads are relaxed.
     [[nodiscard]] std::uint64_t underruns()      const noexcept { return underruns_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t frames_played()  const noexcept { return frames_played_.load(std::memory_order_relaxed); }
@@ -144,6 +159,17 @@ private:
 
     // M6 — non-owning. nullptr disables the tap.
     audio::LoopbackSink* loopback_sink_ = nullptr;
+
+    // M7 — barge-in latency tracking. publish_ns_ holds the steady_clock
+    // nanoseconds of the UserInterrupted publish (0 = nothing armed);
+    // target_turn_ is the cancelled turn id. When the audio thread
+    // emits silence while active_turn != target_turn_, it computes
+    // the delta into pending_latency_ms_ and clears publish_ns_.
+    // consume_pending_barge_in_latency_ms() reads pending_latency_ms_
+    // and resets it to -1.
+    std::atomic<std::int64_t>     barge_in_publish_ns_{0};
+    std::atomic<dialogue::TurnId> barge_in_target_turn_{event::kNoTurn};
+    std::atomic<double>           barge_in_pending_latency_ms_{-1.0};
 };
 
 } // namespace acva::playback

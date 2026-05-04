@@ -16,6 +16,7 @@ add_library(acva_core STATIC
     demos/aec.cpp
     demos/aec_hw.cpp
     demos/aec_record.cpp
+    demos/bargein.cpp
     demos/capture.cpp
     demos/chat.cpp
     demos/demo.cpp
@@ -29,6 +30,7 @@ add_library(acva_core STATIC
     demos/transcribe.cpp
     demos/tts.cpp
     demos/wedge.cpp
+    dialogue/barge_in.cpp
     dialogue/fsm.cpp
     dialogue/manager.cpp
     dialogue/sentence_splitter.cpp

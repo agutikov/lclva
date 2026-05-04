@@ -4,6 +4,7 @@
 #include "event/bus.hpp"
 #include "event/event.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <mutex>
@@ -50,6 +51,12 @@ struct FsmSnapshot {
     std::uint64_t turns_completed = 0;
     std::uint64_t turns_interrupted = 0;
     std::uint64_t turns_discarded = 0;
+    // Wall-clock instant of the most recent transition INTO Speaking,
+    // or default-constructed (epoch) if Speaking has never been entered.
+    // Used by the M7 BargeInDetector to gate the cool-down window. Reset
+    // on every Speaking entry — back-to-back assistant turns each get a
+    // fresh anchor.
+    std::chrono::steady_clock::time_point entered_speaking_at{};
 };
 
 // Dialogue FSM. Single-threaded by construction: subscribes to the bus with
@@ -119,6 +126,8 @@ private:
     std::uint64_t turns_completed_ = 0;
     std::uint64_t turns_interrupted_ = 0;
     std::uint64_t turns_discarded_ = 0;
+
+    std::chrono::steady_clock::time_point entered_speaking_at_{};
 
     std::function<void(const char*)>           outcome_observer_;
     std::function<void(State, State)>          state_observer_;

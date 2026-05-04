@@ -132,6 +132,13 @@ stt:
   # warm-up that latency lands on the user's first sentence. Set false
   # to skip when running against a remote Speaches that's already warm.
   warmup_on_startup: true
+  # M7 Bug 4 — minimum int16 RMS for an utterance slice to reach STT.
+  # Whisper hallucinates subtitle text ("Продолжение следует…",
+  # "Субтитры сделал DimaTorzok") on near-silent buffers that crossed
+  # VAD threshold thanks to pre/post padding. Set to 0 to disable the
+  # gate (pre-M7 behaviour). 200 ≈ -45 dBFS — well below normal speech
+  # levels but above the noise floor of the M6B PipeWire-AEC residual.
+  min_utterance_rms: 200
   health:
     health_url: "http://127.0.0.1:8090/health"
     fail_pipeline_if_down: false   # becomes true in M5 once the dialogue path needs STT
@@ -296,6 +303,32 @@ apm:
   # on shutdown if we loaded it).  See block comment above for why
   # the other three knobs are off.
   use_system_aec: true
+
+# M7 — barge-in detector. Promotes a VAD SpeechStarted that arrives
+# while the assistant is Speaking into a UserInterrupted event, kicking
+# off the cancellation cascade (LLM stream cancel → TtsBridge drain →
+# PlaybackQueue drain → audio thread silences). Gated on AEC
+# convergence so the assistant's own voice doesn't trip it. See
+# plans/milestones/m7_barge_in.md.
+barge_in:
+  enabled: true
+  # Set false on headphone-only setups where AEC never converges
+  # because there's no echo path to cancel.
+  require_aec_converged: true
+  # The M6 acceptance fixture hits 25-29 dB; this is set above the
+  # noise floor so brief dips during convergence don't open the gate.
+  min_aec_erle_db: 15.0
+  # Reserved — VAD probability isn't currently surfaced per-event;
+  # the endpointer's own onset_threshold (cfg.vad.onset_threshold)
+  # already filters before SpeechStarted publishes.
+  min_vad_probability: 0.6
+  # Quiet window after Speaking begins. Absorbs the user's residual
+  # breath / lip noise at TTS start + any AEC convergence transient.
+  cool_down_after_turn_ms: 300
+  # FinalTranscripts shorter than this (after whitespace strip) are
+  # treated as discarded — typically a cough / throat-clear after
+  # barge-in. Counted in code points.
+  min_real_utterance_chars: 3
 
 supervisor:
   pipeline_fail_grace_seconds: 30

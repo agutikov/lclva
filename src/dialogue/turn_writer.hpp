@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace acva::memory { class MemoryThread; }
 
@@ -30,15 +31,17 @@ namespace acva::dialogue {
 //     handles it; M8 will tighten the ordering.
 //
 // Assistant turns:
-//   - Tracked per Manager turn id (LlmStarted/LlmSentence/LlmFinished).
-//   - LlmFinished{cancelled=false}: write status=Committed.
-//   - LlmFinished{cancelled=true}  : write status=Interrupted iff at least
-//                                    one sentence was emitted; otherwise
-//                                    no row is written (Discarded).
-//   - In M1 the "played-out portion" (project_design.md §6) is the
-//     emitted-sentence text, since playback events don't fire yet. M3
-//     will narrow this to the actually-played prefix using
-//     PlaybackFinished.
+//   - Tracked per Manager turn id (LlmStarted/LlmSentence/LlmFinished/PlaybackFinished).
+//   - LlmFinished{cancelled=false}: write status=Committed with the
+//                                    full emitted-sentence text.
+//   - LlmFinished{cancelled=true}  : if no sentence was *played* (no
+//                                    PlaybackFinished observed for the
+//                                    turn) → write nothing (Discarded).
+//                                    Otherwise → write status=Interrupted
+//                                    with text = concatenation of sentences
+//                                    whose PlaybackFinished was observed
+//                                    BEFORE the cancellation (i.e., what
+//                                    the user actually heard).
 class TurnWriter {
 public:
     TurnWriter(event::EventBus& bus, memory::MemoryThread& memory);
@@ -64,6 +67,7 @@ private:
     void handle_started(const event::LlmStarted& e);
     void handle_sentence(const event::LlmSentence& e);
     void handle_finished(const event::LlmFinished& e);
+    void handle_playback_finished(const event::PlaybackFinished& e);
 
     event::EventBus& bus_;
     memory::MemoryThread& memory_;
@@ -71,10 +75,14 @@ private:
     std::atomic<memory::SessionId> session_{0};
 
     struct AssistantState {
-        std::string text;
-        std::string lang;
-        memory::UnixMs started_at = 0;
-        std::uint32_t sentences = 0;
+        // Emitted sentences in order of receipt. `played[i]` mirrors
+        // sentences[i] and is set to true on the matching
+        // PlaybackFinished. M7 persistence policy: on cancelled turns
+        // we persist only sentences whose `played` is true.
+        std::vector<std::string> sentences;
+        std::vector<bool>        played;
+        std::string              lang;
+        memory::UnixMs           started_at = 0;
     };
     std::unordered_map<event::TurnId, AssistantState> in_flight_;
 };

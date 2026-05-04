@@ -12,6 +12,7 @@ namespace acva::demos {
 int run_aec       (const config::Config&);
 int run_aec_hw    (const config::Config&);
 int run_aec_record(const config::Config&);
+int run_bargein   (const config::Config&);
 int run_capture   (const config::Config&);
 int run_chat      (const config::Config&);
 int run_soak      (const config::Config&);
@@ -27,7 +28,7 @@ int run_tts       (const config::Config&);
 
 namespace {
 
-constexpr std::array<Demo, 15> kDemos{{
+constexpr std::array<Demo, 16> kDemos{{
     {"fsm",      "M0",
      "synthetic FSM driver runs 3 turns end-to-end (no backends needed)",
      run_fsm},
@@ -46,6 +47,9 @@ constexpr std::array<Demo, 15> kDemos{{
     {"chat",     "M1+M3+M4B",
      "full text-in → speech-out loop (text → LLM → Speaches TTS → speakers)",
      run_chat},
+    {"bargein",  "M7",
+     "auto-injected interrupt mid-turn — verifies the cancellation cascade",
+     run_bargein},
     {"loopback", "M4",
      "5 s mic → speakers passthrough through the SPSC ring + 48↔16 kHz resampler",
      run_loopback},

@@ -247,6 +247,15 @@ std::optional<LoadError> validate(const Config& cfg) {
         return LoadError{
             "config: apm.initial_delay_estimate_ms must be <= apm.max_delay_ms"};
     }
+
+    // M7 — barge-in.
+    if (cfg.barge_in.min_aec_erle_db < 0.0F) {
+        return LoadError{"config: barge_in.min_aec_erle_db: must be >= 0"};
+    }
+    if (cfg.barge_in.min_vad_probability < 0.0F
+        || cfg.barge_in.min_vad_probability > 1.0F) {
+        return LoadError{"config: barge_in.min_vad_probability: must be in [0, 1]"};
+    }
     return std::nullopt;
 }
 

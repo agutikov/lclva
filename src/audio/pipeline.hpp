@@ -57,6 +57,12 @@ public:
         // preserved bit-for-bit so capture-only tests don't regress.
         ApmConfig     apm{};
         LoopbackSink* loopback = nullptr;
+        // M7 Bug 4 — minimum int16 RMS for an utterance slice to be
+        // emitted as UtteranceReady. Slices below this are dropped
+        // (logged at info level + counted) so Whisper never sees the
+        // near-silence frames that produce its subtitle hallucinations.
+        // 0 disables the gate. Sourced from cfg.stt.min_utterance_rms.
+        std::uint32_t min_utterance_rms = 0;
     };
 
     AudioPipeline(Config cfg,
@@ -76,6 +82,7 @@ public:
     [[nodiscard]] std::uint64_t frames_processed()  const noexcept { return frames_processed_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t utterances_total()  const noexcept { return utterances_total_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t false_starts_total() const noexcept { return false_starts_total_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t low_rms_drops_total() const noexcept { return low_rms_drops_total_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t utterance_drops()    const noexcept { return utterance_buffer_.drops(); }
     [[nodiscard]] std::size_t   in_flight()          const noexcept { return utterance_buffer_.in_flight(); }
     [[nodiscard]] bool          vad_enabled()        const noexcept { return vad_ != nullptr; }
@@ -130,6 +137,7 @@ private:
     std::atomic<std::uint64_t> frames_processed_{0};
     std::atomic<std::uint64_t> utterances_total_{0};
     std::atomic<std::uint64_t> false_starts_total_{0};
+    std::atomic<std::uint64_t> low_rms_drops_total_{0};
 
     // Cached VAD probability between Silero updates (it processes 32 ms
     // windows; we may step the endpointer at the resampled frame rate

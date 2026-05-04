@@ -20,6 +20,8 @@
 #include "orchestrator/supervisor_setup.hpp"
 #include "orchestrator/system_aec.hpp"
 #include "orchestrator/tts_stack.hpp"
+#include "audio/apm.hpp"
+#include "audio/pipeline.hpp"
 #include "stt/openai_stt_client.hpp"
 #include "supervisor/supervisor.hpp"
 
@@ -257,9 +259,14 @@ int main(int argc, char** argv) {
         cfg, bus, audio_pipeline, metric_subs);
 
     // ----- M1 + M2 + M5 dialogue + LLM stack -----
+    // M7 — pass the AudioPipeline's APM (when available) into the
+    // dialogue stack so the BargeInDetector can gate on convergence.
+    // Null when capture is disabled or APM was built as a stub.
+    const acva::audio::Apm* apm_for_barge_in =
+        audio_pipeline ? audio_pipeline->apm() : nullptr;
     auto dialogue_or = acva::orchestrator::build_dialogue_stack(
         cfg, bus, registry, *memory, fsm, supervisor, turns,
-        playback_active_turn, metric_subs);
+        apm_for_barge_in, playback_active_turn, metric_subs);
     if (auto* err = std::get_if<acva::memory::DbError>(&dialogue_or)) {
         acva::log::error("main", fmt::format("session insert failed: {}", err->message));
         fsm.stop();
@@ -267,6 +274,48 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
     auto dialogue = std::move(std::get<std::unique_ptr<acva::orchestrator::DialogueStack>>(dialogue_or));
+
+    // M7 — wire BargeInDetector → PlaybackEngine and start it. The
+    // detector's on_fired callback runs on its bus subscription
+    // thread; the engine stores the publish ts atomically and the
+    // audio thread closes the timer on the first post-cancel silent
+    // buffer. The tts metrics poller drains the latency into the
+    // histogram. Wire BEFORE start() so the first SpeechStarted
+    // observed during Speaking can't slip past the callback.
+    if (auto* bi = dialogue->barge_in(); bi != nullptr) {
+        if (tts && tts->engine()) {
+            bi->set_on_fired(
+                [engine = tts->engine()](acva::event::TurnId turn,
+                                          std::chrono::steady_clock::time_point ts) {
+                    engine->note_barge_in(turn, ts);
+                });
+        }
+        bi->start();
+    }
+
+    // M7 — small poller mirroring BargeInDetector counters into the
+    // metrics gauges. Tiny standalone thread (1 Hz cadence) — avoids
+    // contorting the existing capture / tts pollers, both of which
+    // own non-trivial mutexes for their own subsystems.
+    std::atomic<bool> bi_metrics_stop{false};
+    std::thread bi_metrics_thread;
+    if (auto* bi = dialogue->barge_in(); bi != nullptr) {
+        bi_metrics_thread = std::thread([&bi_metrics_stop, registry, bi] {
+            using namespace std::chrono_literals;
+            while (!bi_metrics_stop.load(std::memory_order_acquire)) {
+                registry->set_barge_in_fires_total(
+                    static_cast<double>(bi->fires_total()));
+                registry->set_barge_in_suppressed_total(
+                    static_cast<double>(bi->suppressed_total()));
+                registry->set_barge_in_suppressed_cooldown(
+                    static_cast<double>(bi->suppressed_cooldown()));
+                registry->set_barge_in_suppressed_aec(
+                    static_cast<double>(bi->suppressed_aec()));
+                std::this_thread::sleep_for(1s);
+            }
+        });
+    }
+
     std::thread stdin_reader;
 
     // ----- stdin text-input mode (M1 era) — only the line reader -----
@@ -316,6 +365,8 @@ int main(int argc, char** argv) {
     if (stt_stack) stt_stack->stop();
     if (dialogue) dialogue->stop();
     if (tts)      tts->stop();
+    bi_metrics_stop.store(true, std::memory_order_release);
+    if (bi_metrics_thread.joinable()) bi_metrics_thread.join();
     supervisor.stop();
     fsm.stop();
     control.reset();

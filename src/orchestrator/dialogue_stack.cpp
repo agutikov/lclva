@@ -19,6 +19,10 @@ void DialogueStack::stop() {
     stopped_ = true;
 
     if (fake_driver_) fake_driver_->stop();
+    // Stop barge-in detection before tearing down the LLM/manager so a
+    // late SpeechStarted can't fire UserInterrupted into a half-shut
+    // pipeline.
+    if (barge_in_)    barge_in_->stop();
     if (keep_alive_)  keep_alive_->stop();   // before llm_client teardown
     if (manager_)     manager_->stop();
     if (turn_writer_) turn_writer_->stop();
@@ -33,6 +37,7 @@ build_dialogue_stack(const config::Config& cfg,
                       dialogue::Fsm& fsm,
                       supervisor::Supervisor& sup,
                       dialogue::TurnFactory& turns,
+                      const audio::Apm* apm,
                       const std::shared_ptr<std::atomic<event::TurnId>>& playback_active_turn,
                       std::vector<event::SubscriptionHandle>& subscription_keepalive) {
     auto stack = std::make_unique<DialogueStack>();
@@ -137,6 +142,24 @@ build_dialogue_stack(const config::Config& cfg,
         [](const event::LlmSentence& e) {
             std::cout << "  " << e.text << "\n" << std::flush;
         }));
+
+    // M7 — barge-in detector. Subscribed to SpeechStarted; promotes
+    // those that arrive while Speaking (and past the AEC + cooldown
+    // gates) into UserInterrupted events. No-op when
+    // cfg.barge_in.enabled = false. The Apm pointer may be null when
+    // capture is disabled, the stub APM build is in use, or the
+    // pipeline runs without a loopback ring; the detector handles
+    // that by treating require_aec_converged as a hard refusal-to-fire
+    // unless the user has explicitly relaxed the gate.
+    //
+    // Constructed but NOT started here — main.cpp wires the on_fired
+    // callback (which targets the playback engine's barge-in timer)
+    // and then calls start(). Doing it in this order avoids a brief
+    // window where SpeechStarted fires, the detector publishes
+    // UserInterrupted, but the on_fired callback isn't connected yet
+    // and the latency histogram misses the sample.
+    stack->barge_in_ = std::make_unique<dialogue::BargeInDetector>(
+        bus, fsm, apm, cfg.barge_in);
 
     return stack;
 }

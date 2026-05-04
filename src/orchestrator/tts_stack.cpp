@@ -250,6 +250,15 @@ build_tts_stack(const config::Config& cfg,
                 static_cast<double>(stack_ptr->engine_->chunks_played()));
             registry->set_playback_drops_total(
                 static_cast<double>(stack_ptr->queue_->drops()));
+            // M7 — drain any pending barge-in latency the audio
+            // thread stashed since the last poll. Each successful
+            // pop observes once into the histogram; subsequent
+            // polls return -1 until the next barge-in.
+            const double bi_ms =
+                stack_ptr->engine_->consume_pending_barge_in_latency_ms();
+            if (bi_ms >= 0.0) {
+                registry->on_barge_in_latency(bi_ms);
+            }
             std::this_thread::sleep_for(500ms);
         }
     });

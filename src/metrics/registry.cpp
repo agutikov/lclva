@@ -207,6 +207,31 @@ Registry::Registry() : registry_(std::make_shared<prometheus::Registry>()) {
         .Help("Cumulative 10 ms frames passed through the APM wrapper")
         .Register(*registry_);
     aec_frames_processed_metric_ = &aec_frames_processed_->Add({});
+
+    // M7 — barge-in.
+    barge_in_latency_ms_ = &prometheus::BuildHistogram()
+        .Name("voice_barge_in_latency_ms")
+        .Help("Time from UserInterrupted publish to first silent playback buffer; "
+              "M7 acceptance: P50 ≤ 200 ms, P95 ≤ 400 ms")
+        .Register(*registry_);
+    barge_in_latency_ms_metric_ = &barge_in_latency_ms_->Add({},
+        prometheus::Histogram::BucketBoundaries{
+            10, 25, 50, 100, 150, 200, 300, 400, 600, 1000});
+
+    barge_in_fires_ = &prometheus::BuildGauge()
+        .Name("voice_barge_in_fires_total")
+        .Help("Cumulative UserInterrupted events published by the BargeInDetector")
+        .Register(*registry_);
+    barge_in_fires_metric_ = &barge_in_fires_->Add({});
+
+    barge_in_suppressed_ = &prometheus::BuildGauge()
+        .Name("voice_barge_in_suppressed_total")
+        .Help("SpeechStarted events seen while Speaking but not promoted to "
+              "UserInterrupted (cooldown / AEC gate)")
+        .Register(*registry_);
+    barge_in_suppressed_metric_          = &barge_in_suppressed_->Add({{"cause", "any"}});
+    barge_in_suppressed_cooldown_metric_ = &barge_in_suppressed_->Add({{"cause", "cooldown"}});
+    barge_in_suppressed_aec_metric_      = &barge_in_suppressed_->Add({{"cause", "aec"}});
 }
 
 void Registry::on_event_published(const char* event_name) {
@@ -326,6 +351,24 @@ void Registry::set_aec_erle_db(double db) {
 }
 void Registry::set_aec_frames_processed_total(double total) {
     if (aec_frames_processed_metric_) aec_frames_processed_metric_->Set(total);
+}
+
+void Registry::on_barge_in_latency(double ms) {
+    if (barge_in_latency_ms_metric_ && ms >= 0.0) {
+        barge_in_latency_ms_metric_->Observe(ms);
+    }
+}
+void Registry::set_barge_in_fires_total(double total) {
+    if (barge_in_fires_metric_) barge_in_fires_metric_->Set(total);
+}
+void Registry::set_barge_in_suppressed_total(double total) {
+    if (barge_in_suppressed_metric_) barge_in_suppressed_metric_->Set(total);
+}
+void Registry::set_barge_in_suppressed_cooldown(double total) {
+    if (barge_in_suppressed_cooldown_metric_) barge_in_suppressed_cooldown_metric_->Set(total);
+}
+void Registry::set_barge_in_suppressed_aec(double total) {
+    if (barge_in_suppressed_aec_metric_) barge_in_suppressed_aec_metric_->Set(total);
 }
 
 std::vector<event::SubscriptionHandle> Registry::subscribe(event::EventBus& bus) {

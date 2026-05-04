@@ -125,7 +125,11 @@ TEST_CASE("turn_writer: persists assistant turn as Committed on clean LlmFinishe
     bus.shutdown();
 }
 
-TEST_CASE("turn_writer: cancellation with sentences emitted writes Interrupted") {
+TEST_CASE("turn_writer: cancellation with played sentences writes Interrupted") {
+    // M7 persistence policy: text persisted on cancellation is the
+    // concatenation of sentences whose PlaybackFinished was observed
+    // before LlmFinished{cancelled}. A sentence that was synthesized
+    // but never played is excluded.
     auto path = tmp_db("assistant-interrupted");
     auto mt = open_mt(path);
     auto sid = seed_session(*mt);
@@ -137,7 +141,10 @@ TEST_CASE("turn_writer: cancellation with sentences emitted writes Interrupted")
 
     const ev::TurnId turn = 7;
     bus.publish(ev::LlmStarted{ .turn = turn });
-    bus.publish(ev::LlmSentence{ .turn = turn, .seq = 0, .text = "Half a thought.", .lang = "en" });
+    bus.publish(ev::LlmSentence{ .turn = turn, .seq = 0, .text = "Played sentence.", .lang = "en" });
+    bus.publish(ev::LlmSentence{ .turn = turn, .seq = 1, .text = "Cut-off sentence.", .lang = "en" });
+    // Only seq=0 reaches the user's ear before the barge-in fires.
+    bus.publish(ev::PlaybackFinished{ .turn = turn, .seq = 0 });
     bus.publish(ev::LlmFinished{ .turn = turn, .cancelled = true, .tokens_generated = 3 });
 
     REQUIRE(wait_for([&]{
@@ -154,9 +161,39 @@ TEST_CASE("turn_writer: cancellation with sentences emitted writes Interrupted")
     CHECK(rows[0].role == mem::TurnRole::Assistant);
     CHECK(rows[0].status == mem::TurnStatus::Interrupted);
     REQUIRE(rows[0].text.has_value());
-    CHECK(*rows[0].text == "Half a thought.");
+    // Only the played sentence is persisted — "Cut-off sentence." is
+    // discarded because the user never heard it.
+    CHECK(*rows[0].text == "Played sentence.");
     REQUIRE(rows[0].interrupted_at_sentence.has_value());
     CHECK(*rows[0].interrupted_at_sentence == 1);
+
+    writer.stop();
+    bus.shutdown();
+}
+
+TEST_CASE("turn_writer: cancellation with sentences emitted but none played writes nothing") {
+    // M7 persistence policy: emitted-but-not-played → Discarded (no row).
+    // Pre-M7 this used to write the emitted text as Interrupted.
+    auto path = tmp_db("assistant-emitted-not-played");
+    auto mt = open_mt(path);
+    auto sid = seed_session(*mt);
+
+    ev::EventBus bus;
+    dlg::TurnWriter writer(bus, *mt);
+    writer.set_session(sid);
+    writer.start();
+
+    const ev::TurnId turn = 11;
+    bus.publish(ev::LlmStarted{ .turn = turn });
+    bus.publish(ev::LlmSentence{ .turn = turn, .seq = 0, .text = "Synthesized but cut.", .lang = "en" });
+    bus.publish(ev::LlmFinished{ .turn = turn, .cancelled = true, .tokens_generated = 3 });
+
+    // Allow time for any (non-)write to be visible.
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+
+    auto rows = std::get<std::vector<mem::TurnRow>>(
+        mt->read([sid](mem::Repository& r){ return r.recent_turns(sid, 10); }));
+    CHECK(rows.empty());
 
     writer.stop();
     bus.shutdown();

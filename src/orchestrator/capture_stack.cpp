@@ -78,6 +78,8 @@ build_capture_stack(const config::Config& cfg,
     apc.max_in_flight               = cfg.utterance.max_in_flight;
     apc.max_duration_ms             = std::chrono::milliseconds{cfg.utterance.max_duration_ms};
     apc.vad_model_path              = cfg.vad.model_path;
+    // M7 Bug 4 — STT-side RMS gate against Whisper hallucinations.
+    apc.min_utterance_rms           = cfg.stt.min_utterance_rms;
 
     // M6 — install the AEC stage when both playback (loopback ring)
     // and an APM-capable build are present. cfg.apm controls the

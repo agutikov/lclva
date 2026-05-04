@@ -6,6 +6,7 @@
 #include <fmt/format.h>
 
 #include <chrono>
+#include <cmath>
 #include <utility>
 
 namespace acva::audio {
@@ -167,13 +168,23 @@ void AudioPipeline::process_frame(const AudioFrame& frame) {
         case FO::SpeechStarted: {
             const auto pre_pad_start =
                 frame.captured_at - cfg_.pre_padding_ms;
+            // Snapshot the rolling pre-buffer BEFORE on_speech_started
+            // adopts (and clears) it — that's the audio the user
+            // produced before VAD's `min_speech_ms` matured. M7 Bug 1:
+            // the M5 streaming sink used to miss this window because
+            // it only fired between SpeechStarted and SpeechEnded;
+            // realtime STT lost ~200-500 ms of leading audio per
+            // utterance and occasionally clipped the first phoneme.
+            const auto pre_pad = utterance_buffer_.pre_buffer_snapshot();
             utterance_buffer_.on_speech_started(pre_pad_start, frame.captured_at);
             in_speech_ = true;
-            // Replay the pre-padding window into the live sink so the
-            // realtime STT sees the same prefix the M4B path keeps in
-            // the UtteranceBuffer. push_audio chunks are short int16
-            // mono at the resampler output rate (16 kHz).
+            // Replay the pre-padding window into the live sink first
+            // so the realtime STT sees the same prefix the M4B path
+            // keeps in the UtteranceBuffer, then the current frame.
             if (live_sink_) {
+                if (!pre_pad.empty()) {
+                    live_sink_(pre_pad);
+                }
                 live_sink_(resampled);
             }
             bus_.publish(event::SpeechStarted{
@@ -193,11 +204,46 @@ void AudioPipeline::process_frame(const AudioFrame& frame) {
                 .ts   = frame.captured_at,
             });
             if (slice) {
-                utterances_total_.fetch_add(1, std::memory_order_relaxed);
-                bus_.publish(event::UtteranceReady{
-                    .turn  = event::kNoTurn,
-                    .slice = std::move(slice),
-                });
+                // M7 Bug 4 — RMS gate. Whisper hallucinates subtitle
+                // text on near-silent buffers; the M4 endpointer's
+                // min_speech_ms catches most of these but not all
+                // (pre/post padding can dilute energy below the
+                // hallucination floor). Compute RMS, drop the slice
+                // when too quiet.
+                bool drop_low_rms = false;
+                if (cfg_.min_utterance_rms > 0) {
+                    const auto samples = slice->samples();
+                    if (!samples.empty()) {
+                        std::uint64_t sum_sq = 0;
+                        for (auto s : samples) {
+                            const std::int64_t v = s;
+                            sum_sq += static_cast<std::uint64_t>(v * v);
+                        }
+                        const double rms = std::sqrt(
+                            static_cast<double>(sum_sq)
+                            / static_cast<double>(samples.size()));
+                        if (rms < static_cast<double>(cfg_.min_utterance_rms)) {
+                            drop_low_rms = true;
+                            low_rms_drops_total_.fetch_add(
+                                1, std::memory_order_relaxed);
+                            // info-level (not warn) because this is the
+                            // expected behaviour for ambient noise
+                            // utterances; warn would cry wolf.
+                            log::info("audio_pipeline", fmt::format(
+                                "dropping low-RMS utterance: rms={:.1f} "
+                                "min_rms={} duration_ms={}",
+                                rms, cfg_.min_utterance_rms,
+                                slice->duration().count()));
+                        }
+                    }
+                }
+                if (!drop_low_rms) {
+                    utterances_total_.fetch_add(1, std::memory_order_relaxed);
+                    bus_.publish(event::UtteranceReady{
+                        .turn  = event::kNoTurn,
+                        .slice = std::move(slice),
+                    });
+                }
             }
             break;
         }

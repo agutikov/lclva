@@ -82,6 +82,53 @@ void PlaybackEngine::force_headless(std::chrono::milliseconds tick) {
 // Realtime contract: never allocates; the only synchronization is the
 // brief mutex inside PlaybackQueue::dequeue_active, which contends
 // only with the (single-threaded) producer.
+void PlaybackEngine::note_barge_in(dialogue::TurnId cancelled_turn,
+                                    std::chrono::steady_clock::time_point publish_ts) noexcept {
+    const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        publish_ts.time_since_epoch()).count();
+    barge_in_target_turn_.store(cancelled_turn, std::memory_order_release);
+    barge_in_publish_ns_.store(ns, std::memory_order_release);
+}
+
+double PlaybackEngine::consume_pending_barge_in_latency_ms() noexcept {
+    const double v = barge_in_pending_latency_ms_.exchange(-1.0, std::memory_order_acq_rel);
+    return v;
+}
+
+namespace {
+
+// Audio-thread helper: if a barge-in is armed and we just emitted a
+// silent buffer for a turn that has moved past the cancelled one, stop
+// the timer and stash the delta. Single-shot per arm.
+inline void maybe_close_barge_in_timer(
+        std::atomic<std::int64_t>&     publish_ns,
+        std::atomic<dialogue::TurnId>& target_turn,
+        std::atomic<double>&           pending_ms,
+        dialogue::TurnId               active_turn) noexcept {
+    const auto ns = publish_ns.load(std::memory_order_acquire);
+    if (ns == 0) return;
+    const auto target = target_turn.load(std::memory_order_acquire);
+    // We treat "audio is silent" as "the active turn is not the cancelled
+    // turn anymore" — once the FSM has bumped the active id, the audio
+    // thread is rendering silence (or the next user-induced turn's audio).
+    // Comparing against `target` rather than `event::kNoTurn` covers the
+    // back-to-back-turn case where active flips straight to the new id.
+    if (active_turn == target) return;
+    const auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    // CAS publish_ns to 0 so we record the latency exactly once even if
+    // multiple silent buffers fire before the poller drains it.
+    auto expected = ns;
+    if (publish_ns.compare_exchange_strong(expected, 0,
+                                            std::memory_order_acq_rel,
+                                            std::memory_order_relaxed)) {
+        const double ms = static_cast<double>(now_ns - ns) / 1.0e6;
+        pending_ms.store(ms, std::memory_order_release);
+    }
+}
+
+} // namespace
+
 void PlaybackEngine::render_into(std::int16_t* out, std::size_t frames) {
     std::size_t filled = 0;
     while (filled < frames) {
@@ -122,6 +169,9 @@ void PlaybackEngine::render_into(std::int16_t* out, std::size_t frames) {
                     std::memset(out + filled, 0, rem * sizeof(std::int16_t));
                     prefill_silence_frames_.fetch_add(
                         rem, std::memory_order_relaxed);
+                    maybe_close_barge_in_timer(
+                        barge_in_publish_ns_, barge_in_target_turn_,
+                        barge_in_pending_latency_ms_, active);
                     return;
                 }
             }
@@ -131,6 +181,9 @@ void PlaybackEngine::render_into(std::int16_t* out, std::size_t frames) {
                 std::memset(out + filled, 0,
                              (frames - filled) * sizeof(std::int16_t));
                 underruns_.fetch_add(1, std::memory_order_relaxed);
+                maybe_close_barge_in_timer(
+                    barge_in_publish_ns_, barge_in_target_turn_,
+                    barge_in_pending_latency_ms_, active);
                 return;
             }
             impl_->current = std::move(*next);

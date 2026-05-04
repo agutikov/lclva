@@ -7,10 +7,40 @@
 
 #include <fmt/format.h>
 
+#include <string_view>
 #include <utility>
 #include <variant>
 
 namespace acva::dialogue {
+
+namespace {
+
+// Count visible characters in `s`: skip whitespace, ASCII control, and
+// the typical Whisper-hallucination padding. Counts UTF-8 code points
+// (one increment per leading byte) rather than bytes so multilingual
+// text isn't penalised vs. ASCII.
+std::size_t normalised_visible_chars(std::string_view s) noexcept {
+    std::size_t n = 0;
+    for (std::size_t i = 0; i < s.size();) {
+        const auto b = static_cast<unsigned char>(s[i]);
+        const std::size_t step = (b < 0x80U) ? 1U
+                              : ((b & 0xE0U) == 0xC0U) ? 2U
+                              : ((b & 0xF0U) == 0xE0U) ? 3U
+                              : 4U;
+        if (b < 0x80U) {
+            // ASCII: count anything that isn't whitespace/control/punct-noise.
+            if (b > 0x20U && b != 0x7FU) ++n;
+        } else {
+            // Non-ASCII codepoint: always counts (no cheap way to know
+            // if it's punctuation without a Unicode table).
+            ++n;
+        }
+        i += step;
+    }
+    return n;
+}
+
+} // namespace
 
 Manager::Manager(const config::Config& cfg,
                  event::EventBus& bus,
@@ -89,6 +119,25 @@ bool Manager::gate_open() const {
 void Manager::on_event(const event::Event& e) {
     std::visit([this]<class T>(const T& evt) {
         if constexpr (std::is_same_v<T, event::FinalTranscript>) {
+            // M7 §6 — short-utterance filter. Catches cough / lip noise
+            // that crossed VAD threshold but isn't a real turn (often
+            // produced by Whisper hallucination on near-silent buffers,
+            // or by the residual breath after a barge-in). Discard the
+            // turn by publishing UserInterrupted, which sends the FSM
+            // through Interrupted → Listening with no LLM call.
+            if (const auto min_chars = cfg_.barge_in.min_real_utterance_chars;
+                min_chars > 0
+                && normalised_visible_chars(evt.text) < min_chars) {
+                log::info("dialogue", fmt::format(
+                    "discarding short utterance turn={} text=\"{}\" "
+                    "(< {} visible chars)",
+                    evt.turn, evt.text, min_chars));
+                bus_.publish(event::UserInterrupted{
+                    .turn = evt.turn,
+                    .ts   = std::chrono::steady_clock::now(),
+                });
+                return;
+            }
             if (!gate_open()) {
                 gated_turns_.fetch_add(1, std::memory_order_relaxed);
                 // Rate-limit the log line at once per minute. Without this
@@ -217,36 +266,63 @@ void Manager::run_one(const event::FinalTranscript& e) {
     std::vector<std::string> emitted;
     event::SequenceNo seq = 0;
     const auto cap = cfg_.dialogue.max_assistant_sentences;
-    bool cap_reached = false;
+    // Tri-state cap state machine:
+    //   none      : below the cap; everything passes through.
+    //   pending   : seq == cap; let the in-flight sentence finish
+    //               (continue feeding the splitter) before cancelling.
+    //   cancelled : the LLM stream has been cancelled.
+    // Without `pending`, hitting the cap mid-token cancelled libcurl
+    // immediately and the LAST sentence the user heard was a
+    // half-thought. The system prompt also asks the LLM to stay
+    // within the cap so the pending window is usually short. Cancel-
+    // at-cap+1 is a hard backstop in case the LLM ignores the prompt.
+    enum class CapState { None, Pending, Cancelled };
+    auto cap_state = CapState::None;
+    const event::SequenceNo cap_backstop = cap > 0 ? cap + 1 : 0;
 
-    auto enforce_cap = [&] {
-        // Once the cap is hit, cancel the LLM stream so libcurl's
-        // write callback aborts on the next chunk. Already-emitted
-        // sentences keep flowing through the TTS bridge unchanged.
-        if (!cap_reached && cap > 0 && seq >= cap) {
-            cap_reached = true;
-            if (ctx.token) ctx.token->cancel();
-            log::info("dialogue", fmt::format(
-                "sentence cap hit: turn={} cap={} — cancelling LLM stream",
-                ctx.id, cap));
-        }
+    auto request_cancel = [&](const char* why) {
+        if (cap_state == CapState::Cancelled) return;
+        cap_state = CapState::Cancelled;
+        if (ctx.token) ctx.token->cancel();
+        log::info("dialogue", fmt::format(
+            "sentence cap hit: turn={} cap={} — cancelling LLM stream ({})",
+            ctx.id, cap, why));
     };
 
     auto on_token = [&](std::string_view delta) {
-        if (cap_reached) return;
+        if (cap_state == CapState::Cancelled) return;
         emitted.clear();
         splitter.push(delta, emitted);
         for (auto& s : emitted) {
-            if (cap > 0 && seq >= cap) break;
+            // Hard backstop: if the LLM ignored the system-prompt cap
+            // and we're already one past, drop further sentences and
+            // cancel. seq here is pre-increment.
+            if (cap_backstop > 0 && seq >= cap_backstop) {
+                request_cancel("backstop");
+                break;
+            }
             bus_.publish(event::LlmSentence{
                 .turn = ctx.id,
                 .seq  = seq++,
                 .text = std::move(s),
                 .lang = lang,
             });
+            // First sentence at the cap → enter Pending. We keep
+            // feeding the splitter on the next on_token so the LLM's
+            // currently-streaming sentence has a chance to complete.
+            if (cap_state == CapState::None && cap > 0 && seq >= cap) {
+                cap_state = CapState::Pending;
+                log::info("dialogue", fmt::format(
+                    "sentence cap reached: turn={} cap={} — letting in-flight "
+                    "sentence finish before cancel",
+                    ctx.id, cap));
+            } else if (cap_state == CapState::Pending) {
+                // The in-flight sentence completed — fire the cancel.
+                request_cancel("post-pending");
+                break;
+            }
         }
-        enforce_cap();
-        if (!cap_reached) {
+        if (cap_state != CapState::Cancelled) {
             bus_.publish(event::LlmToken{ .turn = ctx.id, .token = std::string{delta} });
         }
     };
@@ -255,7 +331,9 @@ void Manager::run_one(const event::FinalTranscript& e) {
         emitted.clear();
         splitter.flush(emitted);
         for (auto& s : emitted) {
-            if (cap > 0 && seq >= cap) break;
+            // Same backstop as on_token: never persist more than one
+            // past the cap.
+            if (cap_backstop > 0 && seq >= cap_backstop) break;
             bus_.publish(event::LlmSentence{
                 .turn = ctx.id,
                 .seq  = seq++,

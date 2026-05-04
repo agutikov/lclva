@@ -61,6 +61,14 @@ std::string assemble_system_content(const config::Config& cfg,
     if (snap.summary.has_value()) {
         os << "\n\nEarlier conversation summary:\n" << snap.summary->summary;
     }
+    // M7 — let the model know about the assistant-sentence cap so a
+    // hard cancel at the cap rarely lands mid-thought. The cap is also
+    // enforced post-hoc in Manager::run_one as a backstop.
+    if (cfg.dialogue.max_assistant_sentences > 0
+        && cfg.dialogue.max_assistant_sentences < 100) {
+        os << "\n\nReply in at most " << cfg.dialogue.max_assistant_sentences
+           << " short sentences.";
+    }
     return os.str();
 }
 

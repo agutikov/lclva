@@ -28,6 +28,7 @@ add_executable(acva_unit_tests
     ${_acva_test_main}
     test_apm.cpp
     test_audio_pipeline.cpp
+    test_barge_in.cpp
     test_bus.cpp
     test_config.cpp
     test_db.cpp

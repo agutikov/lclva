@@ -150,6 +150,16 @@ struct SttConfig {
     // off for fast-startup tests or when running against a remote
     // Speaches that's already warm.
     bool warmup_on_startup = true;
+    // M7 Bug 4 — minimum int16 RMS for an utterance slice to be sent
+    // to STT. Whisper is prone to projecting subtitle hallucinations
+    // ("Продолжение следует…", "Субтитры сделал DimaTorzok") onto
+    // near-silent audio that crossed VAD's onset_threshold thanks to
+    // pre/post padding. Slices with RMS below this are dropped before
+    // UtteranceReady fires; the M4B path then never POSTs the silent
+    // buffer. 0 disables the gate (pre-M7 behaviour). 200 = ~ -45 dBFS,
+    // a safe floor for genuine close-mic speech without clipping
+    // soft-spoken users.
+    std::uint32_t min_utterance_rms = 200;
     ServiceHealthConfig health;
 };
 
@@ -379,6 +389,48 @@ struct UtteranceConfig {
     uint32_t max_duration_ms  = 60000; // safety cap for long monologues
 };
 
+// M7 — barge-in detector. Promotes a VAD `SpeechStarted` during
+// `Speaking` into a `UserInterrupted` event, but only after AEC has
+// converged enough to ignore the assistant's own voice. See
+// plans/milestones/m7_barge_in.md §1.
+struct BargeInConfig {
+    // Master switch. When false the detector is not constructed and
+    // M0's pre-barge-in behaviour stands (FSM has no detection layer
+    // upstream of UserInterrupted; only synthetic / programmatic
+    // sources publish it).
+    bool enabled = true;
+    // When true (default), the detector refuses to fire unless
+    // `Apm::aec_active()` is true AND `erle_db()` >= min_aec_erle_db.
+    // Set to false on headphone-only setups (no echo path) where AEC
+    // never converges because there's nothing to cancel — the loopback
+    // sink's `aec_active` may still be false in that mode.
+    bool require_aec_converged = true;
+    // ERLE gate. The M6 acceptance fixture targets > 25 dB; pre-M6B
+    // hardware that uses the in-process APM might only reach 15-20 dB
+    // briefly, so the threshold is set just above the noise floor.
+    float min_aec_erle_db = 15.0F;
+    // Lower bound on Silero VAD probability at the moment the detector
+    // accepts a SpeechStarted. Tighter than the regular endpointer's
+    // onset_threshold so transient speaker artifacts that slip past
+    // AEC don't fire barge-in. Currently advisory: the M4 endpointer
+    // already enforces its own threshold before publishing
+    // SpeechStarted; this value is reserved for a future change that
+    // exposes the per-frame probability through a side channel.
+    float min_vad_probability = 0.6F;
+    // Quiet window after Speaking begins during which barge-in is
+    // suppressed. Absorbs the user's residual breath / lip sound at
+    // the moment TTS starts, plus any first-buffer convergence
+    // transient in the AEC.
+    uint32_t cool_down_after_turn_ms = 300;
+    // FinalTranscripts whose normalised text is shorter than this are
+    // treated as discarded utterances and not sent to the LLM. Catches
+    // brief coughs / throat-clearing that crossed the VAD threshold
+    // (often after a barge-in) and would otherwise cost an LLM call.
+    // Counted in code points after trimming whitespace + control
+    // characters.
+    uint32_t min_real_utterance_chars = 3;
+};
+
 struct Config {
     LoggingConfig logging;
     ControlConfig control;
@@ -394,6 +446,7 @@ struct Config {
     VadConfig vad;
     UtteranceConfig utterance;
     ApmConfig apm;
+    BargeInConfig barge_in;
 };
 
 struct LoadError {

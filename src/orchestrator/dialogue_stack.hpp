@@ -1,6 +1,7 @@
 #pragma once
 
 #include "config/config.hpp"
+#include "dialogue/barge_in.hpp"
 #include "dialogue/fsm.hpp"
 #include "dialogue/manager.hpp"
 #include "dialogue/turn.hpp"
@@ -15,6 +16,8 @@
 #include "pipeline/fake_driver.hpp"
 #include "supervisor/keep_alive.hpp"
 #include "supervisor/supervisor.hpp"
+
+namespace acva::audio { class Apm; }
 
 #include <atomic>
 #include <memory>
@@ -52,6 +55,7 @@ public:
     // Non-owning accessors. nullptr when LLM is disabled.
     [[nodiscard]] dialogue::Manager* manager() noexcept { return manager_.get(); }
     [[nodiscard]] bool               has_llm() const noexcept { return manager_ != nullptr; }
+    [[nodiscard]] dialogue::BargeInDetector* barge_in() noexcept { return barge_in_.get(); }
 
 private:
     friend std::variant<std::unique_ptr<DialogueStack>, memory::DbError>
@@ -63,6 +67,7 @@ private:
         dialogue::Fsm&,
         supervisor::Supervisor&,
         dialogue::TurnFactory&,
+        const audio::Apm*,
         const std::shared_ptr<std::atomic<event::TurnId>>&,
         std::vector<event::SubscriptionHandle>&);
 
@@ -73,6 +78,7 @@ private:
     std::unique_ptr<dialogue::TurnWriter>         turn_writer_;
     std::unique_ptr<memory::Summarizer>           summarizer_;
     std::unique_ptr<supervisor::KeepAlive>        keep_alive_;
+    std::unique_ptr<dialogue::BargeInDetector>    barge_in_;
 
     bool stopped_ = false;
 };
@@ -94,6 +100,7 @@ build_dialogue_stack(const config::Config& cfg,
                       dialogue::Fsm& fsm,
                       supervisor::Supervisor& sup,
                       dialogue::TurnFactory& turns,
+                      const audio::Apm* apm,
                       const std::shared_ptr<std::atomic<event::TurnId>>& playback_active_turn,
                       std::vector<event::SubscriptionHandle>& subscription_keepalive);
 

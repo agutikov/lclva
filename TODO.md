@@ -3,16 +3,19 @@
 
 
 
+--------------------------------------------------------------------------------
 
-filter llm output because it may hallucinate and mix languages in answer
-leave only selected languge
+
+convert plans and docs into single-file design with history of acva creation
+process it and load into memory + add memory read instructions into context
+so agent can answer questions about itself
+
+
 
 
 Can we split internal explicit LLM thinking and speaking?
 Optionally enable verbal thinking
 
-
---------------------------------------------------------------------------------
 
 
 Goals:

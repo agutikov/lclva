@@ -169,9 +169,9 @@ std::optional<LoadError> validate(const Config& cfg) {
         }
     }
     // TTS goes through Speaches' OpenAI-API-compatible endpoint. Every
-    // configured voice needs a non-empty model_id + voice_id (Speaches
-    // returns HTTP 422 when the request is missing the `voice` field —
-    // catch it at config load instead).
+    // configured voice resolves through the registry to a non-empty
+    // {model_id, voice_id} tuple (Speaches returns HTTP 422 when the
+    // request is missing the `voice` field — catch it at config load).
     if (!cfg.tts.voices.empty() && cfg.tts.base_url.empty()) {
         return LoadError{"config: tts.base_url: must be set when tts.voices is non-empty"};
     }
@@ -179,15 +179,20 @@ std::optional<LoadError> validate(const Config& cfg) {
         && cfg.tts.base_url.find("://") == std::string::npos) {
         return LoadError{"config: tts.base_url: must include scheme (http://...)"};
     }
-    for (const auto& [lang, voice] : cfg.tts.voices) {
-        if (voice.model_id.empty()) {
-            return LoadError{"config: tts.voices[" + lang + "].model_id: required"};
-        }
-        if (voice.voice_id.empty()) {
+    for (const auto& [lang, alias] : cfg.tts.voices) {
+        if (alias.empty()) {
             return LoadError{"config: tts.voices[" + lang
-                + "].voice_id: required (Speaches' /v1/audio/speech needs the "
-                + "'voice' field; for single-speaker Piper voices it's the "
-                + "speaker name, e.g. 'amy')"};
+                + "]: alias name required (e.g. en-amy, ru-irina)"};
+        }
+        auto rit = cfg.tts.voices_resolved.find(lang);
+        if (rit == cfg.tts.voices_resolved.end()) {
+            return LoadError{"config: tts.voices[" + lang + "]: unknown alias '"
+                + alias + "' — register it under models.tts or pick a "
+                + "configured one"};
+        }
+        if (rit->second.model_id.empty() || rit->second.voice_id.empty()) {
+            return LoadError{"config: models.tts[" + alias
+                + "]: id + voice required"};
         }
     }
     // If tts.voices is non-empty, the fallback_lang must point to one
@@ -259,12 +264,56 @@ std::optional<LoadError> validate(const Config& cfg) {
     return std::nullopt;
 }
 
+// Walk the catalog in `cfg.models` and rewrite the subsystem fields
+// that name a model. Idempotent; runs once at load time before
+// validate(). Anything not registered passes through unchanged
+// (back-compat for configs that put the full id directly), EXCEPT
+// `tts.voices` — every entry there must resolve through the registry.
+// See ModelsConfig in config.hpp for the full design rationale.
+namespace {
+void resolve_aliases(Config& cfg) {
+    // ---- LLM: alias → label override (metadata-only until M8A). ----
+    if (auto it = cfg.models.llm.find(cfg.llm.model);
+        it != cfg.models.llm.end()) {
+        // We deliberately keep `cfg.llm.model` set to the alias name —
+        // the OpenAI-endpoint label that llama-server reports via
+        // /v1/models. The resolved filename is in `it->second.file`
+        // for now; M8A will thread it into a model-controller call.
+    }
+    // ---- STT: alias → full HF id. ----
+    if (auto it = cfg.models.stt.find(cfg.stt.model);
+        it != cfg.models.stt.end()) {
+        cfg.stt.model = it->second.id;
+    }
+    // ---- VAD: alias → relative path under the XDG data root. ----
+    // Registry stores bare filenames; the resolver prepends the
+    // canonical per-type subdir (`models/silero/`) so the existing
+    // bootstrap.cpp `resolve_data_path` call lands on
+    // ${XDG}/acva/models/silero/<file>. tools/acva-models places the
+    // file in the same location, so the mapping is symmetric.
+    if (auto it = cfg.models.vad.find(cfg.vad.model_path);
+        it != cfg.models.vad.end()) {
+        cfg.vad.model_path = "models/silero/" + it->second.file;
+    }
+    // ---- TTS: alias → {model_id, voice_id}. ----
+    cfg.tts.voices_resolved.clear();
+    for (const auto& [lang, alias] : cfg.tts.voices) {
+        auto it = cfg.models.tts.find(alias);
+        if (it == cfg.models.tts.end()) continue;        // validate() reports
+        cfg.tts.voices_resolved[lang] =
+            TtsVoice{ .model_id = it->second.id,
+                       .voice_id = it->second.voice };
+    }
+}
+} // namespace
+
 LoadResult load_from_string(std::string_view yaml) {
     Config cfg;
     auto ec = glz::read_yaml(cfg, yaml);
     if (ec) {
         return LoadError{"config: parse error: " + glz::format_error(ec, yaml)};
     }
+    resolve_aliases(cfg);
     if (auto verr = validate(cfg)) {
         return *verr;
     }

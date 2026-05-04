@@ -189,8 +189,8 @@ int run_soak(const config::Config& cfg) {
         "demo[soak] stt=%s model=%s\n",
         kDurationSec,
         cfg.tts.base_url.c_str(),
-        cfg.tts.voices.at(cfg.tts.fallback_lang).model_id.c_str(),
-        cfg.tts.voices.at(cfg.tts.fallback_lang).voice_id.c_str(),
+        cfg.tts.voices_resolved.at(cfg.tts.fallback_lang).model_id.c_str(),
+        cfg.tts.voices_resolved.at(cfg.tts.fallback_lang).voice_id.c_str(),
         cfg.stt.base_url.c_str(), cfg.stt.model.c_str());
 
     // ----- 1. Synthesize the STT fixture once. -----

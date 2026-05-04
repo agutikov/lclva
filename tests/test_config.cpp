@@ -192,15 +192,19 @@ TEST_CASE("config: M3 defaults") {
     CHECK(cfg.dialogue.max_tts_queue_sentences == 3);
 }
 
-TEST_CASE("config: tts.voices map parses") {
+TEST_CASE("config: tts.voices alias resolves through models.tts registry") {
     constexpr auto yaml = R"(
 logging: {}
 control: {}
+models:
+  tts:
+    en-amy:   { id: "speaches-ai/piper-en_US-amy-medium",    voice: "amy" }
+    ru-irina: { id: "speaches-ai/piper-ru_RU-irina-medium",  voice: "irina" }
 tts:
   base_url: "http://127.0.0.1:8090/v1"
   voices:
-    en: { model_id: "speaches-ai/piper-en_US-amy-medium", voice_id: "amy" }
-    ru: { model_id: "speaches-ai/piper-ru_RU-irina-medium", voice_id: "irina" }
+    en: en-amy
+    ru: ru-irina
   fallback_lang: en
   request_timeout_seconds: 7
 )";
@@ -208,8 +212,11 @@ tts:
     REQUIRE(std::holds_alternative<Config>(r));
     auto& cfg = std::get<Config>(r);
     REQUIRE(cfg.tts.voices.size() == 2);
-    CHECK(cfg.tts.voices.at("en").model_id == "speaches-ai/piper-en_US-amy-medium");
-    CHECK(cfg.tts.voices.at("ru").voice_id == "irina");
+    REQUIRE(cfg.tts.voices_resolved.size() == 2);
+    CHECK(cfg.tts.voices_resolved.at("en").model_id
+          == "speaches-ai/piper-en_US-amy-medium");
+    CHECK(cfg.tts.voices_resolved.at("en").voice_id == "amy");
+    CHECK(cfg.tts.voices_resolved.at("ru").voice_id == "irina");
     CHECK(cfg.tts.fallback_lang == "en");
     CHECK(cfg.tts.request_timeout_seconds == 7);
 }
@@ -218,10 +225,13 @@ TEST_CASE("config: tts.base_url without scheme rejected") {
     constexpr auto yaml = R"(
 logging: {}
 control: {}
+models:
+  tts:
+    en-amy: { id: "speaches-ai/piper-en_US-amy-medium", voice: "amy" }
 tts:
   base_url: "127.0.0.1:8090/v1"
   voices:
-    en: { model_id: "speaches-ai/piper-en_US-amy-medium", voice_id: "amy" }
+    en: en-amy
   fallback_lang: en
 )";
     auto r = load_from_string(yaml);
@@ -236,10 +246,13 @@ TEST_CASE("config: tts.fallback_lang must point to a configured voice") {
     constexpr auto yaml = R"(
 logging: {}
 control: {}
+models:
+  tts:
+    ru-irina: { id: "speaches-ai/piper-ru_RU-irina-medium", voice: "irina" }
 tts:
   base_url: "http://127.0.0.1:8090/v1"
   voices:
-    ru: { model_id: "speaches-ai/piper-ru_RU-irina-medium", voice_id: "irina" }
+    ru: ru-irina
   fallback_lang: en
 )";
     auto r = load_from_string(yaml);
@@ -260,48 +273,165 @@ tts:
     REQUIRE(std::holds_alternative<Config>(r));
 }
 
-TEST_CASE("config: tts.voices entry without voice_id rejected") {
+TEST_CASE("config: unknown tts.voices alias rejected") {
+    // Aliases must be present in models.tts. Pre-registry configs that
+    // wrote {model_id, voice_id} inline no longer parse; the registry
+    // is the only path.
     constexpr auto yaml = R"(
 logging: {}
 control: {}
+models:
+  tts:
+    en-amy: { id: "speaches-ai/piper-en_US-amy-medium", voice: "amy" }
 tts:
   base_url: "http://127.0.0.1:8090/v1"
   voices:
-    en: { model_id: "speaches-ai/piper-en_US-amy-medium" }
+    en: nonexistent-alias
   fallback_lang: en
 )";
     auto r = load_from_string(yaml);
     REQUIRE(std::holds_alternative<LoadError>(r));
-    CHECK(std::get<LoadError>(r).message.find("voice_id") != std::string::npos);
+    CHECK(std::get<LoadError>(r).message.find("nonexistent-alias")
+          != std::string::npos);
 }
 
-TEST_CASE("config: tts.voices entry without model_id rejected") {
+TEST_CASE("config: tts model registry entry without voice rejected") {
     constexpr auto yaml = R"(
 logging: {}
 control: {}
+models:
+  tts:
+    en-amy: { id: "speaches-ai/piper-en_US-amy-medium" }
 tts:
   base_url: "http://127.0.0.1:8090/v1"
   voices:
-    en: { voice_id: "amy" }
+    en: en-amy
   fallback_lang: en
 )";
     auto r = load_from_string(yaml);
     REQUIRE(std::holds_alternative<LoadError>(r));
-    CHECK(std::get<LoadError>(r).message.find("model_id") != std::string::npos);
+    CHECK(std::get<LoadError>(r).message.find("models.tts") != std::string::npos);
 }
 
 TEST_CASE("config: tts.base_url required when tts.voices is non-empty") {
     constexpr auto yaml = R"(
 logging: {}
 control: {}
+models:
+  tts:
+    en-amy: { id: "speaches-ai/piper-en_US-amy-medium", voice: "amy" }
 tts:
   voices:
-    en: { model_id: "speaches-ai/piper-en_US-amy-medium", voice_id: "amy" }
+    en: en-amy
   fallback_lang: en
 )";
     auto r = load_from_string(yaml);
     REQUIRE(std::holds_alternative<LoadError>(r));
     CHECK(std::get<LoadError>(r).message.find("tts.base_url") != std::string::npos);
+}
+
+TEST_CASE("config: stt.model alias resolves to full HF id") {
+    // Round-trip: alias in cfg.stt.model is replaced with the registry's
+    // full id by config::resolve_aliases() before validate runs.
+    // Unknown values pass through unchanged for back-compat.
+    constexpr auto yaml = R"(
+logging: {}
+control: {}
+models:
+  stt:
+    large-v3-turbo: { id: "deepdml/faster-whisper-large-v3-turbo-ct2" }
+stt:
+  base_url: "http://127.0.0.1:8090/v1"
+  model: large-v3-turbo
+)";
+    auto r = load_from_string(yaml);
+    REQUIRE(std::holds_alternative<Config>(r));
+    auto& cfg = std::get<Config>(r);
+    CHECK(cfg.stt.model == "deepdml/faster-whisper-large-v3-turbo-ct2");
+}
+
+TEST_CASE("config: unregistered stt.model passes through (back-compat)") {
+    constexpr auto yaml = R"(
+logging: {}
+control: {}
+stt:
+  base_url: "http://127.0.0.1:8090/v1"
+  model: "Custom/some-model"
+)";
+    auto r = load_from_string(yaml);
+    REQUIRE(std::holds_alternative<Config>(r));
+    auto& cfg = std::get<Config>(r);
+    CHECK(cfg.stt.model == "Custom/some-model");
+}
+
+TEST_CASE("config: vad.model_path alias resolves to per-type subdir") {
+    // Registry stores bare filename; resolver prepends `models/silero/`
+    // so bootstrap.cpp's resolve_data_path lands on
+    // ${XDG}/acva/models/silero/<file>.
+    constexpr auto yaml = R"(
+logging: {}
+control: {}
+models:
+  vad:
+    silero-v5: { file: silero_vad.onnx }
+vad:
+  model_path: silero-v5
+)";
+    auto r = load_from_string(yaml);
+    REQUIRE(std::holds_alternative<Config>(r));
+    auto& cfg = std::get<Config>(r);
+    CHECK(cfg.vad.model_path == "models/silero/silero_vad.onnx");
+}
+
+TEST_CASE("config: llm.model alias is preserved as endpoint label") {
+    // LLM aliasing is metadata-only pre-M8A: cfg.llm.model stays the
+    // alias name (which llama-server reports via /v1/models). The
+    // resolved filename lives in models.llm.<alias>.file for M8A's
+    // future model-controller wiring.
+    constexpr auto yaml = R"(
+logging: {}
+control: {}
+models:
+  llm:
+    dialog: { file: qwen3-stage1.q4_k_m.gguf }
+llm:
+  base_url: "http://127.0.0.1:8081/v1"
+  model: dialog
+)";
+    auto r = load_from_string(yaml);
+    REQUIRE(std::holds_alternative<Config>(r));
+    auto& cfg = std::get<Config>(r);
+    CHECK(cfg.llm.model == "dialog");          // unchanged
+    REQUIRE(cfg.models.llm.contains("dialog"));
+    CHECK(cfg.models.llm.at("dialog").file == "qwen3-stage1.q4_k_m.gguf");
+}
+
+TEST_CASE("config: registry url + size fields parse") {
+    // Required by tools/acva-models for direct downloads.
+    constexpr auto yaml = R"(
+logging: {}
+control: {}
+models:
+  llm:
+    dialog:
+      file:    qwen3-stage1.q4_k_m.gguf
+      url:     https://example.com/qwen.gguf
+      size:    5027783520
+      purpose: "test entry"
+  vad:
+    silero-v5:
+      file:    silero_vad.onnx
+      url:     https://example.com/silero.onnx
+      purpose: "test entry"
+)";
+    auto r = load_from_string(yaml);
+    REQUIRE(std::holds_alternative<Config>(r));
+    auto& cfg = std::get<Config>(r);
+    REQUIRE(cfg.models.llm.contains("dialog"));
+    CHECK(cfg.models.llm.at("dialog").url == "https://example.com/qwen.gguf");
+    CHECK(cfg.models.llm.at("dialog").size == 5027783520ULL);
+    REQUIRE(cfg.models.vad.contains("silero-v5"));
+    CHECK(cfg.models.vad.at("silero-v5").url == "https://example.com/silero.onnx");
 }
 
 TEST_CASE("config: zero audio.sample_rate_hz rejected") {

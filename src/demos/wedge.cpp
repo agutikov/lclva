@@ -84,8 +84,8 @@ int run_wedge(const config::Config& cfg) {
         "  tts=%s  voice=%s/%s\n"
         "  stt=%s  model=%s\n\n",
         cfg.tts.base_url.c_str(),
-        cfg.tts.voices.at(cfg.tts.fallback_lang).model_id.c_str(),
-        cfg.tts.voices.at(cfg.tts.fallback_lang).voice_id.c_str(),
+        cfg.tts.voices_resolved.at(cfg.tts.fallback_lang).model_id.c_str(),
+        cfg.tts.voices_resolved.at(cfg.tts.fallback_lang).voice_id.c_str(),
         cfg.stt.base_url.c_str(), cfg.stt.model.c_str());
 
     // ----- 1. Initial STT probe -----

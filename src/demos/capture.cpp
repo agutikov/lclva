@@ -44,8 +44,8 @@ int run_capture(const config::Config& cfg) {
     if (cfg.vad.model_path.empty()) {
         std::fprintf(stderr,
             "demo[capture] WARNING: cfg.vad.model_path is empty — VAD will not "
-            "fire on real speech. Run scripts/download-vad.sh and "
-            "set cfg.vad.model_path.\n");
+            "fire on real speech. Run `tools/acva-models install silero-v5` "
+            "and set cfg.vad.model_path.\n");
     }
 
     event::EventBus bus;

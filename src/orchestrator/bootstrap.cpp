@@ -44,7 +44,7 @@ load_and_resolve_config(const std::filesystem::path& cli_config_path,
 
     // M4 — resolve the Silero VAD model path against XDG_DATA_HOME.
     // Empty → ${XDG_DATA_HOME}/acva/models/silero/silero_vad.onnx (the
-    // path scripts/download-vad.sh writes to). If the file isn't
+    // path tools/acva-models writes to). If the file isn't
     // there, AudioPipeline catches the load failure and disables VAD
     // with a warning — so leaving model_path unset is safe.
     if (cfg.vad.model_path.empty()) {

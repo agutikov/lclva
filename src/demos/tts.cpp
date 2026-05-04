@@ -26,7 +26,9 @@ int run_tts(const config::Config& cfg) {
     }
     const auto& fb = cfg.tts.fallback_lang;
     std::string route_desc = cfg.tts.base_url + " model_id=";
-    if (cfg.tts.voices.contains(fb)) route_desc += cfg.tts.voices.at(fb).model_id;
+    if (cfg.tts.voices_resolved.contains(fb)) {
+        route_desc += cfg.tts.voices_resolved.at(fb).model_id;
+    }
 
     constexpr event::TurnId   kTurn = 1;
     constexpr event::SequenceNo kSeq  = 0;

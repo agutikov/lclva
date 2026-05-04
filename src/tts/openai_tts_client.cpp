@@ -167,12 +167,15 @@ OpenAiTtsClient::~OpenAiTtsClient() {
 
 OpenAiTtsClient::VoiceRoute
 OpenAiTtsClient::route_for(std::string_view lang) const {
-    if (auto it = cfg_.voices.find(std::string{lang});
-        it != cfg_.voices.end()) {
+    // Read from the resolved tuple map (filled by
+    // config::resolve_aliases). `voices` itself is the alias-name
+    // input form and isn't useful here.
+    if (auto it = cfg_.voices_resolved.find(std::string{lang});
+        it != cfg_.voices_resolved.end()) {
         return {it->second.model_id, it->second.voice_id};
     }
-    if (auto it = cfg_.voices.find(cfg_.fallback_lang);
-        it != cfg_.voices.end()) {
+    if (auto it = cfg_.voices_resolved.find(cfg_.fallback_lang);
+        it != cfg_.voices_resolved.end()) {
         return {it->second.model_id, it->second.voice_id};
     }
     return {};

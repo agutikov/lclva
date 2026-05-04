@@ -77,7 +77,10 @@ private:
 Config make_cfg(const std::string& base_url) {
     Config c;
     c.tts.base_url = base_url;
-    c.tts.voices["en"] = TtsVoice{
+    // Tests skip the registry hop and populate the resolved map
+    // directly. Validation isn't run on these in-process Configs, so
+    // `voices` (the alias-name input) can stay empty.
+    c.tts.voices_resolved["en"] = TtsVoice{
         .model_id = "speaches-ai/piper-en_US-amy-medium",
         .voice_id = "amy",
     };

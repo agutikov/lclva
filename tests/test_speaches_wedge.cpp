@@ -78,7 +78,7 @@ acva::config::TtsConfig make_tts_cfg() {
     acva::config::TtsConfig c;
     c.base_url = speaches_url() + "/v1";
     c.fallback_lang = "ru";
-    c.voices["ru"] = acva::config::TtsVoice{
+    c.voices_resolved["ru"] = acva::config::TtsVoice{
         .model_id = kRuVoiceModel, .voice_id = kRuVoiceId};
     c.request_timeout_seconds = 60;
     c.tempo_wpm = 0;     // native cadence for predictable timing

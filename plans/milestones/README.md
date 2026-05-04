@@ -183,7 +183,7 @@ hole in M4 is closed: real STT lands on the bus.
 ```sh
 # Compose stack is now `llama` + `speaches`:
 docker compose -f packaging/compose/docker-compose.yml up -d
-./scripts/download-stt.sh && ./scripts/download-tts.sh   # idempotent
+./tools/acva-models sync                      # idempotent; downloads what cfg references
 curl -fsS http://127.0.0.1:8090/health        # 200
 
 ./_build/dev/acva --config config/default.yaml --stdin

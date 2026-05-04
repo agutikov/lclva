@@ -182,8 +182,19 @@ struct TtsConfig {
     // OpenAI-API-compatible base URL for `POST /v1/audio/speech`.
     // Required when `voices` is non-empty.
     std::string base_url;
-    // Map of BCP-47 language code → voice descriptor.
-    std::map<std::string, TtsVoice> voices;
+    // YAML schema: BCP-47 language code → registry alias name from
+    // `models.tts`. Each value is a short name (e.g. "en-amy",
+    // "ru-irina"); the alias is resolved to a TtsVoice {model_id,
+    // voice_id} at config-load time and stashed in `voices_resolved`
+    // below. Downstream code reads `voices_resolved`, not `voices`.
+    std::map<std::string, std::string> voices;
+    // Filled by config::resolve_aliases() from `voices` + `models.tts`.
+    // NOT parsed from YAML — Glaze leaves it default-constructed during
+    // `read_yaml` because the YAML key for this struct (`tts.voices`)
+    // is mapped to the alias-string field above. All callers that need
+    // a TtsVoice tuple read this map. `tts.voices` (alias names) stays
+    // around as a debug/round-trip aid.
+    std::map<std::string, TtsVoice> voices_resolved;
     // Used when the detected language has no entry in `voices`.
     std::string fallback_lang = "en";
     uint32_t request_timeout_seconds = 10;
@@ -431,7 +442,86 @@ struct BargeInConfig {
     uint32_t min_real_utterance_chars = 3;
 };
 
+// Model registry — short alias → backend-specific resource locator.
+// One catalog section per model type. `purpose` is a short
+// human-readable note (used in /status and `acva models list` once
+// M8A's admin sidebar lands). The aliases mirror the names used in
+// `tools/acva-models` so a user who installs a model via the
+// downloader can refer to it by the same name in config.
+//
+// Resolution rule: for each subsystem field that names a model, the
+// loader checks the matching catalog. If the string is a registered
+// alias, it's replaced with the alias's resource locator (filename
+// for LLM/VAD, HF id for STT, full {model_id, voice_id} tuple for
+// TTS). If not, the string is left as-is — back-compat with configs
+// that put the full id directly. TTS is the exception: voice values
+// MUST be aliases (the alternative full-tuple form was removed when
+// the registry landed; aliasing was specifically introduced to make
+// per-language TTS picks one-line edits instead of two-field
+// objects).
+//
+// LLM aliasing is currently metadata-only: `cfg.llm.model` is just
+// the OpenAI-endpoint label, and the actual GGUF llama-server loads
+// is set by ACVA_LLM_MODEL in packaging/compose/.env. M8A wires the
+// resolved filename into a model-controller sidecar so the alias
+// becomes load-bearing — see `plans/milestones/m8a_admin_state.md`.
+
+struct LlmModelEntry {
+    // GGUF filename inside ${ACVA_MODELS_DIR}/llama.cpp/. Becomes
+    // load-bearing in M8A; informational today.
+    std::string file;
+    // Direct-download URL used by `tools/acva-models install <alias>`.
+    // Optional: aliases without `url` are read-only references the
+    // user must place on disk by hand.
+    std::string url;
+    // Expected file size in bytes. Optional; when set, the downloader
+    // verifies post-fetch and resumes partial downloads from this
+    // anchor. 0 disables the check.
+    std::uint64_t size = 0;
+    // One-line description shown by `acva-models list` and (M8A)
+    // `acva models list`.
+    std::string purpose;
+};
+
+struct SttModelEntry {
+    // Full HuggingFace model id passed to Speaches' /v1/models/{id}
+    // download endpoint and `cfg.stt.model` after resolution.
+    // Speaches owns the actual file fetch — no `url` needed.
+    std::string id;
+    std::string purpose;
+};
+
+struct TtsModelEntry {
+    // Full HuggingFace model id of the Speaches TTS model.
+    std::string id;
+    // Speaker id within the model. For single-speaker Piper voices,
+    // typically the speaker name (e.g. "amy"). For multi-speaker
+    // models like Kokoro, the published voice id (e.g. "af_bella").
+    // Same model id may appear in multiple aliases that differ only
+    // in `voice` — that's the Kokoro shape.
+    std::string voice;
+    std::string purpose;
+};
+
+struct VadModelEntry {
+    // Filename inside ${ACVA_MODELS_DIR}/silero/.
+    std::string file;
+    // Direct-download URL used by `tools/acva-models install <alias>`.
+    std::string url;
+    // Expected file size in bytes. Optional; 0 disables the check.
+    std::uint64_t size = 0;
+    std::string purpose;
+};
+
+struct ModelsConfig {
+    std::map<std::string, LlmModelEntry> llm;
+    std::map<std::string, SttModelEntry> stt;
+    std::map<std::string, TtsModelEntry> tts;
+    std::map<std::string, VadModelEntry> vad;
+};
+
 struct Config {
+    ModelsConfig models;
     LoggingConfig logging;
     ControlConfig control;
     PipelineConfig pipeline;

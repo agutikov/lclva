@@ -7,9 +7,106 @@
 #   M4: audio, vad
 #   M5: stt, speculation
 #   M6: apm
-#   M7: barge_in
+#   M7: barge_in, models
 #
 # See plans/project_design.md for the full schema.
+
+# ----- Model registry -----
+#
+# Each subsystem field that names a model (`llm.model`, `stt.model`,
+# `tts.voices.<lang>`, `vad.model_path`) accepts a SHORT ALIAS from
+# this registry. At config-load the alias is resolved to the
+# backend-specific resource locator (filename for LLM/VAD, HF id for
+# STT, full {id, voice} tuple for TTS). Aliases mirror the names in
+# `scripts/download-{llm,stt,tts,vad}.sh` — install with the same
+# short name you reference here.
+#
+# To switch a model, change the alias under `llm`/`stt`/`tts`/`vad`
+# below; no need to edit anything else.
+#
+# Caveat: `cfg.llm.model` is currently metadata only. The actual GGUF
+# llama-server loads is set by `ACVA_LLM_MODEL` in
+# `packaging/compose/.env`. M8A (admin/state) wires the resolved
+# filename into a model-controller sidecar so the alias becomes
+# load-bearing — see `plans/milestones/m8a_admin_state.md`.
+models:
+  llm:
+    qwen2.5-7b:
+      file:    Qwen2.5-7B-Instruct-Q4_K_M.gguf
+      url:     https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf
+      size:    4683074240
+      purpose: "Qwen2.5-7B-Instruct Q4_K_M (bartowski single-file, imatrix-calibrated)"
+    socratic:
+      file:    socratic-tutor-v2-q4_k_m.gguf
+      url:     https://huggingface.co/RuudFontys/socratic-tutor-qwen2.5/resolve/main/socratic-tutor-v2-q4_k_m.gguf
+      size:    4683073504
+      purpose: "Qwen2.5-7B + Socratic-tutor LoRA (350 dialogues, 3 epochs)"
+    doctor:
+      file:    DoctorAgent-RL.Q4_K_M.gguf
+      url:     https://huggingface.co/mradermacher/DoctorAgent-RL-GGUF/resolve/main/DoctorAgent-RL.Q4_K_M.gguf
+      size:    4683073984
+      purpose: "Qwen2-8B + medical-RL fine-tune (mradermacher quant)"
+    openbuddy-zephyr:
+      file:    openbuddy-zephyr-7b-v14.1-Mistral-7B-Instruct-v0.1.Q4_K_M.gguf
+      url:     https://huggingface.co/MaziyarPanahi/openbuddy-zephyr-7b-v14.1-Mistral-7B-Instruct-v0.1-GGUF/resolve/main/openbuddy-zephyr-7b-v14.1-Mistral-7B-Instruct-v0.1.Q4_K_M.gguf
+      size:    4368439488
+      purpose: "OpenBuddy v14.1 multilingual chat over Zephyr/Mistral-7B (research/non-commercial)"
+    openbuddy-mistral:
+      file:    openbuddy-mistral-7b-v13.1-Mistral-7B-Instruct-v0.1.Q4_K_M.gguf
+      url:     https://huggingface.co/MaziyarPanahi/openbuddy-mistral-7b-v13.1-Mistral-7B-Instruct-v0.1-GGUF/resolve/main/openbuddy-mistral-7b-v13.1-Mistral-7B-Instruct-v0.1.Q4_K_M.gguf
+      size:    4368439488
+      purpose: "OpenBuddy v13.1 multilingual chat over Mistral-7B-Instruct (research/non-commercial)"
+    outlier-lite:
+      file:    Outlier-Lite-7B-Q4_K_M.gguf
+      url:     https://huggingface.co/Outlier-Ai/Outlier-Lite-7B-GGUF/resolve/main/Outlier-Lite-7B-Q4_K_M.gguf
+      size:    4683074080
+      purpose: "Outlier-Lite-7B chat fine-tune over Qwen2.5 base (Apache-2.0)"
+    dialog:
+      file:    qwen3-stage1.q4_k_m.gguf
+      url:     https://huggingface.co/milwright/qwen-8b-dialog-v1/resolve/main/qwen3-stage1.q4_k_m.gguf
+      size:    5027783520
+      purpose: "Qwen3-8B stage-1 dialogue tune (single Q4_K_M; license unstated)"
+  stt:
+    # Speaches owns the download (POST /v1/models/<id>); no url needed.
+    large-v3:
+      id:      Systran/faster-whisper-large-v3
+      purpose: "best multilingual quality (~3.5 GB resident); fits only when llama is stopped"
+    large-v3-turbo:
+      id:      deepdml/faster-whisper-large-v3-turbo-ct2
+      purpose: "near-best, fits-in-principle alongside default llama (~2.5 GB); current default"
+    medium:
+      id:      Systran/faster-whisper-medium
+      purpose: "comfortable margin alongside default llama (~2.6 GB); previous default"
+  tts:
+    # Piper voices: one model = one speaker = one language. `voice` is
+    # the speaker name within the model (Speaches' /v1/audio/speech
+    # requires the field even for single-speaker Piper voices).
+    # Speaches owns the download (POST /v1/models/<id>); no url needed.
+    en-amy:
+      id:      speaches-ai/piper-en_US-amy-medium
+      voice:   amy
+      purpose: "English (en_US) — Amy, medium quality"
+    ru-denis:
+      id:      speaches-ai/piper-ru_RU-denis-medium
+      voice:   denis
+      purpose: "Russian (ru_RU) — Denis, medium quality"
+    ru-dmitri:
+      id:      speaches-ai/piper-ru_RU-dmitri-medium
+      voice:   dmitri
+      purpose: "Russian (ru_RU) — Dmitri, medium quality"
+    ru-irina:
+      id:      speaches-ai/piper-ru_RU-irina-medium
+      voice:   irina
+      purpose: "Russian (ru_RU) — Irina, medium quality"
+    ru-ruslan:
+      id:      speaches-ai/piper-ru_RU-ruslan-medium
+      voice:   ruslan
+      purpose: "Russian (ru_RU) — Ruslan, medium quality"
+  vad:
+    silero-v5:
+      file:    silero_vad.onnx
+      url:     https://github.com/snakers4/silero-vad/raw/v5.1.2/src/silero_vad/data/silero_vad.onnx
+      purpose: "Silero VAD v5.1.2 ONNX (snakers4/silero-vad)"
 
 logging:
   level: info        # trace | debug | info | warn | error | critical | off
@@ -55,15 +152,15 @@ pipeline:
 
 llm:
   base_url: "http://127.0.0.1:8081/v1"
-  # Default = Qwen3-8B stage-1 dialogue tune (single Q4_K_M GGUF shipped
-  # by milwright/qwen-8b-dialog-v1; license unstated by the publisher).
-  # Fetch via `scripts/download-llm.sh dialog`.  llama-server ignores
-  # this string for routing — it just loads whatever GGUF was passed
-  # via `--model` on the command line (set by ACVA_LLM_MODEL in
-  # packaging/compose/docker-compose.yml) — so this value is mainly for
-  # log lines and `/v1/models` responses.  Other catalog options are
-  # listed in `scripts/download-llm.sh`.
-  model: "qwen3-stage1"
+  # Short alias from `models.llm` above. Default `dialog` =
+  # Qwen3-8B stage-1 dialogue tune (single Q4_K_M GGUF shipped by
+  # milwright/qwen-8b-dialog-v1; license unstated). Install with
+  # `scripts/download-llm.sh dialog`. Pre-M8A note: this value is the
+  # OpenAI-endpoint label only; the file llama-server actually loads
+  # is set by ACVA_LLM_MODEL in packaging/compose/.env. M8A wires the
+  # resolved filename through a model-controller sidecar so the alias
+  # becomes the single source of truth — see m8a_admin_state.md.
+  model: dialog
   unit: "acva-llama.service"
   temperature: 0.7
   # Pre-M7 (no barge-in yet): let the LLM finish whatever it
@@ -107,24 +204,14 @@ stt:
   # The `health` block still points at the legacy whisper.cpp service
   # (port 8082) until M4B Step 6 retires that container.
   base_url: "http://127.0.0.1:8090/v1"
-  # `Systran/faster-whisper-large-v3` (~3.5 GB resident) — best
-  # multilingual quality. Fits cleanly on the 8 GB RTX 4060 only
-  # **when llama-server is stopped** (or running with a much smaller
-  # n_ctx / Q3 quant). With the default llama-7B-Q4 (~5 GB resident)
-  # this model OOMs at first transcription.
-  #
-  # Other options (see `scripts/download-stt.sh`):
-  #   - `deepdml/faster-whisper-large-v3-turbo-ct2` (~2.5 GB) —
-  #     near-best quality, fits-in-principle alongside llama but the
-  #     encoder workspace can OOM under sustained load (M6 episode
-  #     2026-05-03); needs llama VRAM relief to be reliable.
-  #   - `Systran/faster-whisper-medium` (~2.6 GB) — comfortable
-  #     margin alongside default llama; previous default. Quality
-  #     drop is mild on clean close-mic speech but noticeable on
-  #     accents/noise.
-  #   - `Systran/faster-whisper-small` (~700 MB) — last-resort
-  #     fallback if memory pressure forces it.
-  model: "deepdml/faster-whisper-large-v3-turbo-ct2"
+  # Short alias from `models.stt` above; resolved to the full HF id.
+  # Defaults to `large-v3-turbo` — near-best quality with comfortable
+  # margin alongside the default llama on the 8 GB RTX 4060. Switch
+  # to `large-v3` only when llama is stopped or running with a much
+  # smaller n_ctx / Q3 quant (otherwise OOMs at first transcription).
+  # Switch to `medium` if you need belt-and-braces VRAM headroom on
+  # tight budgets. Install with `tools/acva-models install <alias>`.
+  model: large-v3-turbo
   request_timeout_seconds: 30
   # M6 — force a 1-second silent transcription at acva startup so the
   # Whisper model loads into VRAM before the first real user turn. With
@@ -158,16 +245,11 @@ tts:
     probe_interval_degraded_ms: 1000
     degraded_max_failures: 3
   voices:
-    # `model_id` is the registry id Speaches loads via
-    # `scripts/download-speaches-models.sh`. `voice_id` is required —
-    # for single-speaker Piper voices it's just the speaker name
-    # (e.g. "amy" for piper-en_US-amy-medium); for Kokoro models
-    # use the published voice id like "af_bella".
-    en: { model_id: "speaches-ai/piper-en_US-amy-medium", voice_id: "amy" }
-    # Russian: ruslan is the default; the downloader pulls denis,
-    # dmitri, and irina too — swap voice_id + model_id (same
-    # piper-ru_RU-<name>-medium pattern) to try them.
-    ru: { model_id: "speaches-ai/piper-ru_RU-irina-medium", voice_id: "irina" }
+    # Per-language alias from `models.tts` above. Each alias is a
+    # complete (id, voice) tuple — to swap to a different voice
+    # change the alias only (e.g. ru-irina → ru-ruslan).
+    en: en-amy
+    ru: ru-irina
   fallback_lang: en
   # Bumped from 10 to 30 on 2026-05-03: long sentences (e.g. a
   # numbered list of 100 items) at speed=1.25 take ~25 s to fully
@@ -238,12 +320,12 @@ playback:
 # M4 — Silero VAD + utterance assembly.
 vad:
   provider: silero
-  # Empty path → main.cpp resolves to
-  # ${XDG_DATA_HOME}/acva/models/silero/silero_vad.onnx (the per-engine
-  # subfolder layout; sibling of llama.cpp/ and speaches/). If the
-  # file is missing, the audio pipeline runs without VAD and logs a
-  # warning. Run scripts/download-vad.sh to fetch it.
-  model_path: ""
+  # Short alias from `models.vad` above, OR a full path. Empty →
+  # main.cpp resolves to ${XDG_DATA_HOME}/acva/models/silero/silero_vad.onnx.
+  # Aliases resolve to a filename; main.cpp prepends the same XDG
+  # root. If the file is missing, the audio pipeline runs without
+  # VAD and logs a warning. Install with `tools/acva-models install silero-v5`.
+  model_path: silero-v5
   onset_threshold: 0.5
   offset_threshold: 0.35
   min_speech_ms: 200

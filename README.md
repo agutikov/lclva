@@ -168,15 +168,19 @@ Total: **~14–16 weeks** for a single competent C++ developer to MVP.
 
 Total disk footprint with Qwen Q4_K_M + Whisper small + 1 Piper voice: **~5.0 GB**.
 
-Downloaders are organized by asset type. Run them individually or use the umbrella:
+All downloads go through one tool, `tools/acva-models`, which reads the
+same `models:` registry block in `config/default.yaml` that `acva` itself
+reads. Aliases match those used in `cfg.llm.model`, `cfg.stt.model`,
+`cfg.tts.voices.<lang>`, `cfg.vad.model_path` — install by name; reference
+by the same name. Requires Python 3 + PyYAML.
 
-| Script | What it fetches |
+| Command | What it does |
 |---|---|
-| `scripts/download-llm.sh [alias …]` | LLM GGUFs into `${ACVA_MODELS_DIR}` (default Qwen2.5-7B; alternatives via aliases — `socratic`, `doctor`) |
-| `scripts/download-stt.sh` | Speaches STT model (faster-whisper-large-v3-turbo). Requires Speaches up. |
-| `scripts/download-tts.sh` | Speaches TTS voices (en + ru). Requires Speaches up. |
-| `scripts/download-vad.sh` | Silero VAD ONNX |
-| `scripts/download-assets.sh` | Runs all four in order |
+| `tools/acva-models list` | List every alias per type; mark ✓ installed / · missing |
+| `tools/acva-models install <alias> [<alias> …]` | Install specific aliases (LLM/VAD: direct download; STT/TTS: POST to Speaches) |
+| `tools/acva-models install --type tts --all` | Install all aliases of one type |
+| `tools/acva-models sync` | Install everything the active config references — typical first-run command after editing the YAML |
+| `tools/acva-models verify` | File-size check vs registry; reports drift |
 
 ### Optional
 
@@ -310,21 +314,22 @@ llama.cpp uses the upstream `ghcr.io/ggml-org/llama.cpp:server-cuda` image verba
 
 ### 2. Download the default model assets
 
-Bring up Compose first (Speaches needs to be live for STT/TTS pulls), then:
+Bring up Compose first (Speaches needs to be live for STT/TTS pulls), then
+sync everything `config/default.yaml` references:
 
 ```sh
 cd packaging/compose && docker compose up -d && cd ../..
-bash scripts/download-assets.sh   # umbrella; fans out to per-type scripts
+tools/acva-models sync          # installs every alias the active config references
 ```
 
-Or one type at a time:
+Or pick aliases by hand:
 
 ```sh
-bash scripts/download-llm.sh         # default Qwen2.5-7B (~4.6 GB)
-bash scripts/download-llm.sh socratic  # alternative — Socratic-tutor LoRA
-bash scripts/download-stt.sh         # Speaches STT (~1.6 GB; Speaches must be up)
-bash scripts/download-tts.sh         # Piper voices via Speaches
-bash scripts/download-vad.sh         # Silero VAD ONNX (~2 MB)
+tools/acva-models install dialog            # default LLM alias (Qwen3-8B dialogue tune)
+tools/acva-models install socratic          # alternative — Socratic-tutor LoRA
+tools/acva-models install large-v3-turbo    # Speaches STT (Speaches must be up)
+tools/acva-models install --type tts --all  # all Piper voices via Speaches
+tools/acva-models install silero-v5         # Silero VAD ONNX (~2 MB)
 ```
 
 All idempotent and resumable. Default footprint ≈ 6.5 GB:

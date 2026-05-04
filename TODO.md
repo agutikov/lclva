@@ -109,7 +109,13 @@ drift policy
 Installations:
 - docker
 - native packages - systemd service with deps, deb, rpm, ...
-- native all in one - snap/flatpack/appimage with/wo servers
+- native all-in-one - snap/flatpack/appimage with/wo servers
+- ??? single all-in-one executable, run as single process
+
+UX:
+- background service + tray icon with quick small menu + web-ui
+- desktop app with electron-based UI, loads server web-ui ???
+
 
 
 CI/CD, release
@@ -119,6 +125,18 @@ gh pages
 
 Compare with other tools
 analyze target audiences, usage patterns, required functions
+can:
+    - user - Voice UX only
+        - offline Siri/Alexa, desktop Linux
+        - try new open/free models
+    - advanced user - edit config via UI
+        - ollama is a docker for LLMs
+        - speeches is ollama for STT/TTS
+        - 
+    - context engineering - read session, history, dialogs, memory; edit
+    - agent engineering - tools, memories, integrations
+    - runtime engineering - sandbox, FSM, pipeline, modules
+    - what else?
 
 
 tg on-call assistent

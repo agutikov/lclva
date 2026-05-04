@@ -1,0 +1,518 @@
+#!/usr/bin/env python3
+# acva-models — install / list / sync the models registered in
+# `config/default.yaml` under `models:`.
+#
+# Replaces the four pre-M7 download-*.sh scripts. Single source of
+# truth: the YAML registry. Aliases on the CLI match aliases in the
+# config; running `acva-models sync` after editing `cfg.tts.voices`,
+# `cfg.llm.model`, etc. makes sure every referenced asset is on disk.
+#
+# Subcommands
+# ───────────
+#   list [--type llm|stt|tts|vad]
+#       Show every alias in the registry; mark those already
+#       installed.
+#
+#   install <alias> [<alias> …]
+#   install --type T --all
+#       Install one or more aliases. LLM and VAD are direct downloads
+#       to ${ACVA_MODELS_DIR}/{llama.cpp,silero}/<file>. STT and TTS
+#       go through Speaches (POST /v1/models/<id>) — the container
+#       must be running.
+#
+#   sync
+#       Install everything the active config references (the alias
+#       in cfg.llm.model, cfg.stt.model, cfg.vad.model_path, plus
+#       every alias in cfg.tts.voices.<lang>). Idempotent.
+#
+#   verify
+#       Per-LLM size check vs the registry's `size:` field. STT/TTS
+#       presence is reported by querying Speaches' /v1/models.
+#
+# Requires Python 3 + PyYAML (Arch: python-yaml; Debian: python3-yaml;
+# pip: pyyaml).
+#
+# Speaches must be reachable for STT/TTS subcommands; default
+# http://127.0.0.1:8090 (override via --speaches-url or
+# ACVA_SPEACHES_URL).
+
+from __future__ import annotations
+
+import argparse
+import os
+import shutil
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional
+from urllib import error as urlerror, request as urlrequest
+
+try:
+    import yaml  # type: ignore
+except ImportError:
+    sys.stderr.write(
+        "acva-models: PyYAML is required. Install via:\n"
+        "  Arch:    sudo pacman -S python-yaml\n"
+        "  Debian:  sudo apt install python3-yaml\n"
+        "  pip:     pip install pyyaml\n"
+    )
+    sys.exit(2)
+
+# --------------------------------------------------------------------
+# Config-file resolution: mirror config::resolve_config_path() in
+# src/config/paths.cpp. Same precedence so editing default.yaml in
+# either place stays consistent.
+# --------------------------------------------------------------------
+
+def repo_root() -> Path:
+    """The acva repo root (script lives in tools/, so parent dir)."""
+    return Path(__file__).resolve().parent.parent
+
+
+def resolve_config_path(override: Optional[Path]) -> Path:
+    if override is not None:
+        return override.resolve()
+    candidates: list[Path] = []
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    if xdg:
+        candidates.append(Path(xdg) / "acva" / "default.yaml")
+    elif home := os.environ.get("HOME"):
+        candidates.append(Path(home) / ".config" / "acva" / "default.yaml")
+    candidates.append(repo_root() / "config" / "default.yaml")
+    candidates.append(Path("/etc/acva/default.yaml"))
+    for p in candidates:
+        if p.is_file():
+            return p
+    sys.exit(f"acva-models: no config found. Tried: {', '.join(map(str, candidates))}")
+
+
+def models_root() -> Path:
+    if x := os.environ.get("ACVA_MODELS_DIR"):
+        return Path(x)
+    if x := os.environ.get("XDG_DATA_HOME"):
+        return Path(x) / "acva" / "models"
+    if x := os.environ.get("HOME"):
+        return Path(x) / ".local" / "share" / "acva" / "models"
+    sys.exit("acva-models: no $HOME or XDG_DATA_HOME — set ACVA_MODELS_DIR")
+
+
+# --------------------------------------------------------------------
+# Registry parsing.
+# --------------------------------------------------------------------
+
+@dataclass
+class LlmEntry:
+    alias: str
+    file: str
+    url: str
+    size: int
+    purpose: str
+
+
+@dataclass
+class SttEntry:
+    alias: str
+    id: str
+    purpose: str
+
+
+@dataclass
+class TtsEntry:
+    alias: str
+    id: str
+    voice: str
+    purpose: str
+
+
+@dataclass
+class VadEntry:
+    alias: str
+    file: str
+    url: str
+    size: int
+    purpose: str
+
+
+@dataclass
+class Registry:
+    llm: dict[str, LlmEntry]
+    stt: dict[str, SttEntry]
+    tts: dict[str, TtsEntry]
+    vad: dict[str, VadEntry]
+    # The active config's references — used by `sync`.
+    llm_ref: Optional[str]
+    stt_ref: Optional[str]
+    vad_ref: Optional[str]
+    tts_refs: dict[str, str]      # lang → tts alias
+
+
+def parse_registry(cfg_path: Path) -> Registry:
+    with cfg_path.open() as f:
+        doc = yaml.safe_load(f) or {}
+    models = doc.get("models", {}) or {}
+
+    def _llm(alias: str, e: dict) -> LlmEntry:
+        return LlmEntry(
+            alias=alias,
+            file=str(e.get("file", "")),
+            url=str(e.get("url", "")),
+            size=int(e.get("size", 0)),
+            purpose=str(e.get("purpose", "")),
+        )
+
+    def _stt(alias: str, e: dict) -> SttEntry:
+        return SttEntry(
+            alias=alias,
+            id=str(e.get("id", "")),
+            purpose=str(e.get("purpose", "")),
+        )
+
+    def _tts(alias: str, e: dict) -> TtsEntry:
+        return TtsEntry(
+            alias=alias,
+            id=str(e.get("id", "")),
+            voice=str(e.get("voice", "")),
+            purpose=str(e.get("purpose", "")),
+        )
+
+    def _vad(alias: str, e: dict) -> VadEntry:
+        return VadEntry(
+            alias=alias,
+            file=str(e.get("file", "")),
+            url=str(e.get("url", "")),
+            size=int(e.get("size", 0)),
+            purpose=str(e.get("purpose", "")),
+        )
+
+    reg = Registry(
+        llm={a: _llm(a, e) for a, e in (models.get("llm") or {}).items()},
+        stt={a: _stt(a, e) for a, e in (models.get("stt") or {}).items()},
+        tts={a: _tts(a, e) for a, e in (models.get("tts") or {}).items()},
+        vad={a: _vad(a, e) for a, e in (models.get("vad") or {}).items()},
+        llm_ref=(doc.get("llm", {}) or {}).get("model"),
+        stt_ref=(doc.get("stt", {}) or {}).get("model"),
+        vad_ref=(doc.get("vad", {}) or {}).get("model_path"),
+        tts_refs={
+            lang: alias
+            for lang, alias in ((doc.get("tts", {}) or {}).get("voices", {}) or {}).items()
+        },
+    )
+    return reg
+
+
+# --------------------------------------------------------------------
+# On-disk presence checks. STT/TTS go through Speaches' /v1/models.
+# --------------------------------------------------------------------
+
+def llm_path(reg_root: Path, e: LlmEntry) -> Path:
+    return reg_root / "llama.cpp" / e.file
+
+
+def vad_path(reg_root: Path, e: VadEntry) -> Path:
+    return reg_root / "silero" / e.file
+
+
+def llm_installed(reg_root: Path, e: LlmEntry) -> tuple[bool, int]:
+    p = llm_path(reg_root, e)
+    if not p.is_file():
+        return (False, 0)
+    actual = p.stat().st_size
+    return (e.size == 0 or actual == e.size, actual)
+
+
+def vad_installed(reg_root: Path, e: VadEntry) -> tuple[bool, int]:
+    p = vad_path(reg_root, e)
+    if not p.is_file():
+        return (False, 0)
+    return (True, p.stat().st_size)
+
+
+def speaches_models(speaches_url: str) -> set[str]:
+    """Set of model ids currently downloaded in Speaches."""
+    try:
+        with urlrequest.urlopen(f"{speaches_url}/v1/models", timeout=5) as rsp:
+            doc = yaml.safe_load(rsp.read())  # JSON is a YAML subset
+    except (urlerror.URLError, OSError) as ex:
+        sys.exit(f"acva-models: cannot reach Speaches at {speaches_url}: {ex}")
+    return {m.get("id", "") for m in (doc or {}).get("data", []) if m.get("id")}
+
+
+# --------------------------------------------------------------------
+# Downloaders.
+# --------------------------------------------------------------------
+
+def http_download(url: str, dest: Path, expected_size: int = 0) -> None:
+    """Streaming download with resume + size verification."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    headers: dict[str, str] = {}
+    mode = "wb"
+    start = 0
+    if dest.exists():
+        cur = dest.stat().st_size
+        if expected_size and cur == expected_size:
+            print(f"  ✓ already present ({cur} bytes)")
+            return
+        if expected_size and cur < expected_size:
+            headers["Range"] = f"bytes={cur}-"
+            mode = "ab"
+            start = cur
+            print(f"  ↻ resuming from {cur} / {expected_size}")
+        else:
+            # Size mismatch and no expected size to resume against;
+            # truncate and start fresh.
+            dest.unlink()
+
+    req = urlrequest.Request(url, headers=headers)
+    try:
+        rsp = urlrequest.urlopen(req, timeout=60)
+    except urlerror.HTTPError as ex:
+        if ex.code == 416 and expected_size and start == expected_size:
+            # Already complete despite our size mismatch above.
+            print(f"  ✓ server says complete; size {start}")
+            return
+        sys.exit(f"  ✗ {url}: HTTP {ex.code}")
+    except urlerror.URLError as ex:
+        sys.exit(f"  ✗ {url}: {ex.reason}")
+
+    chunk = 1024 * 1024
+    written = start
+    with rsp, dest.open(mode) as f:
+        last_pct = -1
+        while True:
+            buf = rsp.read(chunk)
+            if not buf:
+                break
+            f.write(buf)
+            written += len(buf)
+            if expected_size:
+                pct = int(written * 100 / expected_size)
+                if pct != last_pct and pct % 5 == 0:
+                    sys.stdout.write(f"\r  ↓ {pct:3d}% ({written}/{expected_size})")
+                    sys.stdout.flush()
+                    last_pct = pct
+        if expected_size:
+            sys.stdout.write("\n")
+    if expected_size and written != expected_size:
+        sys.exit(f"  ✗ {dest.name}: got {written} bytes, expected {expected_size}")
+    print(f"  ✓ {dest}")
+
+
+def speaches_install(speaches_url: str, hf_id: str) -> None:
+    """POST /v1/models/<id> — Speaches downloads from HuggingFace.
+    Idempotent: 200 if cached, 201 on first download."""
+    from urllib.parse import quote
+    url = f"{speaches_url}/v1/models/{quote(hf_id, safe='/')}"
+    req = urlrequest.Request(url, method="POST")
+    try:
+        with urlrequest.urlopen(req, timeout=600) as rsp:
+            status = rsp.status
+    except urlerror.HTTPError as ex:
+        body = ex.read()[:400].decode(errors="replace") if hasattr(ex, "read") else ""
+        sys.exit(f"  ✗ {hf_id}: HTTP {ex.code}\n{body}")
+    except urlerror.URLError as ex:
+        sys.exit(f"  ✗ {hf_id}: {ex.reason} (is Speaches up at {speaches_url}?)")
+    if status == 200:
+        print(f"  ✓ {hf_id} (already cached)")
+    elif status == 201:
+        print(f"  ↓ {hf_id} (downloaded)")
+    else:
+        sys.exit(f"  ✗ {hf_id}: unexpected HTTP {status}")
+
+
+# --------------------------------------------------------------------
+# Subcommands.
+# --------------------------------------------------------------------
+
+def cmd_list(args: argparse.Namespace, reg: Registry, reg_root: Path) -> int:
+    only = args.type
+    if only in (None, "llm"):
+        print(f"\nLLM models (under {reg_root}/llama.cpp/):")
+        for a, e in sorted(reg.llm.items()):
+            ok, _ = llm_installed(reg_root, e)
+            mark = "✓" if ok else "·"
+            print(f"  {mark} {a:20s} {e.purpose}")
+    if only in (None, "stt", "tts"):
+        try:
+            installed = speaches_models(args.speaches_url)
+        except SystemExit:
+            installed = set()
+            print(f"\n(Speaches at {args.speaches_url} unreachable — installed status unknown for stt/tts)")
+        if only in (None, "stt"):
+            print("\nSTT models (in Speaches):")
+            for a, e in sorted(reg.stt.items()):
+                mark = "✓" if e.id in installed else "·"
+                print(f"  {mark} {a:20s} {e.purpose}")
+        if only in (None, "tts"):
+            print("\nTTS voices (in Speaches):")
+            for a, e in sorted(reg.tts.items()):
+                mark = "✓" if e.id in installed else "·"
+                print(f"  {mark} {a:20s} {e.purpose}")
+    if only in (None, "vad"):
+        print(f"\nVAD models (under {reg_root}/silero/):")
+        for a, e in sorted(reg.vad.items()):
+            ok, _ = vad_installed(reg_root, e)
+            mark = "✓" if ok else "·"
+            print(f"  {mark} {a:20s} {e.purpose}")
+    return 0
+
+
+def install_alias(reg: Registry, reg_root: Path, speaches_url: str, alias: str) -> int:
+    if alias in reg.llm:
+        e = reg.llm[alias]
+        print(f"[llm/{alias}] {e.purpose}")
+        if not e.url:
+            sys.exit(f"  ✗ {alias}: no `url:` in registry — install by hand")
+        http_download(e.url, llm_path(reg_root, e), e.size)
+        return 0
+    if alias in reg.stt:
+        e = reg.stt[alias]
+        print(f"[stt/{alias}] {e.purpose}")
+        speaches_install(speaches_url, e.id)
+        return 0
+    if alias in reg.tts:
+        e = reg.tts[alias]
+        print(f"[tts/{alias}] {e.purpose}")
+        speaches_install(speaches_url, e.id)
+        return 0
+    if alias in reg.vad:
+        e = reg.vad[alias]
+        print(f"[vad/{alias}] {e.purpose}")
+        if not e.url:
+            sys.exit(f"  ✗ {alias}: no `url:` in registry — install by hand")
+        http_download(e.url, vad_path(reg_root, e), e.size)
+        return 0
+    sys.exit(f"acva-models: unknown alias '{alias}' — see `acva-models list`")
+
+
+def cmd_install(args: argparse.Namespace, reg: Registry, reg_root: Path) -> int:
+    if args.all:
+        if not args.type:
+            sys.exit("acva-models install --all requires --type llm|stt|tts|vad")
+        targets: list[str]
+        if args.type == "llm":   targets = sorted(reg.llm.keys())
+        elif args.type == "stt": targets = sorted(reg.stt.keys())
+        elif args.type == "tts": targets = sorted(reg.tts.keys())
+        elif args.type == "vad": targets = sorted(reg.vad.keys())
+        else: sys.exit(f"unknown type {args.type}")
+    else:
+        if not args.aliases:
+            sys.exit("acva-models install: pass aliases or --all")
+        targets = args.aliases
+    for a in targets:
+        install_alias(reg, reg_root, args.speaches_url, a)
+    return 0
+
+
+def cmd_sync(args: argparse.Namespace, reg: Registry, reg_root: Path) -> int:
+    """Install everything the active config references."""
+    refs: list[str] = []
+    if reg.llm_ref:  refs.append(reg.llm_ref)
+    if reg.stt_ref:  refs.append(reg.stt_ref)
+    # vad_ref may be empty (defaults to XDG path) or the alias name.
+    if reg.vad_ref and reg.vad_ref in reg.vad:
+        refs.append(reg.vad_ref)
+    refs.extend(reg.tts_refs.values())
+    seen: set[str] = set()
+    for a in refs:
+        if a in seen:
+            continue
+        seen.add(a)
+        # Skip llm aliases that don't exist in the registry — current
+        # config may name an alias not yet registered (load-bearing
+        # validation lives in the C++ loader, not here).
+        if a not in reg.llm and a not in reg.stt and a not in reg.tts and a not in reg.vad:
+            print(f"⚠ {a}: referenced by config but not in models registry; skipping")
+            continue
+        install_alias(reg, reg_root, args.speaches_url, a)
+    if not seen:
+        print("acva-models sync: config references no models (every subsystem is unconfigured)")
+    return 0
+
+
+def cmd_verify(args: argparse.Namespace, reg: Registry, reg_root: Path) -> int:
+    # LLM: file size check.
+    drift = 0
+    print(f"LLM ({reg_root}/llama.cpp):")
+    for a, e in sorted(reg.llm.items()):
+        ok, actual = llm_installed(reg_root, e)
+        if not e.size or not actual:
+            print(f"  · {a:20s} (not installed or no expected size)")
+            continue
+        if not ok:
+            drift += 1
+            print(f"  ✗ {a:20s} size {actual} != expected {e.size}")
+        else:
+            print(f"  ✓ {a:20s} {actual} bytes")
+    # VAD: presence only (no published size for the GitHub raw URL).
+    print(f"\nVAD ({reg_root}/silero):")
+    for a, e in sorted(reg.vad.items()):
+        ok, actual = vad_installed(reg_root, e)
+        mark = "✓" if ok else "·"
+        print(f"  {mark} {a:20s} {actual} bytes" if ok else f"  · {a:20s} (not installed)")
+    # STT/TTS via Speaches.
+    try:
+        installed = speaches_models(args.speaches_url)
+    except SystemExit:
+        return drift
+    print("\nSpeaches STT:")
+    for a, e in sorted(reg.stt.items()):
+        mark = "✓" if e.id in installed else "·"
+        print(f"  {mark} {a:20s} {e.id}")
+    print("\nSpeaches TTS:")
+    for a, e in sorted(reg.tts.items()):
+        mark = "✓" if e.id in installed else "·"
+        print(f"  {mark} {a:20s} {e.id}")
+    return drift
+
+
+# --------------------------------------------------------------------
+# Entry point.
+# --------------------------------------------------------------------
+
+def main() -> int:
+    p = argparse.ArgumentParser(
+        prog="acva-models",
+        description="Install / list / sync the acva model registry.",
+    )
+    p.add_argument("--config", type=Path, default=None,
+                    help="Path to default.yaml (defaults to XDG search).")
+    p.add_argument("--speaches-url",
+                    default=os.environ.get("ACVA_SPEACHES_URL", "http://127.0.0.1:8090"),
+                    help="Speaches base URL (default: $ACVA_SPEACHES_URL or http://127.0.0.1:8090).")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    s_list = sub.add_parser("list", help="List registered models.")
+    s_list.add_argument("--type", choices=["llm", "stt", "tts", "vad"], default=None)
+
+    s_inst = sub.add_parser("install", help="Install one or more aliases.")
+    s_inst.add_argument("aliases", nargs="*",
+                         help="Aliases to install (omit when --all).")
+    s_inst.add_argument("--all", action="store_true",
+                         help="Install every alias of --type.")
+    s_inst.add_argument("--type", choices=["llm", "stt", "tts", "vad"], default=None)
+
+    sub.add_parser("sync", help="Install everything the active config references.")
+
+    sub.add_parser("verify", help="Check installed sizes vs registry.")
+
+    args = p.parse_args()
+
+    cfg_path = resolve_config_path(args.config)
+    print(f"acva-models: config = {cfg_path}")
+    reg = parse_registry(cfg_path)
+    reg_root = models_root()
+    reg_root.mkdir(parents=True, exist_ok=True)
+
+    if args.cmd == "list":    return cmd_list(args, reg, reg_root)
+    if args.cmd == "install": return cmd_install(args, reg, reg_root)
+    if args.cmd == "sync":    return cmd_sync(args, reg, reg_root)
+    if args.cmd == "verify":  return cmd_verify(args, reg, reg_root)
+    p.print_help(sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)

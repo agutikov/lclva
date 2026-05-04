@@ -37,7 +37,7 @@ double mean_abs(std::span<const std::int16_t> v) {
 // during dev iteration; this demo exercises it end-to-end on any
 // machine, including headless CI containers. The hardware version
 // can land later as a separate path inside the same demo.
-int run_aec(const config::Config& cfg) {
+int run_aec(const config::Config& cfg, std::span<const std::string> /*args*/) {
     using namespace std::chrono_literals;
 
     constexpr double      kFreqHz       = 1000.0;

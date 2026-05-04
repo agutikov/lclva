@@ -3,6 +3,7 @@
 #include "config/config.hpp"
 
 #include <span>
+#include <string>
 #include <string_view>
 
 namespace acva::demos {
@@ -28,7 +29,13 @@ struct Demo {
     // Returns 0 on success, non-zero on failure. May write progress
     // lines to stdout and diagnostic JSON-lines to stderr (via the
     // shared logger).
-    int (*run)(const config::Config& cfg) = nullptr;
+    //
+    // `args` is the trailing argv after `demo <name>` — each demo
+    // parses what it understands and ignores the rest. Demos that
+    // take no args ignore this param; the framework does not
+    // validate.
+    int (*run)(const config::Config& cfg,
+                std::span<const std::string> args) = nullptr;
 };
 
 // All demos compiled into the binary, in the order they should be

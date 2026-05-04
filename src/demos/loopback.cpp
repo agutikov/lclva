@@ -17,7 +17,7 @@
 
 namespace acva::demos {
 
-int run_loopback(const config::Config& cfg) {
+int run_loopback(const config::Config& cfg, std::span<const std::string> /*args*/) {
     using namespace std::chrono_literals;
 
     constexpr auto kDuration = std::chrono::seconds(5);

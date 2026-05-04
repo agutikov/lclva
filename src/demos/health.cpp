@@ -34,7 +34,7 @@ void describe(const Target& t, const supervisor::ProbeResult& r) {
 
 } // namespace
 
-int run_health(const config::Config& cfg) {
+int run_health(const config::Config& cfg, std::span<const std::string> /*args*/) {
     std::vector<Target> targets{
         {"llm", cfg.llm.health.health_url, cfg.llm.health.fail_pipeline_if_down},
         {"stt", cfg.stt.health.health_url, cfg.stt.health.fail_pipeline_if_down},

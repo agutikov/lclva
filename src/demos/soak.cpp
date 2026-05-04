@@ -169,7 +169,7 @@ void stt_worker(const config::Config& cfg,
 
 } // namespace
 
-int run_soak(const config::Config& cfg) {
+int run_soak(const config::Config& cfg, std::span<const std::string> /*args*/) {
     using namespace std::chrono_literals;
 
     if (cfg.tts.base_url.empty() || cfg.tts.voices.empty()) {

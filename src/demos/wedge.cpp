@@ -67,7 +67,7 @@ void print_vram(const char* label) {
 // The demo PASSES on either outcome (healthy or wedged); the value
 // is in the diagnostic report. Useful for triaging stuck-acva
 // reports without manually orchestrating the steps.
-int run_wedge(const config::Config& cfg) {
+int run_wedge(const config::Config& cfg, std::span<const std::string> /*args*/) {
     if (cfg.tts.base_url.empty() || cfg.tts.voices.empty()) {
         std::fprintf(stderr,
             "demo[wedge] FAIL: cfg.tts not configured\n");

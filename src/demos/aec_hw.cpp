@@ -101,7 +101,7 @@ build_stimulus(std::uint32_t rate_hz) {
 //
 // Pass criterion (M6 acceptance gate 4): ERLE ≥ 25 dB after
 // convergence on a non-headphones setup.
-int run_aec_hw(const config::Config& cfg) {
+int run_aec_hw(const config::Config& cfg, std::span<const std::string> /*args*/) {
     using namespace std::chrono_literals;
 
     if (!cfg.audio.capture_enabled) {

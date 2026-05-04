@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace acva::cli {
 
@@ -24,6 +25,12 @@ struct CliArgs {
     // "list" → print the catalog and exit. Otherwise, look up by name
     // in acva::demos::find().
     std::string demo;
+
+    // Trailing arguments after `demo <name>` — passed to the demo's
+    // run() function. Each demo parses what it understands and ignores
+    // the rest. E.g. `acva demo bargein --delay-ms 800` puts
+    // {"--delay-ms", "800"} in here.
+    std::vector<std::string> demo_args;
 };
 
 // Parse argv. Exits the process with EXIT_FAILURE on unknown options

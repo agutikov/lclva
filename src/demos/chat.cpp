@@ -43,7 +43,7 @@ std::filesystem::path tmp_db_path() {
 
 } // namespace
 
-int run_chat(const config::Config& orig_cfg) {
+int run_chat(const config::Config& orig_cfg, std::span<const std::string> /*args*/) {
     using namespace std::chrono;
     using namespace std::chrono_literals;
 

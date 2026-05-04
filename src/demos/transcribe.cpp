@@ -36,7 +36,7 @@ void handle_signal(int sig) noexcept { g_signal_received.store(sig); }
 // behavior can be diagnosed without the dialogue pipeline interfering.
 //
 // Runs for 30 s by default; Ctrl-C exits early.
-int run_transcribe(const config::Config& cfg) {
+int run_transcribe(const config::Config& cfg, std::span<const std::string> /*args*/) {
     using namespace std::chrono_literals;
     constexpr auto kDuration = std::chrono::seconds(30);
 

@@ -9,22 +9,22 @@ namespace acva::demos {
 // Forward declarations of each demo's entry point. Definitions live in
 // the per-demo TUs so adding a new demo is one entry in this table +
 // one new file under src/demos/.
-int run_aec       (const config::Config&);
-int run_aec_hw    (const config::Config&);
-int run_aec_record(const config::Config&);
-int run_bargein   (const config::Config&);
-int run_capture   (const config::Config&);
-int run_chat      (const config::Config&);
-int run_soak      (const config::Config&);
-int run_wedge     (const config::Config&);
-int run_fsm       (const config::Config&);
-int run_health    (const config::Config&);
-int run_llm       (const config::Config&);
-int run_loopback  (const config::Config&);
-int run_stt       (const config::Config&);
-int run_tone      (const config::Config&);
-int run_transcribe(const config::Config&);
-int run_tts       (const config::Config&);
+int run_aec       (const config::Config&, std::span<const std::string>);
+int run_aec_hw    (const config::Config&, std::span<const std::string>);
+int run_aec_record(const config::Config&, std::span<const std::string>);
+int run_bargein   (const config::Config&, std::span<const std::string>);
+int run_capture   (const config::Config&, std::span<const std::string>);
+int run_chat      (const config::Config&, std::span<const std::string>);
+int run_soak      (const config::Config&, std::span<const std::string>);
+int run_wedge     (const config::Config&, std::span<const std::string>);
+int run_fsm       (const config::Config&, std::span<const std::string>);
+int run_health    (const config::Config&, std::span<const std::string>);
+int run_llm       (const config::Config&, std::span<const std::string>);
+int run_loopback  (const config::Config&, std::span<const std::string>);
+int run_stt       (const config::Config&, std::span<const std::string>);
+int run_tone      (const config::Config&, std::span<const std::string>);
+int run_transcribe(const config::Config&, std::span<const std::string>);
+int run_tts       (const config::Config&, std::span<const std::string>);
 
 namespace {
 

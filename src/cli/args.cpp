@@ -35,13 +35,22 @@ CliArgs parse_args(int argc, char** argv) {
         } else if (a.starts_with("--config=")) {
             args.config_path = a.substr(std::string_view{"--config="}.size());
         } else if (a == "demo") {
-            // `demo` subcommand: optional positional <name>. No name →
-            // print the catalog.
+            // `demo` subcommand: optional positional <name>, then
+            // anything-goes trailing args that get passed through to
+            // the demo's run() function. The orchestrator itself does
+            // not validate trailing args — the demo decides what's
+            // legal. Stop the orchestrator's own parsing here so flags
+            // like `--delay-ms` aren't rejected by the unknown-arg
+            // branch below.
             if (i + 1 < argc && argv[i + 1][0] != '-') {
                 args.demo = argv[++i];
             } else {
                 args.demo = "list";
             }
+            for (int j = i + 1; j < argc; ++j) {
+                args.demo_args.emplace_back(argv[j]);
+            }
+            break;
         } else {
             std::cerr << "acva: unknown argument: " << a << "\n";
             std::exit(EXIT_FAILURE);
@@ -75,7 +84,9 @@ void print_help() {
                  "  demo <name>          Run a demo end-to-end (no user input). E.g.\n"
                  "                       `acva demo tone` plays a 1.5 s sine wave to\n"
                  "                       verify the audio device. See `acva demo` for\n"
-                 "                       the catalog.\n"
+                 "                       the catalog. Trailing args after the demo\n"
+                 "                       name are passed through to the demo (e.g.\n"
+                 "                       `acva demo bargein --delay-ms 800`).\n"
                  "\n"
                  "To exercise the FSM without backends, set\n"
                  "`pipeline.fake_driver_enabled: true` in the YAML.\n";

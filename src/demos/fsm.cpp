@@ -15,7 +15,7 @@
 
 namespace acva::demos {
 
-int run_fsm(const config::Config& cfg) {
+int run_fsm(const config::Config& cfg, std::span<const std::string> /*args*/) {
     using namespace std::chrono;
 
     constexpr int kTurnsToObserve = 3;

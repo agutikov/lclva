@@ -121,7 +121,7 @@ int main(int argc, char** argv) {
                        << "' — try `acva demo` for the list.\n";
             return EXIT_FAILURE;
         }
-        return d->run(cfg);
+        return d->run(cfg, args.demo_args);
     }
 
     acva::cli::install_signal_handlers();

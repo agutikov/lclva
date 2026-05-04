@@ -40,7 +40,7 @@ std::string build_simple_body(const config::Config& cfg, std::string_view prompt
 
 } // namespace
 
-int run_llm(const config::Config& cfg) {
+int run_llm(const config::Config& cfg, std::span<const std::string> /*args*/) {
     using namespace std::chrono;
 
     constexpr std::string_view kPrompt =

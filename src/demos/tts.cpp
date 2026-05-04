@@ -16,7 +16,7 @@
 
 namespace acva::demos {
 
-int run_tts(const config::Config& cfg) {
+int run_tts(const config::Config& cfg, std::span<const std::string> /*args*/) {
     using namespace std::chrono_literals;
 
     if (cfg.tts.voices.empty()) {

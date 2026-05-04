@@ -37,7 +37,7 @@ std::vector<std::int16_t> downsample_22050_to_16000(
 
 } // namespace
 
-int run_stt(const config::Config& cfg) {
+int run_stt(const config::Config& cfg, std::span<const std::string> /*args*/) {
     if (cfg.stt.base_url.empty()) {
         std::fprintf(stderr,
             "demo[stt] FAIL: cfg.stt.base_url is empty — Speaches not configured\n");

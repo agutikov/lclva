@@ -5,6 +5,7 @@
 #include "audio/resampler.hpp"
 #include "audio/wav.hpp"
 #include "config/config.hpp"
+#include "demos/demo.hpp"
 #include "dialogue/turn.hpp"
 #include "event/bus.hpp"
 #include "event/event.hpp"
@@ -105,7 +106,7 @@ constexpr std::string_view kDefaultText =
 //                           subsystem from AGC, which otherwise lifts
 //                           the cleaned signal back up by 5-9 dB and
 //                           obscures whether AEC is actually cancelling.
-int run_aec_record(const config::Config& cfg) {
+int run_aec_record(const config::Config& cfg, std::span<const std::string> /*args*/) {
     using namespace std::chrono_literals;
 
     // ----- 0. Validate config + collect knobs -----

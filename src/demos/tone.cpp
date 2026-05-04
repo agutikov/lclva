@@ -16,7 +16,7 @@
 
 namespace acva::demos {
 
-int run_tone(const config::Config& cfg) {
+int run_tone(const config::Config& cfg, std::span<const std::string> /*args*/) {
     using namespace std::chrono_literals;
 
     const int          rate          = static_cast<int>(cfg.audio.sample_rate_hz);

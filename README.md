@@ -181,6 +181,8 @@ by the same name. Requires Python 3 + PyYAML.
 | `tools/acva-models install --type tts --all` | Install all aliases of one type |
 | `tools/acva-models sync` | Install everything the active config references — typical first-run command after editing the YAML |
 | `tools/acva-models verify` | File-size check vs registry; reports drift |
+| `tools/acva-models select <type> <alias> [--lang L]` | Switch the active config to a different alias; preserves comments. For `llm` also writes `<repo>/.env`. Auto-recreates the affected container (`llama` for llm; `speaches` for stt/tts — VRAM-leak workaround) unless `--no-restart`. |
+| `tools/acva-models status` | End-to-end health: `.env` presence + required keys, cfg ↔ env consistency, file presence, container state, currently loaded models. Exits non-zero when drift is detected. |
 
 ### Optional
 

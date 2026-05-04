@@ -59,6 +59,43 @@ except ImportError:
     sys.exit(2)
 
 # --------------------------------------------------------------------
+# ANSI colors. Auto-disabled when stdout isn't a TTY (so pipes/logs
+# stay clean) or when the standard NO_COLOR env var is set. Stdlib-
+# only — no `colorama` dependency to add.
+# --------------------------------------------------------------------
+
+class _Colors:
+    def __init__(self) -> None:
+        self.enabled = (
+            sys.stdout.isatty()
+            and "NO_COLOR" not in os.environ
+            and os.environ.get("TERM", "") != "dumb"
+        )
+
+    def _wrap(self, code: str, s: str) -> str:
+        return f"\033[{code}m{s}\033[0m" if self.enabled else s
+
+    def bold(self, s: str)   -> str: return self._wrap("1",     s)
+    def dim(self, s: str)    -> str: return self._wrap("2",     s)
+    def red(self, s: str)    -> str: return self._wrap("31",    s)
+    def green(self, s: str)  -> str: return self._wrap("32",    s)
+    def yellow(self, s: str) -> str: return self._wrap("33",    s)
+    def blue(self, s: str)   -> str: return self._wrap("34",    s)
+    def cyan(self, s: str)   -> str: return self._wrap("36",    s)
+    def hi(self, s: str)     -> str: return self._wrap("1;37",  s)  # bold-bright
+
+C = _Colors()
+
+# Pre-baked markers (module constants — color state is fixed at
+# import time, so we just compute these once).
+OK   = C.green("✓")
+BAD  = C.red("✗")
+WARN = C.yellow("⚠")
+SKIP = C.dim("·")
+DOWN = C.cyan("↓")
+SPIN = C.cyan("↻")
+
+# --------------------------------------------------------------------
 # Config-file resolution: mirror config::resolve_config_path() in
 # src/config/paths.cpp. Same precedence so editing default.yaml in
 # either place stays consistent.
@@ -250,13 +287,13 @@ def http_download(url: str, dest: Path, expected_size: int = 0) -> None:
     if dest.exists():
         cur = dest.stat().st_size
         if expected_size and cur == expected_size:
-            print(f"  ✓ already present ({cur} bytes)")
+            print(f"  {OK} {C.dim(f'already present ({cur} bytes)')}")
             return
         if expected_size and cur < expected_size:
             headers["Range"] = f"bytes={cur}-"
             mode = "ab"
             start = cur
-            print(f"  ↻ resuming from {cur} / {expected_size}")
+            print(f"  {SPIN} {C.cyan(f'resuming from {cur} / {expected_size}')}")
         else:
             # Size mismatch and no expected size to resume against;
             # truncate and start fresh.
@@ -268,11 +305,11 @@ def http_download(url: str, dest: Path, expected_size: int = 0) -> None:
     except urlerror.HTTPError as ex:
         if ex.code == 416 and expected_size and start == expected_size:
             # Already complete despite our size mismatch above.
-            print(f"  ✓ server says complete; size {start}")
+            print(f"  {OK} {C.dim(f'server says complete; size {start}')}")
             return
-        sys.exit(f"  ✗ {url}: HTTP {ex.code}")
+        sys.exit(f"  {BAD} {url}: HTTP {ex.code}")
     except urlerror.URLError as ex:
-        sys.exit(f"  ✗ {url}: {ex.reason}")
+        sys.exit(f"  {BAD} {url}: {ex.reason}")
 
     chunk = 1024 * 1024
     written = start
@@ -287,14 +324,15 @@ def http_download(url: str, dest: Path, expected_size: int = 0) -> None:
             if expected_size:
                 pct = int(written * 100 / expected_size)
                 if pct != last_pct and pct % 5 == 0:
-                    sys.stdout.write(f"\r  ↓ {pct:3d}% ({written}/{expected_size})")
+                    sys.stdout.write(f"\r  {DOWN} {C.cyan(f'{pct:3d}%')} "
+                                       f"{C.dim(f'({written}/{expected_size})')}")
                     sys.stdout.flush()
                     last_pct = pct
         if expected_size:
             sys.stdout.write("\n")
     if expected_size and written != expected_size:
-        sys.exit(f"  ✗ {dest.name}: got {written} bytes, expected {expected_size}")
-    print(f"  ✓ {dest}")
+        sys.exit(f"  {BAD} {dest.name}: got {written} bytes, expected {expected_size}")
+    print(f"  {OK} {dest}")
 
 
 def speaches_install(speaches_url: str, hf_id: str) -> None:
@@ -308,77 +346,83 @@ def speaches_install(speaches_url: str, hf_id: str) -> None:
             status = rsp.status
     except urlerror.HTTPError as ex:
         body = ex.read()[:400].decode(errors="replace") if hasattr(ex, "read") else ""
-        sys.exit(f"  ✗ {hf_id}: HTTP {ex.code}\n{body}")
+        sys.exit(f"  {BAD} {hf_id}: HTTP {ex.code}\n{body}")
     except urlerror.URLError as ex:
-        sys.exit(f"  ✗ {hf_id}: {ex.reason} (is Speaches up at {speaches_url}?)")
+        sys.exit(f"  {BAD} {hf_id}: {ex.reason} (is Speaches up at {speaches_url}?)")
     if status == 200:
-        print(f"  ✓ {hf_id} (already cached)")
+        print(f"  {OK} {C.bold(hf_id)} {C.dim('(already cached)')}")
     elif status == 201:
-        print(f"  ↓ {hf_id} (downloaded)")
+        print(f"  {DOWN} {C.bold(hf_id)} {C.dim('(downloaded)')}")
     else:
-        sys.exit(f"  ✗ {hf_id}: unexpected HTTP {status}")
+        sys.exit(f"  {BAD} {hf_id}: unexpected HTTP {status}")
 
 
 # --------------------------------------------------------------------
 # Subcommands.
 # --------------------------------------------------------------------
 
+def _row(mark: str, alias: str, note: str) -> str:
+    """A list-row line: marker, padded alias (bold), purpose (dim)."""
+    return f"  {mark} {C.bold(f'{alias:<20s}')} {C.dim(note)}"
+
+
 def cmd_list(args: argparse.Namespace, reg: Registry, reg_root: Path) -> int:
     only = args.type
     if only in (None, "llm"):
-        print(f"\nLLM models (under {reg_root}/llama.cpp/):")
+        print(f"\n{C.hi('LLM models')} {C.dim(f'(under {reg_root}/llama.cpp/)')}")
         for a, e in sorted(reg.llm.items()):
             ok, _ = llm_installed(reg_root, e)
-            mark = "✓" if ok else "·"
-            print(f"  {mark} {a:20s} {e.purpose}")
+            print(_row(OK if ok else SKIP, a, e.purpose))
     if only in (None, "stt", "tts"):
         try:
             installed = speaches_models(args.speaches_url)
         except SystemExit:
             installed = set()
-            print(f"\n(Speaches at {args.speaches_url} unreachable — installed status unknown for stt/tts)")
+            print(f"\n{WARN} {C.yellow(f'Speaches at {args.speaches_url} unreachable')} "
+                   f"{C.dim('— installed status unknown for stt/tts')}")
         if only in (None, "stt"):
-            print("\nSTT models (in Speaches):")
+            print(f"\n{C.hi('STT models')} {C.dim('(in Speaches)')}")
             for a, e in sorted(reg.stt.items()):
-                mark = "✓" if e.id in installed else "·"
-                print(f"  {mark} {a:20s} {e.purpose}")
+                print(_row(OK if e.id in installed else SKIP, a, e.purpose))
         if only in (None, "tts"):
-            print("\nTTS voices (in Speaches):")
+            print(f"\n{C.hi('TTS voices')} {C.dim('(in Speaches)')}")
             for a, e in sorted(reg.tts.items()):
-                mark = "✓" if e.id in installed else "·"
-                print(f"  {mark} {a:20s} {e.purpose}")
+                print(_row(OK if e.id in installed else SKIP, a, e.purpose))
     if only in (None, "vad"):
-        print(f"\nVAD models (under {reg_root}/silero/):")
+        print(f"\n{C.hi('VAD models')} {C.dim(f'(under {reg_root}/silero/)')}")
         for a, e in sorted(reg.vad.items()):
             ok, _ = vad_installed(reg_root, e)
-            mark = "✓" if ok else "·"
-            print(f"  {mark} {a:20s} {e.purpose}")
+            print(_row(OK if ok else SKIP, a, e.purpose))
     return 0
+
+
+def _hdr(scope: str, alias: str, purpose: str) -> str:
+    return f"{C.blue(f'[{scope}/{alias}]')} {C.dim(purpose)}"
 
 
 def install_alias(reg: Registry, reg_root: Path, speaches_url: str, alias: str) -> int:
     if alias in reg.llm:
         e = reg.llm[alias]
-        print(f"[llm/{alias}] {e.purpose}")
+        print(_hdr("llm", alias, e.purpose))
         if not e.url:
-            sys.exit(f"  ✗ {alias}: no `url:` in registry — install by hand")
+            sys.exit(f"  {BAD} {alias}: no `url:` in registry — install by hand")
         http_download(e.url, llm_path(reg_root, e), e.size)
         return 0
     if alias in reg.stt:
         e = reg.stt[alias]
-        print(f"[stt/{alias}] {e.purpose}")
+        print(_hdr("stt", alias, e.purpose))
         speaches_install(speaches_url, e.id)
         return 0
     if alias in reg.tts:
         e = reg.tts[alias]
-        print(f"[tts/{alias}] {e.purpose}")
+        print(_hdr("tts", alias, e.purpose))
         speaches_install(speaches_url, e.id)
         return 0
     if alias in reg.vad:
         e = reg.vad[alias]
-        print(f"[vad/{alias}] {e.purpose}")
+        print(_hdr("vad", alias, e.purpose))
         if not e.url:
-            sys.exit(f"  ✗ {alias}: no `url:` in registry — install by hand")
+            sys.exit(f"  {BAD} {alias}: no `url:` in registry — install by hand")
         http_download(e.url, vad_path(reg_root, e), e.size)
         return 0
     sys.exit(f"acva-models: unknown alias '{alias}' — see `acva-models list`")
@@ -421,47 +465,461 @@ def cmd_sync(args: argparse.Namespace, reg: Registry, reg_root: Path) -> int:
         # config may name an alias not yet registered (load-bearing
         # validation lives in the C++ loader, not here).
         if a not in reg.llm and a not in reg.stt and a not in reg.tts and a not in reg.vad:
-            print(f"⚠ {a}: referenced by config but not in models registry; skipping")
+            print(f"{WARN} {C.yellow(a)}: referenced by config but not in "
+                   f"models registry; skipping")
             continue
         install_alias(reg, reg_root, args.speaches_url, a)
     if not seen:
-        print("acva-models sync: config references no models (every subsystem is unconfigured)")
+        print(C.dim("acva-models sync: config references no models (every "
+                     "subsystem is unconfigured)"))
     return 0
+
+
+# --------------------------------------------------------------------
+# Comment-preserving editors for default.yaml + .env. We avoid pyyaml
+# round-trip (would lose comments + reorder keys); instead a small
+# line-state-machine walks the YAML, replaces only the value of the
+# target leaf, and leaves everything else byte-for-byte identical.
+# Works on the canonical default.yaml shape; isn't a general YAML
+# rewriter.
+# --------------------------------------------------------------------
+
+import re as _re   # only needed by the editors below
+
+
+def _indent_of(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _is_block_header(line: str, key: str, indent: int) -> bool:
+    """`<indent>key:` (no value, comment optional) at exactly `indent`."""
+    if _indent_of(line) != indent: return False
+    s = line.strip()
+    return s == f"{key}:" or s.startswith(f"{key}: ")  # tolerate trailing space
+
+
+def _replace_scalar(line: str, key: str, indent: int, new_value: str) -> Optional[str]:
+    """If `line` is `<indent>key: <value>[# comment]`, replace value
+    while keeping the trailing comment. Returns rewritten line or None
+    if `line` doesn't match."""
+    if _indent_of(line) != indent: return None
+    m = _re.match(rf"^(\s*{_re.escape(key)}):\s*(\S+)(\s*#.*)?\s*$", line)
+    if not m: return None
+    head, _old, comment = m.groups()
+    return f"{head}: {new_value}{comment or ''}\n"
+
+
+def _set_yaml_path(text: str, path: list[str], new_value: str) -> str:
+    """Update the leaf scalar at `path` (e.g. ['llm', 'model']).
+    Each path element is a top-level key for the first; nested keys
+    are matched at increasing indentation. Returns the rewritten YAML.
+    Raises ValueError when the path isn't found.
+
+    The walker is deliberately simple: it tracks the indentation of
+    each block it descends into. Inline `{a: b, c: d}` flow-style maps
+    aren't supported (default.yaml never uses flow style for the
+    fields we edit since the M7 alias rework).
+    """
+    lines = text.splitlines(keepends=True)
+    # Find the chain. `cursor_indent` is the indent we expect for the
+    # NEXT path element's header line.
+    cursor_indent = 0
+    path_done = 0  # number of path components already located
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if path_done == len(path) - 1:
+            # We're inside the parent of the leaf; replace the scalar.
+            new_line = _replace_scalar(line, path[-1], cursor_indent, new_value)
+            if new_line is not None:
+                lines[i] = new_line
+                return "".join(lines)
+            # Bail when we leave the parent block (dedent).
+            if _indent_of(line) < cursor_indent and stripped:
+                break
+        else:
+            # Looking for the next block header.
+            if _is_block_header(line, path[path_done], cursor_indent):
+                path_done += 1
+                cursor_indent += 2
+                # Auto-detect indent step on first descent — config uses 2 spaces.
+    raise ValueError(f"acva-models: YAML path {'/'.join(path)} not found")
+
+
+def _set_env(text: str, key: str, value: str) -> str:
+    """In a .env-style file, replace the value of `key=...` (commented
+    or not) with `key=value`. If no line matches, append to end with
+    a single trailing newline."""
+    out: list[str] = []
+    found = False
+    pat = _re.compile(rf"^\s*#?\s*{_re.escape(key)}=.*$")
+    for line in text.splitlines(keepends=True):
+        if not found and pat.match(line.rstrip("\n")):
+            out.append(f"{key}={value}\n")
+            found = True
+        else:
+            out.append(line)
+    if not found:
+        if out and not out[-1].endswith("\n"):
+            out.append("\n")
+        out.append(f"{key}={value}\n")
+    return "".join(out)
+
+
+def _container_running(name: str) -> bool:
+    """True iff a container with the given name (e.g. acva-llama) is
+    currently running. Returns False on any error (docker missing,
+    permission denied, etc.) — caller decides whether that's fatal."""
+    import subprocess
+    try:
+        r = subprocess.run(
+            ["docker", "ps", "--filter", f"name=^{name}$",
+             "--format", "{{.Names}}"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return False
+    return r.returncode == 0 and name in r.stdout.split()
+
+
+def recreate_compose_service(service: str, container_name: str) -> None:
+    """`docker compose up -d --force-recreate <service>` from the
+    project root (where compose.yaml lives). Skips silently when the
+    stack is down — the change will land on the next normal up."""
+    import subprocess
+    if not _container_running(container_name):
+        print(f"  {C.dim(f'(container {container_name} is not running; '
+                          f'the change will land on next `docker compose up -d`)')}")
+        return
+    print(f"  {SPIN} {C.cyan(f'recreating {container_name} so the change takes effect…')}")
+    try:
+        r = subprocess.run(
+            ["docker", "compose", "up", "-d", "--force-recreate", service],
+            cwd=str(repo_root()),
+            timeout=60,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError) as ex:
+        print(f"  {WARN} {C.yellow(f'recreate failed ({ex}); run manually:')}")
+        print(f"    {C.bold(f'docker compose up -d --force-recreate {service}')}")
+        return
+    if r.returncode != 0:
+        print(f"  {WARN} {C.yellow(f'docker compose exited {r.returncode}; '
+                                    f'check `docker compose logs {service}`')}")
+
+
+def cmd_select(args: argparse.Namespace, reg: Registry, reg_root: Path) -> int:
+    """select <type> <alias> [--lang L] — change the active config
+    to use a different alias. Edits default.yaml in place; for LLM
+    additionally writes packaging/compose/.env so llama-server picks
+    up the new GGUF on next compose-up."""
+    cfg_path: Path = args._config_path
+    t: str = args.type
+    alias: str = args.alias
+
+    def _verify_alias(catalog: dict, label: str):
+        if alias not in catalog:
+            sys.exit(f"acva-models select: unknown {label} alias '{alias}'. "
+                      f"Run `acva-models list --type {t}` to see options.")
+
+    text = cfg_path.read_text()
+
+    if t == "llm":
+        _verify_alias(reg.llm, "llm")
+        text = _set_yaml_path(text, ["llm", "model"], alias)
+        cfg_path.write_text(text)
+        print(f"{OK} {C.dim(str(cfg_path))}: cfg.llm.model = {C.bold(alias)}")
+        # Also write the load-bearing compose env so llama-server
+        # actually loads the resolved GGUF on next `docker compose up`.
+        # `.env` lives at the project root (alongside the compose.yaml
+        # shim and .env.example) — that's where compose-v2 looks when
+        # invoked from the canonical root entry point.
+        env_path = repo_root() / ".env"
+        if not env_path.exists():
+            tmpl = repo_root() / ".env.example"
+            if tmpl.is_file():
+                env_path.write_text(tmpl.read_text())
+                print(f"  {C.dim(f'(created {env_path} from .env.example template)')}")
+            else:
+                env_path.write_text("")
+                print(f"  {C.dim(f'(created empty {env_path})')}")
+        env_text = env_path.read_text()
+        env_text = _set_env(env_text, "ACVA_LLM_MODEL", reg.llm[alias].file)
+        env_text = _set_env(env_text, "ACVA_LLM_ALIAS", alias)
+        env_path.write_text(env_text)
+        print(f"{OK} {C.dim(str(env_path))}: ACVA_LLM_MODEL="
+              f"{C.bold(reg.llm[alias].file)} ACVA_LLM_ALIAS={C.bold(alias)}")
+        if not args.no_restart:
+            recreate_compose_service("llama", "acva-llama")
+        return 0
+
+    if t == "stt":
+        _verify_alias(reg.stt, "stt")
+        text = _set_yaml_path(text, ["stt", "model"], alias)
+        cfg_path.write_text(text)
+        print(f"{OK} {C.dim(str(cfg_path))}: cfg.stt.model = {C.bold(alias)}")
+        # Speaches needs a full recreate to swap the active model
+        # cleanly: faster-whisper #992 leaks ~300 MB per unload, so
+        # an in-place /v1/models swap (DELETE + load) compounds VRAM
+        # waste across selects. See memory note
+        # `project_speaches_stuck_models`. Container restart is the
+        # documented workaround.
+        if not args.no_restart:
+            recreate_compose_service("speaches", "acva-speaches")
+        return 0
+
+    if t == "tts":
+        _verify_alias(reg.tts, "tts")
+        if not args.lang:
+            sys.exit("acva-models select tts: --lang <BCP-47> required "
+                      "(e.g. --lang en, --lang ru)")
+        text = _set_yaml_path(text, ["tts", "voices", args.lang], alias)
+        cfg_path.write_text(text)
+        print(f"{OK} {C.dim(str(cfg_path))}: cfg.tts.voices.{args.lang} "
+              f"= {C.bold(alias)}")
+        # Same VRAM-leak rationale as STT — restart speaches.
+        if not args.no_restart:
+            recreate_compose_service("speaches", "acva-speaches")
+        return 0
+
+    if t == "vad":
+        _verify_alias(reg.vad, "vad")
+        text = _set_yaml_path(text, ["vad", "model_path"], alias)
+        cfg_path.write_text(text)
+        print(f"{OK} {C.dim(str(cfg_path))}: cfg.vad.model_path = {C.bold(alias)}")
+        # VAD runs on the host (acva binary) — no container to restart.
+        return 0
+
+    sys.exit(f"acva-models select: unknown type '{t}'")
+
+
+def _parse_env_file(path: Path) -> dict[str, str]:
+    """Minimal .env parser: KEY=VALUE per line, # comments, optional
+    quotes around the value."""
+    out: dict[str, str] = {}
+    if not path.is_file():
+        return out
+    for raw in path.read_text().splitlines():
+        s = raw.strip()
+        if not s or s.startswith("#"):
+            continue
+        if "=" not in s:
+            continue
+        k, v = s.split("=", 1)
+        v = v.strip()
+        if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+            v = v[1:-1]
+        out[k.strip()] = v
+    return out
+
+
+def _http_get_json(url: str, timeout: float) -> Optional[dict]:
+    """Fetch + JSON-decode; return None on any error (status-friendly)."""
+    try:
+        with urlrequest.urlopen(url, timeout=timeout) as rsp:
+            return yaml.safe_load(rsp.read())
+    except (urlerror.URLError, urlerror.HTTPError, OSError):
+        return None
+
+
+def cmd_status(args: argparse.Namespace, reg: Registry, reg_root: Path) -> int:
+    """End-to-end health report. Works whether the stack is up or down.
+    Reports cfg ↔ env drift, file presence, container state, and the
+    models the running services have actually loaded."""
+    cfg_path: Path = args._config_path
+    env_path: Path = repo_root() / ".env"
+    env = _parse_env_file(env_path)
+    drift_count = 0
+
+    def _kv(label: str, value: str) -> str:
+        return f"  {C.dim(label):<26s} {C.bold(value)}"
+
+    # --- 1. Active config picks ---
+    print(f"{C.hi('Config:')} {C.dim(str(cfg_path))}")
+    print(_kv("llm.model:",      reg.llm_ref or "(unset)"))
+    print(_kv("stt.model:",      reg.stt_ref or "(unset)"))
+    print(_kv("vad.model_path:", reg.vad_ref or "(unset)"))
+    for lang, alias in sorted(reg.tts_refs.items()):
+        print(_kv(f"tts.voices[{lang}]:", alias))
+
+    # --- 2. .env presence + required keys ---
+    print(f"\n{C.hi('.env:')} {C.dim(str(env_path))}")
+    if not env_path.is_file():
+        print(f"  {BAD} {C.red('missing')} — run "
+              f"{C.bold('cp .env.example .env')} or "
+              f"{C.bold(f'tools/acva-models select llm {reg.llm_ref or chr(60) + chr(97) + chr(108) + chr(105) + chr(97) + chr(115) + chr(62)}')}")
+        drift_count += 1
+    else:
+        required = [
+            "ACVA_MODELS_DIR", "ACVA_LLM_MODEL", "ACVA_LLM_ALIAS",
+            "ACVA_WHISPER_DEVICE", "ACVA_WHISPER_COMPUTE_TYPE", "ACVA_WHISPER_TTL",
+        ]
+        for k in required:
+            v = env.get(k, "")
+            if v:
+                print(f"  {OK} {k}={C.bold(v)}")
+            else:
+                print(f"  {BAD} {C.red(f'{k} unset')} {C.dim('(required by docker-compose.yml)')}")
+                drift_count += 1
+
+        # --- 3. cfg ↔ env consistency for LLM ---
+        if reg.llm_ref and reg.llm_ref in reg.llm:
+            expected_file = reg.llm[reg.llm_ref].file
+            if env.get("ACVA_LLM_MODEL", "") != expected_file:
+                print(f"  {BAD} ACVA_LLM_MODEL={C.red(env.get('ACVA_LLM_MODEL', ''))} "
+                       f"!= models.llm[{C.bold(reg.llm_ref)}].file="
+                       f"{C.green(expected_file)}")
+                print(f"     {C.dim('fix:')} {C.bold(f'tools/acva-models select llm {reg.llm_ref}')}")
+                drift_count += 1
+            if env.get("ACVA_LLM_ALIAS", "") != reg.llm_ref:
+                print(f"  {BAD} ACVA_LLM_ALIAS={C.red(env.get('ACVA_LLM_ALIAS', ''))} "
+                       f"!= cfg.llm.model={C.green(reg.llm_ref)}")
+                print(f"     {C.dim('fix:')} {C.bold(f'tools/acva-models select llm {reg.llm_ref}')}")
+                drift_count += 1
+
+    # --- 4. LLM file on disk ---
+    print(f"\n{C.hi('LLM file:')}")
+    if reg.llm_ref and reg.llm_ref in reg.llm:
+        e = reg.llm[reg.llm_ref]
+        p = reg_root / "llama.cpp" / e.file
+        if not p.is_file():
+            print(f"  {BAD} {C.dim(str(p))} {C.red('missing')} — run "
+                   f"{C.bold(f'tools/acva-models install {reg.llm_ref}')}")
+            drift_count += 1
+        else:
+            sz = p.stat().st_size
+            if e.size and sz != e.size:
+                print(f"  {BAD} {C.dim(str(p))} {C.red(f'size {sz} != expected {e.size}')}")
+                print(f"     {C.dim('fix:')} {C.bold(f'tools/acva-models install {reg.llm_ref}')}")
+                drift_count += 1
+            else:
+                print(f"  {OK} {C.dim(str(p))} {C.dim(f'({sz} bytes)')}")
+    else:
+        print(f"  {SKIP} {C.dim(f"cfg.llm.model='{reg.llm_ref}' is not in models.llm registry; nothing to check")}")
+
+    # --- 5. VAD file on disk ---
+    print(f"\n{C.hi('VAD file:')}")
+    if reg.vad_ref and reg.vad_ref in reg.vad:
+        e = reg.vad[reg.vad_ref]
+        p = reg_root / "silero" / e.file
+        if not p.is_file():
+            print(f"  {BAD} {C.dim(str(p))} {C.red('missing')} — run "
+                   f"{C.bold(f'tools/acva-models install {reg.vad_ref}')}")
+            drift_count += 1
+        else:
+            print(f"  {OK} {C.dim(str(p))} {C.dim(f'({p.stat().st_size} bytes)')}")
+    else:
+        print(f"  {SKIP} {C.dim(f"cfg.vad.model_path='{reg.vad_ref}' is not a registered alias")}")
+
+    # --- 6. Containers + loaded models ---
+    print(f"\n{C.hi('Containers:')}")
+
+    def _state_label(running: bool) -> str:
+        return C.green("running") if running else C.dim("stopped")
+
+    # llama
+    llama_up = _container_running("acva-llama")
+    print(f"  {C.bold('acva-llama'):<24s} {_state_label(llama_up)}")
+    if llama_up:
+        # llama-server's --alias flag becomes the id reported by /v1/models.
+        # If the loaded alias drifts from cfg.llm.model, it means someone
+        # bypassed `acva-models select` (manual .env edit + recreate, etc.).
+        doc = _http_get_json("http://127.0.0.1:8081/v1/models", timeout=3.0)
+        if doc and (data := (doc or {}).get("data")):
+            for m in data:
+                mid = m.get("id", "?")
+                ok = (mid == reg.llm_ref)
+                if ok:
+                    print(f"    {OK} loaded alias: {C.bold(mid)}")
+                else:
+                    print(f"    {BAD} loaded alias: {C.red(mid)} "
+                           f"{C.dim(f'(cfg expects {reg.llm_ref})')}")
+                    drift_count += 1
+        else:
+            print(f"    {WARN} {C.yellow('/v1/models unreachable')}")
+
+    # speaches
+    speaches_up = _container_running("acva-speaches")
+    print(f"  {C.bold('acva-speaches'):<24s} {_state_label(speaches_up)}")
+    if speaches_up:
+        doc = _http_get_json(f"{args.speaches_url}/v1/models", timeout=3.0)
+        if doc:
+            installed = {m.get("id", "") for m in (doc or {}).get("data", []) if m.get("id")}
+            stt_aliases = sorted(a for a, e in reg.stt.items() if e.id in installed)
+            tts_aliases = sorted(a for a, e in reg.tts.items() if e.id in installed)
+            print(f"    {C.dim('stt cached:')} "
+                  f"{' '.join(C.bold(a) for a in stt_aliases) or C.dim('(none)')}")
+            print(f"    {C.dim('tts cached:')} "
+                  f"{' '.join(C.bold(a) for a in tts_aliases) or C.dim('(none)')}")
+            # Active stt config check
+            if reg.stt_ref and reg.stt_ref in reg.stt:
+                if reg.stt[reg.stt_ref].id not in installed:
+                    print(f"    {BAD} cfg.stt.model={C.red(reg.stt_ref)} "
+                           f"{C.dim('not cached in Speaches')}")
+                    print(f"       {C.dim('fix:')} {C.bold(f'tools/acva-models install {reg.stt_ref}')}")
+                    drift_count += 1
+            for lang, alias in reg.tts_refs.items():
+                if alias in reg.tts and reg.tts[alias].id not in installed:
+                    print(f"    {BAD} cfg.tts.voices[{lang}]={C.red(alias)} "
+                           f"{C.dim('not cached in Speaches')}")
+                    print(f"       {C.dim('fix:')} {C.bold(f'tools/acva-models install {alias}')}")
+                    drift_count += 1
+        # /api/ps is the "currently loaded into VRAM" probe (per memory note
+        # project_speaches_stuck_models). Older Speaches versions don't have
+        # the route — be tolerant.
+        ps = _http_get_json(f"{args.speaches_url}/api/ps", timeout=3.0)
+        if isinstance(ps, list):
+            ids = [m.get("id") for m in ps if isinstance(m, dict) and m.get("id")]
+            if ids:
+                print(f"    {C.dim('in VRAM:')} "
+                      f"{' '.join(C.bold(i) for i in ids)}")
+
+    # --- 7. Summary ---
+    print()
+    if drift_count == 0:
+        print(f"{OK} {C.green('no drift detected.')}")
+        return 0
+    print(f"{BAD} {C.red(f'{drift_count} drift item(s) detected')} "
+          f"{C.dim('— see fixes above.')}")
+    return 1
 
 
 def cmd_verify(args: argparse.Namespace, reg: Registry, reg_root: Path) -> int:
     # LLM: file size check.
     drift = 0
-    print(f"LLM ({reg_root}/llama.cpp):")
+    print(f"{C.hi('LLM')} {C.dim(f'({reg_root}/llama.cpp)')}")
     for a, e in sorted(reg.llm.items()):
         ok, actual = llm_installed(reg_root, e)
         if not e.size or not actual:
-            print(f"  · {a:20s} (not installed or no expected size)")
+            print(f"  {SKIP} {C.bold(f'{a:<20s}')} {C.dim('(not installed or no expected size)')}")
             continue
         if not ok:
             drift += 1
-            print(f"  ✗ {a:20s} size {actual} != expected {e.size}")
+            print(f"  {BAD} {C.bold(f'{a:<20s}')} {C.red(f'size {actual} != expected {e.size}')}")
         else:
-            print(f"  ✓ {a:20s} {actual} bytes")
+            print(f"  {OK} {C.bold(f'{a:<20s}')} {C.dim(f'{actual} bytes')}")
     # VAD: presence only (no published size for the GitHub raw URL).
-    print(f"\nVAD ({reg_root}/silero):")
+    print(f"\n{C.hi('VAD')} {C.dim(f'({reg_root}/silero)')}")
     for a, e in sorted(reg.vad.items()):
         ok, actual = vad_installed(reg_root, e)
-        mark = "✓" if ok else "·"
-        print(f"  {mark} {a:20s} {actual} bytes" if ok else f"  · {a:20s} (not installed)")
+        if ok:
+            print(f"  {OK} {C.bold(f'{a:<20s}')} {C.dim(f'{actual} bytes')}")
+        else:
+            print(f"  {SKIP} {C.bold(f'{a:<20s}')} {C.dim('(not installed)')}")
     # STT/TTS via Speaches.
     try:
         installed = speaches_models(args.speaches_url)
     except SystemExit:
         return drift
-    print("\nSpeaches STT:")
+    print(f"\n{C.hi('Speaches STT')}")
     for a, e in sorted(reg.stt.items()):
-        mark = "✓" if e.id in installed else "·"
-        print(f"  {mark} {a:20s} {e.id}")
-    print("\nSpeaches TTS:")
+        mark = OK if e.id in installed else SKIP
+        print(f"  {mark} {C.bold(f'{a:<20s}')} {C.dim(e.id)}")
+    print(f"\n{C.hi('Speaches TTS')}")
     for a, e in sorted(reg.tts.items()):
-        mark = "✓" if e.id in installed else "·"
-        print(f"  {mark} {a:20s} {e.id}")
+        mark = OK if e.id in installed else SKIP
+        print(f"  {mark} {C.bold(f'{a:<20s}')} {C.dim(e.id)}")
     return drift
 
 
@@ -495,6 +953,23 @@ def main() -> int:
 
     sub.add_parser("verify", help="Check installed sizes vs registry.")
 
+    sub.add_parser("status", help="End-to-end health: cfg ↔ env drift, "
+                                    "file presence, container state, loaded models.")
+
+    s_sel = sub.add_parser(
+        "select",
+        help="Switch the active config to use a different alias. "
+              "For LLM also writes <repo>/.env. Auto-recreates the "
+              "affected container (llama for llm; speaches for stt/tts) "
+              "unless --no-restart is given.")
+    s_sel.add_argument("type", choices=["llm", "stt", "tts", "vad"])
+    s_sel.add_argument("alias")
+    s_sel.add_argument("--lang", default=None,
+                       help="BCP-47 lang for `select tts` (e.g. en, ru).")
+    s_sel.add_argument("--no-restart", action="store_true",
+                       help="Don't recreate the container after editing config. "
+                             "Useful when the stack is intentionally down.")
+
     args = p.parse_args()
 
     cfg_path = resolve_config_path(args.config)
@@ -502,10 +977,13 @@ def main() -> int:
     reg = parse_registry(cfg_path)
     reg_root = models_root()
     reg_root.mkdir(parents=True, exist_ok=True)
+    args._config_path = cfg_path  # threaded to cmd_select
 
     if args.cmd == "list":    return cmd_list(args, reg, reg_root)
     if args.cmd == "install": return cmd_install(args, reg, reg_root)
     if args.cmd == "sync":    return cmd_sync(args, reg, reg_root)
+    if args.cmd == "select":  return cmd_select(args, reg, reg_root)
+    if args.cmd == "status":  return cmd_status(args, reg, reg_root)
     if args.cmd == "verify":  return cmd_verify(args, reg, reg_root)
     p.print_help(sys.stderr)
     return 2

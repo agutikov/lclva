@@ -160,7 +160,7 @@ llm:
   # is set by ACVA_LLM_MODEL in packaging/compose/.env. M8A wires the
   # resolved filename through a model-controller sidecar so the alias
   # becomes the single source of truth — see m8a_admin_state.md.
-  model: dialog
+  model: outlier-lite
   unit: "acva-llama.service"
   temperature: 0.7
   # Pre-M7 (no barge-in yet): let the LLM finish whatever it

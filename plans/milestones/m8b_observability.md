@@ -122,6 +122,39 @@ Failure modes:
 | OTLP export contention with critical path | Async + non-blocking; if exporter blocks, drop spans |
 | Dashboard panels regress as metrics get renamed | Pin panel queries to a stable subset; add a CI step that diffs `/metrics` output against a golden list before merge |
 
+## Known issues to address before the 4-hour soak
+
+- **Speaches CUDA-OOM wedge leaves VRAM unrecoverable.** Surfaced 2026-05-04.
+  After running `tests/test_speaches_wedge.cpp` (or any sustained
+  long-Russian-TTS load), faster-whisper's encoder workspace can fail to
+  allocate; Speaches enters a state where `/v1/audio/transcriptions`
+  returns HTTP 500 instantly while VRAM stays held in the CUDA context.
+  Steady-state turbo+int8 normally sits at ~1190 MiB; post-wedge it
+  pegs at ~2600 MiB and free VRAM drops to single-digit MiB until the
+  speaches container is restarted. Background already documented in
+  memory note `project_speaches_stuck_models.md` and in the wedge test's
+  preamble. **A 4-hour soak will hit this.** Three things M8B owes:
+  1. **Detection metric** — sample `nvidia-smi --query-compute-apps`
+     for the speaches process; emit `voice_speaches_vram_used_mib` and
+     `voice_speaches_wedged{}` (1 when used > expected_model_size +
+     800 MiB CUDA-context budget, 0 otherwise). Driven from the same
+     poller that already reads `nvidia-smi` for `vram_low_threshold_mib`
+     (`src/log/vram_monitor.cpp` post-M6).
+  2. **Recovery action** — soak driver detects the wedged metric and
+     issues `docker compose restart speaches` automatically. Counts
+     toward the `service restarts ≤ 2 (incidental)` acceptance gate;
+     more than two in a 4-hour window means the upstream bug
+     regressed and the soak should fail.
+  3. **`tools/acva-models recover` subcommand + `status` enhancement** —
+     manual escape hatch for dev sessions, plus `status` flagging
+     wedged-likely state with a remediation hint. Mirrors the
+     soak-driver logic so the manual path matches the automated one.
+
+  Out of M8B scope: actually fixing the upstream Speaches/faster-whisper
+  bug. Workaround-via-restart is the documented stance; if the
+  upstream bug is fixed before M8B closes, the metric and action can
+  stay as a future-proofing safety net.
+
 ## Step 4 — Build-time observability + reductions
 
 A clean build (post-orchestrator-refactor, 107 TUs / 8 cores) takes

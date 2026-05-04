@@ -10,6 +10,13 @@
 #
 # The orchestrator (`acva`) itself runs on the host, NOT in compose, so
 # the realtime audio path stays direct.
+#
+# **Every ACVA_* env var below is REQUIRED** — no silent defaults. The
+# `${VAR:?…}` syntax fails `docker compose up` with a clear message
+# when a var is missing. Populate `packaging/compose/.env` (template
+# at repo-root `.env.example`) before bringing the stack up. The
+# `tools/acva-models select llm <alias>` command writes the LLM vars
+# automatically; the rest are stable knobs you set once per machine.
 
 name: acva
 
@@ -25,7 +32,7 @@ services:
     volumes:
       # Mount only the llama.cpp/ subfolder so the container sees just
       # GGUFs. Sibling subfolders (silero/, speaches/) stay invisible.
-      - ${ACVA_MODELS_DIR:-${HOME}/.local/share/acva/models}/llama.cpp:/models:ro
+      - ${ACVA_MODELS_DIR:?ACVA_MODELS_DIR is required — set in <repo>/.env (cp .env.example .env)}/llama.cpp:/models:ro
     deploy:
       resources:
         reservations:
@@ -46,9 +53,9 @@ services:
       - "--port"
       - "8081"
       - "--model"
-      - "/models/${ACVA_LLM_MODEL:-qwen3-stage1.q4_k_m.gguf}"
+      - "/models/${ACVA_LLM_MODEL:?ACVA_LLM_MODEL is required — run `tools/acva-models select llm <alias>` or edit <repo>/.env}"
       - "--alias"
-      - "${ACVA_LLM_ALIAS:-qwen3-stage1}"
+      - "${ACVA_LLM_ALIAS:?ACVA_LLM_ALIAS is required — same as cfg.llm.model in default.yaml}"
       - "--ctx-size"
       - "8192"
       - "--n-gpu-layers"
@@ -65,8 +72,8 @@ services:
   # Model storage: Speaches owns its own HuggingFace cache layout
   # (`models--<owner>--<repo>/`). We bind-mount a host subdir to the
   # container's HF cache path so models survive restarts. Use
-  # `scripts/download-speaches-models.sh` to install voices + STT
-  # models via Speaches' own POST /v1/models/{id} endpoint.
+  # `tools/acva-models install <alias>` (or `sync`) to install voices +
+  # STT models — it POSTs to Speaches' own /v1/models/{id} endpoint.
   # ---------------------------------------------------------------------
   speaches:
     image: ghcr.io/speaches-ai/speaches:latest-cuda
@@ -95,11 +102,11 @@ services:
     #   - `int8`        — pure int8 (CPU-only, slow on GPU)
     environment:
       LOOPBACK_HOST_URL: http://localhost:8000
-      WHISPER__INFERENCE_DEVICE: ${ACVA_WHISPER_DEVICE:-cuda}
-      WHISPER__COMPUTE_TYPE: ${ACVA_WHISPER_COMPUTE_TYPE:-int8_float16}
-      WHISPER__TTL: ${ACVA_WHISPER_TTL:--1}     # -1 = never auto-unload 
+      WHISPER__INFERENCE_DEVICE: ${ACVA_WHISPER_DEVICE:?ACVA_WHISPER_DEVICE is required (cuda|cpu)}
+      WHISPER__COMPUTE_TYPE:    ${ACVA_WHISPER_COMPUTE_TYPE:?ACVA_WHISPER_COMPUTE_TYPE is required (default|float16|int8_float16|int8)}
+      WHISPER__TTL:             ${ACVA_WHISPER_TTL:?ACVA_WHISPER_TTL is required (-1 = never auto-unload; recommended on 8 GB cards)}
     volumes:
-      - ${ACVA_MODELS_DIR:-${HOME}/.local/share/acva/models}/speaches:/home/ubuntu/.cache/huggingface/hub
+      - ${ACVA_MODELS_DIR:?ACVA_MODELS_DIR is required — set in <repo>/.env}/speaches:/home/ubuntu/.cache/huggingface/hub
     deploy:
       resources:
         reservations:

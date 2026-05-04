@@ -205,12 +205,155 @@ above the wire. A useful sanity check at M10 close: re-run
 `scripts/barge-in-probe.py` and expect 5/5 with content matching
 what the user actually said.
 
+## TTS pacing — inter-sentence silence at high tempo
+
+### Observation
+
+At `cfg.tts.tempo_wpm: 240` (≈ `speed=1.5`) words feel quick but
+the gaps between them feel disproportionately long, and overall
+speech reads as fragmentary / chopped. Lowering `tempo_wpm` to 200
+relieves the impression. The user's framing: *delays between words
+not so small*, with the followup question of whether synthesizing
+at native cadence and time-stretching playback would sound less
+chopped.
+
+### What we expose today
+
+The full TTS surface in `cfg.tts` and the playback-side coupling:
+
+| Knob | Where | Notes |
+|---|---|---|
+| `base_url` | `tts.base_url` | Speaches root, e.g. `http://127.0.0.1:8090/v1` |
+| `voices[lang]` → `model_id`, `voice_id` | `tts.voices` (alias) → registry → `tts.voices_resolved` | Per-language route, alias from `models.tts` |
+| `fallback_lang` | `tts.fallback_lang` | When detected lang has no entry |
+| `tempo_wpm` | `tts.tempo_wpm` | Translated to `speed = tempo_wpm / 160` in `OpenAiTtsClient::build_body` |
+| `request_timeout_seconds` | `tts.request_timeout_seconds` | libcurl timeout per sentence |
+| `prefill_ms` | `playback.prefill_ms` | Per-turn pre-buffer before first frame plays (M4B fix; 100 ms default) |
+
+Wire payload (Speaches' `POST /v1/audio/speech`):
+`{ "model": ..., "input": ..., "voice": ..., "speed": ..., "response_format": "pcm" }`.
+That's it — `model`, `voice`, `input`, `speed`, `response_format`.
+
+What Piper actually supports underneath (from `piper.cpp`):
+
+| Flag | Default | Units | Scales with `length_scale`? |
+|---|---|---|---|
+| `length_scale` | 1.0 | mult. on phoneme duration | (this is the knob) |
+| `noise_scale` | 0.667 | generator noise | independent |
+| `noise_w` | 0.8 | per-phoneme duration jitter | independent |
+| `sentence_silence` | 0.2 | **seconds** appended after each sentence | **no — fixed seconds** |
+| `phoneme_silence PHONEME N` | none | **seconds** appended after named phonemes | **no — fixed seconds** |
+| `speaker` | 0 | speaker id (multi-speaker models) | independent |
+
+**Speaches' `/v1/audio/speech` does not pass any of those through.**
+`CreateSpeechRequestBody` in `speaches/routers/speech.py` accepts only
+the OpenAI-standard fields plus `stream_format` / `sample_rate`. No
+`extras`, no `extra_body`, no Piper-side endpoint. `speed` (which
+becomes `length_scale = 1/speed` internally) is the only timing knob
+that crosses the wire today.
+
+### Root cause
+
+Piper appends `sentence_silence` seconds of zero PCM after each
+sentence and **the value is in seconds, not in phonemes** — so
+`length_scale=0.667` (i.e. `speed=1.5`) shrinks the words by 33%
+but the trailing 200 ms silence stays at 200 ms. The relative
+contribution of silence to total time grows roughly as `speed`,
+which is exactly the "chopped" perception. Per-phoneme silence
+entries baked into a specific voice's `*.onnx.json` (if any) have
+the same property.
+
+Our `SentenceSplitter` issues one Piper call per sentence boundary,
+so this trailing silence lands between every `LlmSentence` we play
+back. At speed=1.0 (160 wpm) the 200 ms gap sits between ~750 ms
+of speech and reads as natural punctuation; at speed=1.5 it sits
+between ~500 ms of speech and reads as a stutter.
+
+Intra-sentence pauses (the predicted gaps at commas / dashes) are
+encoded as VITS phoneme durations and *do* scale with
+`length_scale`, so they shouldn't be the culprit unless the user's
+voice has aggressive `phoneme_silence` entries — verify by
+inspecting the voice's `.onnx.json` in `${ACVA_MODELS_DIR}` if
+Step 0 below doesn't fully resolve the perception.
+
+### Three paths investigated
+
+**Path A — client-side trailing-silence trim (no deps; recommended first).**
+Post-process each sentence's PCM in `OpenAiTtsClient` (or
+`TtsBridge` after the streaming sink completes a sentence): scan
+the tail for the final non-silent sample (RMS below
+`cfg.tts.silence_floor_dbfs`, default -50), then trim to a
+configurable `cfg.tts.inter_sentence_silence_ms` (default e.g.
+80 ms). Optionally make the target proportional to `tempo_wpm`
+(`silence_ms ≈ 200 * 160 / tempo_wpm`) so the user gets natural
+pauses at native cadence and tight pauses at speed-up. **No new
+dependencies, ~1 day.** Addresses the dominant cause; leaves
+intra-sentence punctuation pauses untouched (which is what we
+want — those are paragraph rhythm).
+
+**Path B — synthesize at native + pitch-preserving time-stretch
+on playback (the user's suggestion).**
+Send `speed=1.0`, time-stretch the PCM by `tempo_wpm / 160` before
+the playback queue. Quality is best with a real PSOLA / phase-
+vocoder library. Naïve resampling won't work — that shifts pitch
+and sounds chipmunky. Candidate libraries (from grounding
+research):
+
+| Library | License | Streaming-friendly | Notes |
+|---|---|---|---|
+| Rubber Band | GPL-2.0 (commercial available) | yes (R3 engine) | Best perceptual quality; **GPL is a license problem** for acva unless we buy a commercial license |
+| Signalsmith Stretch | MIT, header-only | yes, low-latency by design | Modern phase-vocoder; recommended pick if Path A is insufficient |
+| SoundTouch | LGPL-2.1 | yes (WSOLA) | Safe LGPL middle ground; decent for speech, some artifacts |
+| SoX `tempo` effect | GPL-2.0 | batch, not streaming-friendly | Skip |
+
+**Tradeoffs.** Path B compresses words and silences uniformly, so
+it solves the chopped feel structurally. It also opens the door to
+a "play at 1.5x" listen-mode independent of the synth tempo. Cost:
+~50–150 ms added to time-to-first-audio (time-stretchers need a
+block of input before they emit), a new dependency, and an
+allocation/CPU cost on every sentence. **~2–3 days** including
+benchmarking on the 4060 box and confirming no underruns.
+
+**Path C — patch Speaches to forward Piper-native params.**
+Add an `extras` field to `CreateSpeechRequestBody` that we use to
+send `sentence_silence` and `length_scale` directly. Cleanest
+architecturally because Piper already has the right knob — we
+just can't reach it. Cost: a fork (or upstreaming PR) plus the
+ongoing burden of carrying a Speaches patch. Not worth it given
+Path A covers most of the perceptual problem and Path B is the
+right structural answer when we want it.
+
+### Recommended sequencing inside M10
+
+0. **Step 0 (TTS pacing).** Land Path A first — small, no deps,
+   measurable. Acceptance: at `tempo_wpm: 240`, the 50-trial
+   `acva demo chat` run subjectively reads as continuous speech;
+   `voice_tts_audio_bytes_total / voice_tts_first_audio_ms_count`
+   ratio drops by ≥ 25% (less zero-PCM tail per sentence).
+1. Adaptive endpointer (existing Step 1).
+2. Address detection (existing Step 2.a / 2.b).
+3. **Step 3 (revisit if needed).** If Step 0 doesn't fully resolve
+   the chopped feel — or once a "listen at 1.5x" mode is on the
+   roadmap — pull in Signalsmith Stretch (MIT, header-only) and
+   add Path B as `cfg.playback.time_stretch.enabled`. Default
+   off; opt-in until measured against Step 0's result.
+
+### Open question (TTS-A)
+
+Verify whether the default `en-amy` and `ru-irina` voices ship
+non-empty `phoneme_silence` arrays in their `.onnx.json`. If yes,
+those need either Path C (forwarding) or a client-side spike
+removal, since they're independent of `length_scale`. Defer until
+Step 0 is in and we can A/B against actual recorded output.
+
 ## Time breakdown
 
 | Step | Estimate |
 |---|---|
+| 0 TTS pacing — trailing-silence trim (Path A) | 1 day |
 | 1 Adaptive endpointer | 3 days |
 | 2.a Heuristic classifier | 1.5 days |
 | 2.b LLM classifier + parallel cancel | 2.5 days |
 | Tests + acceptance | 1.5 days |
-| **Total** | **~8.5 days = ~1.5 weeks** |
+| (Optional) 3 Time-stretch playback (Path B) | 2-3 days |
+| **Total (without Path B)** | **~9.5 days** |

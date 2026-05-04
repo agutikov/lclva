@@ -25,6 +25,11 @@ struct ChatRequest {
     std::string model;
     std::vector<ChatMessage> messages;
     double temperature = 0.0;
+    double top_p = 1.0;
+    // llama.cpp-native parameter name. llama-server accepts both
+    // OpenAI's `frequency_penalty` and `repeat_penalty`; we send the
+    // native one and don't claim OpenAI compat for this knob.
+    double repeat_penalty = 1.0;
     int max_tokens = 0;
     bool stream = true;
 };
@@ -137,11 +142,13 @@ std::string PromptBuilder::build(const PromptInputs& in) {
     auto messages = assemble_messages(std::move(system_content), snap, in.current_user_text);
 
     ChatRequest req{
-        .model       = cfg_.llm.model,
-        .messages    = std::move(messages),
-        .temperature = cfg_.llm.temperature,
-        .max_tokens  = static_cast<int>(cfg_.llm.max_tokens),
-        .stream      = true,
+        .model          = cfg_.llm.model,
+        .messages       = std::move(messages),
+        .temperature    = cfg_.llm.temperature,
+        .top_p          = cfg_.llm.top_p,
+        .repeat_penalty = cfg_.llm.repeat_penalty,
+        .max_tokens     = static_cast<int>(cfg_.llm.max_tokens),
+        .stream         = true,
     };
 
     std::string body;

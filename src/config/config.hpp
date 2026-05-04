@@ -106,6 +106,15 @@ struct LlmConfig {
     std::string model = "qwen2.5-7b-instruct";
     std::string unit = "acva-llama.service";
     double temperature = 0.7;
+    // Nucleus sampling — keep tokens whose cumulative prob mass is <= top_p.
+    // 1.0 disables truncation (the LLM full vocabulary). Personalities lean on
+    // this to widen ("bender", "ingenue") or tighten ("consultant") sampling.
+    double top_p = 1.0;
+    // Repetition penalty (llama.cpp-native parameter; OpenAI's
+    // `frequency_penalty` is a separate, additive knob and we don't ship that
+    // here). 1.0 = no penalty. Higher (1.1–1.2) suppresses near-repeats —
+    // helpful for chatty personalities so they don't loop verbal tics.
+    double repeat_penalty = 1.0;
     uint32_t max_tokens = 400;
     uint32_t max_prompt_tokens = 3000;
     uint32_t request_timeout_seconds = 60;
@@ -520,6 +529,65 @@ struct ModelsConfig {
     std::map<std::string, VadModelEntry> vad;
 };
 
+// Personality registry — a thin overlay on top of the existing subsystem
+// configs. A Personality bundles a system prompt, a voice, a TTS tempo,
+// LLM sampling shape, and response-length caps into one named preset
+// (e.g. `consultant`, `bender`). Switching personalities is a one-line
+// edit to `active_personality` plus a restart — no other section changes.
+//
+// Resolution: when `active_personality` is non-empty,
+// `config::resolve_aliases()` overlays each present field of the named
+// personality onto the corresponding top-level field BEFORE the existing
+// alias-resolution step. Missing fields keep the top-level default; for
+// the per-language maps (`system_prompts`, `voices`) only the supplied
+// languages are overlaid — others fall back to whatever's in the
+// top-level map. That means the top-level fields stay the "neutral
+// baseline" and a personality is just the diff.
+//
+// All scalar fields are `std::optional` so glaze treats them as
+// "absent unless set". An unknown `active_personality` is a hard
+// validation error — silently ignoring would let a typo erase the
+// user's intended persona.
+
+// Per-personality LLM sampling overrides. Each field, if present,
+// replaces the corresponding `LlmConfig` field at config-load.
+struct PersonalityLlmOverride {
+    std::optional<double> temperature;
+    std::optional<double> top_p;
+    std::optional<double> repeat_penalty;
+};
+
+// Per-personality dialogue/length-cap overrides.
+struct PersonalityDialogueOverride {
+    std::optional<uint32_t> max_assistant_sentences;
+    std::optional<uint32_t> max_assistant_tokens;
+    // Folds into cfg.dialogue.sentence_splitter.max_sentence_chars.
+    // Most personalities don't need to touch this, but rambling
+    // philosophers benefit from longer chunks (less mid-thought TTS
+    // boundaries) and terse personas benefit from shorter ones.
+    std::optional<uint32_t> max_sentence_chars;
+};
+
+struct Personality {
+    // Free-form one-liner shown by /status (post-M8A) and useful as a
+    // YAML anchor when the user is browsing the registry. Not consumed
+    // by the runtime.
+    std::string description;
+    // BCP-47 lang code → system-prompt text. Partial maps are fine;
+    // missing langs fall back to the top-level
+    // `dialogue.system_prompts[lang]`.
+    std::map<std::string, std::string> system_prompts;
+    // BCP-47 lang code → registry alias from `models.tts`. Partial
+    // maps are fine; missing langs fall back to the top-level
+    // `tts.voices[lang]`. The personality voice is treated like a
+    // film dub: same character, localized voicing.
+    std::map<std::string, std::string> voices;
+    // Per-personality TTS tempo. Frivolous = fast, philosopher = slow.
+    std::optional<uint32_t> tempo_wpm;
+    PersonalityLlmOverride       llm;
+    PersonalityDialogueOverride  dialogue;
+};
+
 struct Config {
     ModelsConfig models;
     LoggingConfig logging;
@@ -537,6 +605,11 @@ struct Config {
     UtteranceConfig utterance;
     ApmConfig apm;
     BargeInConfig barge_in;
+    // Personality registry + active selection. Empty `active_personality`
+    // means "no overlay" — the top-level fields are used verbatim. See
+    // `Personality` above for the overlay semantics.
+    std::map<std::string, Personality> personalities;
+    std::string active_personality;
 };
 
 struct LoadError {

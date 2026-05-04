@@ -139,6 +139,15 @@ void init(const config::LoggingConfig& cfg) {
     // Replace global. spdlog::set_default_logger keeps a copy.
     spdlog::set_default_logger(new_logger);
     g_logger = std::move(new_logger);
+
+    // Without this, info-level lines sit in the FILE*'s 4 KiB stdio
+    // buffer until they overflow or a warn/error line forces a flush
+    // (`flush_on` above) — so a tail -f of the per-run log can lag the
+    // live process by minutes during quiet stretches. The periodic
+    // flusher runs in a single registry-owned thread and calls flush()
+    // on every registered logger; safe to call repeatedly (each call
+    // replaces the prior interval).
+    spdlog::flush_every(std::chrono::seconds(1));
 }
 
 namespace {

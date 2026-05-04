@@ -42,6 +42,7 @@ add_executable(acva_unit_tests
     test_manager.cpp
     test_memory_thread.cpp
     test_paths.cpp
+    test_personality.cpp
     test_playback_engine.cpp
     test_playback_queue.cpp
     test_probe.cpp

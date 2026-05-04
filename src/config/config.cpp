@@ -83,6 +83,12 @@ std::optional<LoadError> validate(const Config& cfg) {
     if (cfg.llm.temperature < 0.0 || cfg.llm.temperature > 2.0) {
         return LoadError{"config: llm.temperature: must be in [0, 2]"};
     }
+    if (cfg.llm.top_p <= 0.0 || cfg.llm.top_p > 1.0) {
+        return LoadError{"config: llm.top_p: must be in (0, 1]"};
+    }
+    if (cfg.llm.repeat_penalty < 0.0 || cfg.llm.repeat_penalty > 2.0) {
+        return LoadError{"config: llm.repeat_penalty: must be in [0, 2]"};
+    }
     if (cfg.llm.max_tokens == 0) {
         return LoadError{"config: llm.max_tokens: must be > 0"};
     }
@@ -261,6 +267,19 @@ std::optional<LoadError> validate(const Config& cfg) {
         || cfg.barge_in.min_vad_probability > 1.0F) {
         return LoadError{"config: barge_in.min_vad_probability: must be in [0, 1]"};
     }
+
+    // Personality registry. An unset active_personality is fine
+    // (top-level fields stand). A set-but-unknown one is a hard error
+    // — silently falling through would let a typo erase the user's
+    // intended persona without a hint.
+    if (!cfg.active_personality.empty()
+        && !cfg.personalities.contains(cfg.active_personality)) {
+        return LoadError{
+            "config: active_personality: '" + cfg.active_personality
+            + "' is not a key in personalities — pick one of the "
+              "configured presets, or leave active_personality empty"};
+    }
+
     return std::nullopt;
 }
 
@@ -271,7 +290,47 @@ std::optional<LoadError> validate(const Config& cfg) {
 // `tts.voices` — every entry there must resolve through the registry.
 // See ModelsConfig in config.hpp for the full design rationale.
 namespace {
+
+// Overlay the active personality's non-empty fields onto the top-level
+// subsystem fields. Runs BEFORE alias resolution below so personality
+// voice aliases (e.g. "ru-ruslan") flow through the existing TTS-alias
+// resolver path and end up in `tts.voices_resolved`. No-op when
+// `active_personality` is empty or names a personality that doesn't
+// exist (the latter is caught by validate()).
+void apply_active_personality(Config& cfg) {
+    if (cfg.active_personality.empty()) return;
+    auto it = cfg.personalities.find(cfg.active_personality);
+    if (it == cfg.personalities.end()) return;
+    const auto& p = it->second;
+
+    // Per-language maps overlay key-by-key — a personality that defines
+    // only `en` keeps the top-level `ru` entry untouched. That's how a
+    // partial-coverage personality (e.g. an English-only character)
+    // gracefully degrades to the default voice/prompt in other languages.
+    for (const auto& [lang, prompt] : p.system_prompts) {
+        cfg.dialogue.system_prompts[lang] = prompt;
+    }
+    for (const auto& [lang, voice_alias] : p.voices) {
+        cfg.tts.voices[lang] = voice_alias;
+    }
+    if (p.tempo_wpm)               cfg.tts.tempo_wpm        = *p.tempo_wpm;
+    if (p.llm.temperature)         cfg.llm.temperature      = *p.llm.temperature;
+    if (p.llm.top_p)               cfg.llm.top_p            = *p.llm.top_p;
+    if (p.llm.repeat_penalty)      cfg.llm.repeat_penalty   = *p.llm.repeat_penalty;
+    if (p.dialogue.max_assistant_sentences)
+        cfg.dialogue.max_assistant_sentences = *p.dialogue.max_assistant_sentences;
+    if (p.dialogue.max_assistant_tokens)
+        cfg.dialogue.max_assistant_tokens    = *p.dialogue.max_assistant_tokens;
+    if (p.dialogue.max_sentence_chars)
+        cfg.dialogue.sentence_splitter.max_sentence_chars =
+            *p.dialogue.max_sentence_chars;
+}
+
 void resolve_aliases(Config& cfg) {
+    // Personality overlay first — it may rewrite tts.voices entries
+    // that the next step then resolves through the registry.
+    apply_active_personality(cfg);
+
     // ---- LLM: alias → label override (metadata-only until M8A). ----
     if (auto it = cfg.models.llm.find(cfg.llm.model);
         it != cfg.models.llm.end()) {
